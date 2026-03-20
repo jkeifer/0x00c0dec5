@@ -1,6 +1,11 @@
 import { colors, fontSizes, spacing } from '../../theme.ts';
 import { Radio } from '../shared/Radio.tsx';
 import type { PipelineStage } from '../../types/pipeline.ts';
+import type { Variable } from '../../types/state.ts';
+import { HexView } from './HexView.tsx';
+import { FlatView } from './FlatView.tsx';
+import { TableView } from './TableView.tsx';
+import { GridView } from './GridView.tsx';
 
 const VALUES_VIEW_MODES = [
   { value: 'table', label: 'Table' },
@@ -22,11 +27,8 @@ interface StagePaneProps {
   onStageChange: (stage: number) => void;
   onViewChange: (view: string) => void;
   accentColor: string;
-}
-
-function formatByteCount(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(1)} KB`;
+  variables: Variable[];
+  shape: number[];
 }
 
 export function StagePane({
@@ -37,6 +39,8 @@ export function StagePane({
   onStageChange,
   onViewChange,
   accentColor,
+  variables,
+  shape,
 }: StagePaneProps) {
   // Resolve -1 to last stage
   const resolvedIndex = selectedStage < 0 ? stages.length - 1 : selectedStage;
@@ -48,6 +52,38 @@ export function StagePane({
   const effectiveView = viewModes.some((m) => m.value === viewMode)
     ? viewMode
     : viewModes[0].value;
+
+  function renderViewer() {
+    if (!stage) {
+      return (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: colors.textTertiary,
+            fontSize: fontSizes.md,
+          }}
+        >
+          No stage selected
+        </div>
+      );
+    }
+
+    switch (effectiveView) {
+      case 'hex':
+        return <HexView stage={stage} paneId={paneId} />;
+      case 'flat':
+        return <FlatView stage={stage} paneId={paneId} />;
+      case 'table':
+        return <TableView stage={stage} variables={variables} paneId={paneId} />;
+      case 'grid':
+        return <GridView stage={stage} variables={variables} shape={shape} paneId={paneId} />;
+      default:
+        return <HexView stage={stage} paneId={paneId} />;
+    }
+  }
 
   return (
     <div
@@ -108,32 +144,14 @@ export function StagePane({
         </span>
       </div>
 
-      {/* Content area (placeholder) */}
+      {/* Content area */}
       <div
         style={{
           flex: 1,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexDirection: 'column',
-          gap: spacing.xs,
-          color: colors.textTertiary,
-          fontSize: fontSizes.md,
-          overflow: 'auto',
+          overflow: 'hidden',
         }}
       >
-        {stage ? (
-          <>
-            <div>{stage.name}</div>
-            <div style={{ fontSize: fontSizes.xs }}>
-              {formatByteCount(stage.stats.byteCount)} &middot;{' '}
-              {stage.stats.entropy.toFixed(2)} b/B
-            </div>
-            <div style={{ fontSize: fontSizes.xs }}>View: {effectiveView}</div>
-          </>
-        ) : (
-          <div>No stage selected</div>
-        )}
+        {renderViewer()}
       </div>
     </div>
   );

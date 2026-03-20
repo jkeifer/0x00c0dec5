@@ -1,11 +1,12 @@
 import { Panel, Group, Separator, useDefaultLayout } from 'react-resizable-panels';
 import { useAppState } from '../../state/useAppState.ts';
 import { usePipeline } from '../../hooks/usePipeline.ts';
-import { colors, fontSizes, spacing } from '../../theme.ts';
+import { colors } from '../../theme.ts';
 import { Header } from './Header.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { PipelineStrip } from './PipelineStrip.tsx';
 import { StagePane } from '../viewers/StagePane.tsx';
+import { HoverBar } from '../shared/HoverBar.tsx';
 
 function MainLayout() {
   const { state, dispatch } = useAppState();
@@ -34,22 +35,7 @@ function MainLayout() {
           }}
         >
           <PipelineStrip stages={stages} />
-          {/* HoverInfoBar placeholder */}
-          <div
-            style={{
-              height: 24,
-              display: 'flex',
-              alignItems: 'center',
-              padding: `0 ${spacing.md}px`,
-              fontSize: fontSizes.xs,
-              color: colors.textTertiary,
-              background: colors.bg,
-              borderBottom: `1px solid ${colors.borderSubtle}`,
-              flexShrink: 0,
-            }}
-          >
-            Hover a value to trace it
-          </div>
+          <HoverBar stages={stages} />
           <Group
             orientation="horizontal"
             defaultLayout={panesPersist.defaultLayout}
@@ -69,6 +55,8 @@ function MainLayout() {
                   dispatch({ type: 'SET_LEFT_PANE_VIEW', view })
                 }
                 accentColor={colors.paneAccentLeft}
+                variables={state.variables}
+                shape={state.shape}
               />
             </Panel>
             <Separator className="resize-handle" />
@@ -85,6 +73,8 @@ function MainLayout() {
                   dispatch({ type: 'SET_RIGHT_PANE_VIEW', view })
                 }
                 accentColor={colors.paneAccentRight}
+                variables={state.variables}
+                shape={state.shape}
               />
             </Panel>
           </Group>

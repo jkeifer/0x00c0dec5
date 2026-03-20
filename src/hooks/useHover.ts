@@ -1,18 +1,31 @@
-import { createContext, useContext, useState, type ReactNode, createElement } from 'react';
+import { createContext, useContext, useState, useCallback, type ReactNode, createElement } from 'react';
 
 interface HoverContextValue {
   hoveredTraceId: string | null;
-  setHoveredTraceId: (id: string | null) => void;
+  hoverSource: 'left' | 'right' | null;
+  setHover: (traceId: string | null, source: 'left' | 'right') => void;
+  clearHover: () => void;
 }
 
 const HoverContext = createContext<HoverContextValue | null>(null);
 
 export function HoverProvider({ children }: { children: ReactNode }) {
   const [hoveredTraceId, setHoveredTraceId] = useState<string | null>(null);
+  const [hoverSource, setHoverSource] = useState<'left' | 'right' | null>(null);
+
+  const setHover = useCallback((traceId: string | null, source: 'left' | 'right') => {
+    setHoveredTraceId(traceId);
+    setHoverSource(traceId ? source : null);
+  }, []);
+
+  const clearHover = useCallback(() => {
+    setHoveredTraceId(null);
+    setHoverSource(null);
+  }, []);
 
   return createElement(
     HoverContext.Provider,
-    { value: { hoveredTraceId, setHoveredTraceId } },
+    { value: { hoveredTraceId, hoverSource, setHover, clearHover } },
     children,
   );
 }
