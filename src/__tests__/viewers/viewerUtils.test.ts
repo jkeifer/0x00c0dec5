@@ -5,6 +5,10 @@ import {
   formatOffset,
   byteToAscii,
   buildTraceIndex,
+  buildTraceIndexWithCounts,
+  buildChunkIndex,
+  buildChunkIndexWithCounts,
+  buildChunkRegions,
 } from '../../components/viewers/viewerUtils.ts';
 import type { PipelineStage, ByteTrace } from '../../types/pipeline.ts';
 
@@ -29,6 +33,7 @@ function makeStage(bytes: number[], traces: ByteTrace[]): PipelineStage {
     name: 'Test',
     bytes: b,
     traces,
+    chunkRegions: buildChunkRegions(traces),
     stats: { byteCount: b.length, entropy: 0 },
   };
 }
@@ -122,8 +127,8 @@ describe('groupBytesByTrace', () => {
 
   it('detects chunk-level traces', () => {
     const traces = [
-      makeTrace({ traceId: 'chunk:chunk:0,0', variableName: '', byteCount: 2 }),
-      makeTrace({ traceId: 'chunk:chunk:0,0', variableName: '', byteCount: 2 }),
+      makeTrace({ traceId: 'chunk:0', variableName: '', byteCount: 2 }),
+      makeTrace({ traceId: 'chunk:0', variableName: '', byteCount: 2 }),
     ];
     const stage = makeStage([10, 20], traces);
     const groups = groupBytesByTrace(stage);
@@ -200,5 +205,214 @@ describe('buildTraceIndex', () => {
     for (let i = 0; i < 10; i++) {
       expect(index.get(`v:${i}`)).toBe(i);
     }
+  });
+});
+
+describe('buildChunkIndex', () => {
+  it('maps chunkId to first byte index', () => {
+    const traces = [
+      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0', byteInValue: 0 }),
+      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0', byteInValue: 1 }),
+      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:0', byteInValue: 0 }),
+      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:0', byteInValue: 1 }),
+      makeTrace({ traceId: 'temp:2', chunkId: 'chunk:1', byteInValue: 0 }),
+      makeTrace({ traceId: 'temp:2', chunkId: 'chunk:1', byteInValue: 1 }),
+    ];
+    const index = buildChunkIndex(traces);
+
+    expect(index.size).toBe(2);
+    expect(index.get('chunk:0')).toBe(0);
+    expect(index.get('chunk:1')).toBe(4);
+  });
+
+  it('returns empty map for empty traces', () => {
+    const index = buildChunkIndex([]);
+    expect(index.size).toBe(0);
+  });
+
+  it('uses first occurrence of each chunkId', () => {
+    const traces = [
+      makeTrace({ traceId: 'a:0', chunkId: 'chunk:0' }),
+      makeTrace({ traceId: 'b:0', chunkId: 'chunk:1' }),
+      makeTrace({ traceId: 'c:0', chunkId: 'chunk:0' }),
+    ];
+    const index = buildChunkIndex(traces);
+
+    expect(index.size).toBe(2);
+    expect(index.get('chunk:0')).toBe(0);
+    expect(index.get('chunk:1')).toBe(1);
+  });
+});
+
+describe('buildChunkRegions', () => {
+  it('returns empty array for empty traces', () => {
+    expect(buildChunkRegions([])).toEqual([]);
+  });
+
+  it('returns single region for contiguous same-chunkId bytes', () => {
+    const traces = [
+      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
+      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
+      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:0' }),
+      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:0' }),
+    ];
+    const regions = buildChunkRegions(traces);
+
+    expect(regions).toHaveLength(1);
+    expect(regions[0]).toEqual({
+      label: 'chunk:0',
+      startByte: 0,
+      endByte: 4,
+      byteCount: 4,
+    });
+  });
+
+  it('returns multiple regions for different chunks', () => {
+    const traces = [
+      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
+      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
+      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:1' }),
+      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:1' }),
+      makeTrace({ traceId: 'temp:2', chunkId: 'chunk:1' }),
+    ];
+    const regions = buildChunkRegions(traces);
+
+    expect(regions).toHaveLength(2);
+    expect(regions[0]).toEqual({
+      label: 'chunk:0',
+      startByte: 0,
+      endByte: 2,
+      byteCount: 2,
+    });
+    expect(regions[1]).toEqual({
+      label: 'chunk:1',
+      startByte: 2,
+      endByte: 5,
+      byteCount: 3,
+    });
+  });
+
+  it('handles mixed structural regions', () => {
+    const traces = [
+      makeTrace({ traceId: 'magic:start', chunkId: '', variableName: '' }),
+      makeTrace({ traceId: 'magic:start', chunkId: '', variableName: '' }),
+      makeTrace({ traceId: 'metadata', chunkId: '', variableName: '' }),
+      makeTrace({ traceId: 'metadata', chunkId: '', variableName: '' }),
+      makeTrace({ traceId: 'metadata', chunkId: '', variableName: '' }),
+      makeTrace({ traceId: 'chunk:0', chunkId: 'chunk:0', variableName: '' }),
+      makeTrace({ traceId: 'chunk:0', chunkId: 'chunk:0', variableName: '' }),
+      makeTrace({ traceId: 'chunk:1', chunkId: 'chunk:1', variableName: '' }),
+      makeTrace({ traceId: 'chunk:1', chunkId: 'chunk:1', variableName: '' }),
+      makeTrace({ traceId: 'magic:end', chunkId: '', variableName: '' }),
+    ];
+    const regions = buildChunkRegions(traces);
+
+    expect(regions).toHaveLength(5);
+    expect(regions[0].label).toBe('magic:start');
+    expect(regions[0].startByte).toBe(0);
+    expect(regions[0].endByte).toBe(2);
+    expect(regions[1].label).toBe('metadata');
+    expect(regions[1].startByte).toBe(2);
+    expect(regions[1].endByte).toBe(5);
+    expect(regions[2].label).toBe('chunk:0');
+    expect(regions[2].startByte).toBe(5);
+    expect(regions[2].endByte).toBe(7);
+    expect(regions[3].label).toBe('chunk:1');
+    expect(regions[3].startByte).toBe(7);
+    expect(regions[3].endByte).toBe(9);
+    expect(regions[4].label).toBe('magic:end');
+    expect(regions[4].startByte).toBe(9);
+    expect(regions[4].endByte).toBe(10);
+  });
+
+  it('uses traceId as fallback when chunkId is empty', () => {
+    const traces = [
+      makeTrace({ traceId: 'temp:0', chunkId: '' }),
+      makeTrace({ traceId: 'temp:0', chunkId: '' }),
+      makeTrace({ traceId: 'temp:1', chunkId: '' }),
+    ];
+    const regions = buildChunkRegions(traces);
+
+    expect(regions).toHaveLength(2);
+    expect(regions[0].label).toBe('temp:0');
+    expect(regions[1].label).toBe('temp:1');
+  });
+});
+
+describe('buildTraceIndexWithCounts', () => {
+  it('returns empty map for empty traces', () => {
+    const index = buildTraceIndexWithCounts([]);
+    expect(index.size).toBe(0);
+  });
+
+  it('maps traceId to firstByte, lastByte, and count', () => {
+    const traces = [
+      makeTrace({ traceId: 'temp:0', byteInValue: 0 }),
+      makeTrace({ traceId: 'temp:0', byteInValue: 1 }),
+      makeTrace({ traceId: 'temp:0', byteInValue: 2 }),
+      makeTrace({ traceId: 'temp:0', byteInValue: 3 }),
+      makeTrace({ traceId: 'temp:1', byteInValue: 0 }),
+      makeTrace({ traceId: 'temp:1', byteInValue: 1 }),
+    ];
+    const index = buildTraceIndexWithCounts(traces);
+
+    expect(index.size).toBe(2);
+    expect(index.get('temp:0')).toEqual({ firstByte: 0, lastByte: 3, count: 4 });
+    expect(index.get('temp:1')).toEqual({ firstByte: 4, lastByte: 5, count: 2 });
+  });
+
+  it('handles non-contiguous traces with same traceId', () => {
+    const traces = [
+      makeTrace({ traceId: 'a:0' }),
+      makeTrace({ traceId: 'b:0' }),
+      makeTrace({ traceId: 'a:0' }),
+    ];
+    const index = buildTraceIndexWithCounts(traces);
+
+    expect(index.get('a:0')).toEqual({ firstByte: 0, lastByte: 2, count: 2 });
+    expect(index.get('b:0')).toEqual({ firstByte: 1, lastByte: 1, count: 1 });
+  });
+
+  it('handles single-byte entries', () => {
+    const traces = [
+      makeTrace({ traceId: 'x:0', byteCount: 1 }),
+    ];
+    const index = buildTraceIndexWithCounts(traces);
+
+    expect(index.get('x:0')).toEqual({ firstByte: 0, lastByte: 0, count: 1 });
+  });
+});
+
+describe('buildChunkIndexWithCounts', () => {
+  it('returns empty map for empty traces', () => {
+    const index = buildChunkIndexWithCounts([]);
+    expect(index.size).toBe(0);
+  });
+
+  it('maps chunkId to firstByte, lastByte, and count', () => {
+    const traces = [
+      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
+      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
+      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:0' }),
+      makeTrace({ traceId: 'temp:2', chunkId: 'chunk:1' }),
+      makeTrace({ traceId: 'temp:2', chunkId: 'chunk:1' }),
+    ];
+    const index = buildChunkIndexWithCounts(traces);
+
+    expect(index.size).toBe(2);
+    expect(index.get('chunk:0')).toEqual({ firstByte: 0, lastByte: 2, count: 3 });
+    expect(index.get('chunk:1')).toEqual({ firstByte: 3, lastByte: 4, count: 2 });
+  });
+
+  it('skips traces with empty chunkId', () => {
+    const traces = [
+      makeTrace({ traceId: 'magic:start', chunkId: '' }),
+      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
+    ];
+    const index = buildChunkIndexWithCounts(traces);
+
+    expect(index.size).toBe(1);
+    expect(index.has('')).toBe(false);
+    expect(index.get('chunk:0')).toEqual({ firstByte: 1, lastByte: 1, count: 1 });
   });
 });

@@ -2,22 +2,27 @@ import { useRef, useEffect, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import { useHover } from '../../hooks/useHover.ts';
-import { byteToHex, formatOffset, byteToAscii, buildTraceIndex } from './viewerUtils.ts';
+import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
+import { byteToHex, formatOffset, byteToAscii, buildTraceIndex, buildChunkIndex } from './viewerUtils.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 
 interface HexViewProps {
   stage: PipelineStage;
   paneId: 'left' | 'right';
+  chunkTraceMap?: Map<string, Set<string>>;
+  traceChunkMap?: Map<string, string>;
 }
 
-const BYTES_PER_ROW = 16;
+const NARROW_BREAKPOINT = 500;
 const ROW_HEIGHT = 20;
 
-export function HexView({ stage, paneId }: HexViewProps) {
-  const { hoveredTraceId, hoverSource, setHover, clearHover } = useHover();
+export function HexView({ stage, paneId, chunkTraceMap, traceChunkMap }: HexViewProps) {
+  const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
+  const containerWidth = useContainerWidth(parentRef);
+  const bytesPerRow = containerWidth > 0 && containerWidth < NARROW_BREAKPOINT ? 8 : 16;
 
-  const rowCount = Math.ceil(stage.bytes.length / BYTES_PER_ROW);
+  const rowCount = Math.ceil(stage.bytes.length / bytesPerRow);
 
   const virtualizer = useVirtualizer({
     count: rowCount,
@@ -26,18 +31,46 @@ export function HexView({ stage, paneId }: HexViewProps) {
     overscan: 10,
   });
 
+  const virtualizerRef = useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
+
   const traceIndex = useMemo(() => buildTraceIndex(stage.traces), [stage.traces]);
+  const chunkIndex = useMemo(() => buildChunkIndex(stage.traces), [stage.traces]);
+
+  const regionByByte = useMemo(() => {
+    const map = new Uint8Array(stage.bytes.length);
+    for (let r = 0; r < stage.chunkRegions.length; r++) {
+      const region = stage.chunkRegions[r];
+      for (let i = region.startByte; i < region.endByte; i++) {
+        map[i] = r % 2;
+      }
+    }
+    return map;
+  }, [stage.chunkRegions, stage.bytes.length]);
+
+  const regionBoundaries = useMemo(() => {
+    const set = new Set<number>();
+    for (const region of stage.chunkRegions) {
+      if (region.startByte > 0) set.add(region.startByte);
+    }
+    return set;
+  }, [stage.chunkRegions]);
+
+  const isCrossPane = hoverSource !== null && hoverSource !== paneId;
 
   // Scroll to hovered trace when hover comes from the other pane
   useEffect(() => {
     if (hoveredTraceId && hoverSource !== paneId) {
-      const byteIdx = traceIndex.get(hoveredTraceId);
+      let byteIdx = traceIndex.get(hoveredTraceId);
+      if (byteIdx === undefined && hoveredChunkId) {
+        byteIdx = chunkIndex.get(hoveredChunkId);
+      }
       if (byteIdx !== undefined) {
-        const rowIdx = Math.floor(byteIdx / BYTES_PER_ROW);
-        virtualizer.scrollToIndex(rowIdx, { align: 'auto' });
+        const rowIdx = Math.floor(byteIdx / bytesPerRow);
+        virtualizerRef.current.scrollToIndex(rowIdx, { align: 'auto' });
       }
     }
-  }, [hoveredTraceId, hoverSource, paneId, traceIndex, virtualizer]);
+  }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, traceIndex, chunkIndex, bytesPerRow]);
 
   const offsetWidth = formatOffset(0, stage.bytes.length).length;
 
@@ -62,8 +95,13 @@ export function HexView({ stage, paneId }: HexViewProps) {
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const rowIndex = virtualRow.index;
-          const byteStart = rowIndex * BYTES_PER_ROW;
-          const byteEnd = Math.min(byteStart + BYTES_PER_ROW, stage.bytes.length);
+          const byteStart = rowIndex * bytesPerRow;
+          const byteEnd = Math.min(byteStart + bytesPerRow, stage.bytes.length);
+
+          const rowHasBoundary = byteStart > 0 && Array.from(
+            { length: Math.min(bytesPerRow, byteEnd - byteStart) },
+            (_, col) => regionBoundaries.has(byteStart + col),
+          ).some(Boolean);
 
           return (
             <div
@@ -77,6 +115,7 @@ export function HexView({ stage, paneId }: HexViewProps) {
                 display: 'flex',
                 whiteSpace: 'pre',
                 padding: `0 ${spacing.sm}px`,
+                borderTop: rowHasBoundary ? `1px solid ${colors.borderSubtle}` : undefined,
               }}
             >
               {/* Offset column */}
@@ -86,29 +125,36 @@ export function HexView({ stage, paneId }: HexViewProps) {
 
               {/* Hex bytes */}
               <span style={{ marginRight: spacing.sm }}>
-                {Array.from({ length: BYTES_PER_ROW }, (_, col) => {
+                {Array.from({ length: bytesPerRow }, (_, col) => {
                   const byteIdx = byteStart + col;
                   if (byteIdx >= byteEnd) {
                     return (
                       <span key={col}>
                         {'   '}
-                        {col === 7 ? ' ' : ''}
+                        {col === Math.floor(bytesPerRow / 2) - 1 ? ' ' : ''}
                       </span>
                     );
                   }
-                  const trace = stage.traces[byteIdx];
-                  const isHovered = hoveredTraceId !== null && trace.traceId === hoveredTraceId;
-                  const textColor = trace.variableColor || colors.textSecondary;
+                  const trace = stage.traces[byteIdx] as typeof stage.traces[0] | undefined;
+                  const isValueHovered = trace != null && hoveredTraceId !== null && trace.traceId === hoveredTraceId;
+                  const chunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
+                  const isChunkHovered = !isValueHovered && trace != null && (
+                    (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && trace.chunkId === hoveredChunkId)
+                    || (chunkTraceIds != null && chunkTraceIds.has(trace.traceId))
+                  );
+                  const textColor = trace?.variableColor || colors.textSecondary;
+                  const regionTint = regionByByte[byteIdx] === 1 ? 'rgba(255,255,255,0.05)' : undefined;
 
                   return (
                     <span
                       key={col}
-                      onMouseEnter={() => setHover(trace.traceId, paneId)}
+                      onMouseEnter={trace ? () => setHover(trace.traceId, trace.chunkId, paneId) : undefined}
                       style={{
                         color: textColor,
-                        backgroundColor: isHovered ? 'rgba(255,255,255,0.1)' : undefined,
+                        backgroundColor: isValueHovered ? 'rgba(255,255,255,0.18)' : isChunkHovered ? 'rgba(255,255,255,0.08)' : regionTint,
                         borderRadius: 2,
                         cursor: 'default',
+                        transition: 'background-color 0.1s ease',
                       }}
                     >
                       {byteToHex(stage.bytes[byteIdx])}
@@ -116,8 +162,8 @@ export function HexView({ stage, paneId }: HexViewProps) {
                   );
                 }).reduce<React.ReactNode[]>((acc, el, i) => {
                   acc.push(el);
-                  if (i < BYTES_PER_ROW - 1) {
-                    acc.push(<span key={`sep-${i}`}>{i === 7 ? '  ' : ' '}</span>);
+                  if (i < bytesPerRow - 1) {
+                    acc.push(<span key={`sep-${i}`}>{i === Math.floor(bytesPerRow / 2) - 1 ? '  ' : ' '}</span>);
                   }
                   return acc;
                 }, [])}
@@ -126,20 +172,26 @@ export function HexView({ stage, paneId }: HexViewProps) {
               {/* ASCII column */}
               <span style={{ color: colors.textTertiary }}>
                 {'│'}
-                {Array.from({ length: BYTES_PER_ROW }, (_, col) => {
+                {Array.from({ length: bytesPerRow }, (_, col) => {
                   const byteIdx = byteStart + col;
                   if (byteIdx >= byteEnd) return <span key={col}> </span>;
-                  const trace = stage.traces[byteIdx];
-                  const isHovered = hoveredTraceId !== null && trace.traceId === hoveredTraceId;
+                  const trace = stage.traces[byteIdx] as typeof stage.traces[0] | undefined;
+                  const isValueHovered = trace != null && hoveredTraceId !== null && trace.traceId === hoveredTraceId;
+                  const asciiChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
+                  const isChunkHovered = !isValueHovered && trace != null && (
+                    (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && trace.chunkId === hoveredChunkId)
+                    || (asciiChunkTraceIds != null && asciiChunkTraceIds.has(trace.traceId))
+                  );
 
                   return (
                     <span
                       key={col}
-                      onMouseEnter={() => setHover(trace.traceId, paneId)}
+                      onMouseEnter={trace ? () => setHover(trace.traceId, trace.chunkId, paneId) : undefined}
                       style={{
-                        color: isHovered ? colors.textPrimary : colors.textTertiary,
-                        backgroundColor: isHovered ? 'rgba(255,255,255,0.1)' : undefined,
+                        color: isValueHovered ? colors.textPrimary : isChunkHovered ? colors.textSecondary : colors.textTertiary,
+                        backgroundColor: isValueHovered ? 'rgba(255,255,255,0.18)' : isChunkHovered ? 'rgba(255,255,255,0.08)' : undefined,
                         cursor: 'default',
+                        transition: 'background-color 0.1s ease',
                       }}
                     >
                       {byteToAscii(stage.bytes[byteIdx])}

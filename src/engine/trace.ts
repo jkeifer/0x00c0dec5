@@ -42,7 +42,9 @@ export function propagateTracesValuePreserving(
 
 /**
  * Degrade traces to chunk-level after entropy coding.
- * All output traces get traceId = "chunk:{chunkId}".
+ * All output traces get traceId = chunkId from the input traces.
+ * When all input traces share the same variableName (per-variable chunks),
+ * preserve variableName and variableColor in the output.
  */
 export function degradeTracesToChunkLevel(
   inputTraces: ByteTrace[],
@@ -53,18 +55,22 @@ export function degradeTracesToChunkLevel(
   }
 
   const sample = inputTraces[0];
-  const chunkTraceId = `chunk:${sample.chunkId}`;
+  const chunkTraceId = sample.chunkId;
 
-  return Array.from({ length: outputByteCount }, (_, i) => ({
+  // Check if all traces share the same variable (true for per-variable chunks)
+  const sharedVariable = sample.variableName !== '' &&
+    inputTraces.every((t) => t.variableName === sample.variableName);
+
+  return Array.from({ length: outputByteCount }, () => ({
     traceId: chunkTraceId,
-    variableName: '',
-    variableColor: '',
+    variableName: sharedVariable ? sample.variableName : '',
+    variableColor: sharedVariable ? sample.variableColor : '',
     coords: [],
     displayValue: '',
     dtype: 'uint8',
     chunkId: sample.chunkId,
-    byteInValue: i,
-    byteCount: outputByteCount,
+    byteInValue: 0,
+    byteCount: 1,
   }));
 }
 

@@ -1,16 +1,18 @@
 import { useMemo } from 'react';
 import type { AppState } from '../types/state.ts';
-import type { PipelineStage, ByteTrace, EncodedChunk } from '../types/pipeline.ts';
+import type { PipelineStage, ByteTrace, EncodedChunk, VirtualFile } from '../types/pipeline.ts';
+import { buildChunkRegions } from '../components/viewers/viewerUtils.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
 import { getDtype } from '../types/dtypes.ts';
 import { generateValues } from '../engine/generate.ts';
-import { chunkData, computeChunkGrid } from '../engine/chunk.ts';
+import { chunkData, chunkDataPerVariable, computeChunkGrid, flatIndexToCoords } from '../engine/chunk.ts';
 import { linearizeChunk } from '../engine/linearize.ts';
 import { runCodecPipeline, shannonEntropy } from '../engine/codecs.ts';
 import { collectMetadata, serializeMetadata } from '../engine/metadata.ts';
 import { assembleFiles } from '../engine/write.ts';
 import { valuesToBytes } from '../engine/elements.ts';
 import { formatValue } from '../engine/elements.ts';
+import { isChunkLevelTrace } from '../engine/trace.ts';
 
 function concatBytes(arrays: Uint8Array[]): Uint8Array {
   const totalLength = arrays.reduce((acc, a) => acc + a.length, 0);
@@ -28,6 +30,7 @@ function makeStage(name: string, bytes: Uint8Array, traces: ByteTrace[]): Pipeli
     name,
     bytes,
     traces,
+    chunkRegions: buildChunkRegions(traces),
     stats: {
       byteCount: bytes.length,
       entropy: shannonEntropy(bytes),
@@ -35,7 +38,14 @@ function makeStage(name: string, bytes: Uint8Array, traces: ByteTrace[]): Pipeli
   };
 }
 
-export function computePipelineStages(state: AppState): PipelineStage[] {
+export interface PipelineResult {
+  stages: PipelineStage[];
+  files: VirtualFile[];
+  chunkTraceMap: Map<string, Set<string>>;
+  traceChunkMap: Map<string, string>;
+}
+
+export function computePipelineStages(state: AppState): PipelineResult {
   const totalElements = state.shape.reduce((a, b) => a * b, 1);
 
   // 1. Generate values for all variables
@@ -54,14 +64,15 @@ export function computePipelineStages(state: AppState): PipelineStage[] {
     valuesPartBytes.push(bytes);
 
     for (let i = 0; i < vals.length; i++) {
-      const traceId = `${v.name}:${i}`;
+      const coords = flatIndexToCoords(i, state.shape);
+      const traceId = `${v.name}:${coords.join(',')}`;
       const display = formatValue(vals[i], v.dtype);
       for (let b = 0; b < dtypeInfo.size; b++) {
         valuesTraces.push({
           traceId,
           variableName: v.name,
           variableColor: v.color,
-          coords: [i],
+          coords,
           displayValue: display,
           dtype: v.dtype,
           chunkId: '',
@@ -75,44 +86,49 @@ export function computePipelineStages(state: AppState): PipelineStage[] {
   const stages: PipelineStage[] = [makeStage('Values', valuesBytes, valuesTraces)];
 
   // 2. Chunk + Linearize
-  const chunks = chunkData(state.shape, state.chunkShape, state.variables, variableValues);
+  const chunks = state.interleaving === 'column'
+    ? chunkDataPerVariable(state.shape, state.chunkShape, state.variables, variableValues)
+    : chunkData(state.shape, state.chunkShape, state.variables, variableValues);
   const linearizedChunks = chunks.map((chunk) => linearizeChunk(chunk, state.interleaving));
   const linearizedBytes = concatBytes(linearizedChunks.map((lc) => lc.bytes));
   const linearizedTraces = linearizedChunks.flatMap((lc) => lc.traces);
   stages.push(makeStage('Linearized', linearizedBytes, linearizedTraces));
+
+  // Build chunk↔trace maps from linearized traces
+  const chunkTraceMap = new Map<string, Set<string>>();
+  const traceChunkMap = new Map<string, string>();
+  for (const t of linearizedTraces) {
+    if (t.chunkId && !isChunkLevelTrace(t.traceId)) {
+      if (!chunkTraceMap.has(t.chunkId)) chunkTraceMap.set(t.chunkId, new Set());
+      chunkTraceMap.get(t.chunkId)!.add(t.traceId);
+      if (!traceChunkMap.has(t.traceId)) traceChunkMap.set(t.traceId, t.chunkId);
+    }
+  }
 
   // 3. Encode
   const encodedChunks: EncodedChunk[] = chunks.map((chunk, idx) => {
     const linearized = linearizedChunks[idx];
 
     if (state.interleaving === 'column') {
-      let offset = 0;
-      const encodedParts: { bytes: Uint8Array; traces: ByteTrace[] }[] = [];
-
-      for (const cv of chunk.variables) {
-        const varByteCount = cv.values.length * getDtype(cv.dtype as DtypeKey).size;
-        const varBytes = linearized.bytes.slice(offset, offset + varByteCount);
-        const varTraces = linearized.traces.slice(offset, offset + varByteCount);
-
-        const steps = state.fieldPipelines[cv.variableName] ?? [];
-        const result = runCodecPipeline(varBytes, varTraces, steps, cv.dtype as DtypeKey);
-        encodedParts.push({ bytes: result.bytes, traces: result.traces });
-
-        offset += varByteCount;
-      }
-
-      const combinedBytes = concatBytes(encodedParts.map((p) => p.bytes));
-      const combinedTraces = encodedParts.flatMap((p) => p.traces);
-
+      // Per-variable chunks: each chunk has exactly one variable
+      const cv = chunk.variables[0];
+      const steps = state.fieldPipelines[cv.variableName] ?? [];
+      const result = runCodecPipeline(linearized.bytes, linearized.traces, steps, cv.dtype as DtypeKey);
       return {
         chunkId: linearized.chunkId,
         coords: linearized.coords,
-        bytes: combinedBytes,
-        traces: combinedTraces,
+        bytes: result.bytes,
+        traces: result.traces,
+        variableName: linearized.variableName,
       };
     } else {
       const steps = state.chunkPipeline;
-      const inputDtype = chunk.variables.length > 0 ? (chunk.variables[0].dtype as DtypeKey) : 'uint8' as DtypeKey;
+      const uniqueDtypes = new Set(chunk.variables.map((cv) => cv.dtype));
+      const inputDtype: DtypeKey = chunk.variables.length === 0
+        ? 'uint8'
+        : uniqueDtypes.size > 1
+          ? 'uint8'
+          : chunk.variables[0].dtype as DtypeKey;
       const result = runCodecPipeline(linearized.bytes, linearized.traces, steps, inputDtype);
       return {
         chunkId: linearized.chunkId,
@@ -146,13 +162,14 @@ export function computePipelineStages(state: AppState): PipelineStage[] {
 
   // 5. Write (assembled file)
   const files = assembleFiles(state, encodedChunks, chunkGrid);
-  const primaryFile = files[0];
-  stages.push(makeStage('Write', primaryFile.bytes, primaryFile.traces));
+  const writeBytes = concatBytes(files.map((f) => f.bytes));
+  const writeTraces = files.flatMap((f) => f.traces);
+  stages.push(makeStage('Write', writeBytes, writeTraces));
 
-  return stages;
+  return { stages, files, chunkTraceMap, traceChunkMap };
 }
 
-export function usePipeline(state: AppState): PipelineStage[] {
+export function usePipeline(state: AppState): PipelineResult {
   return useMemo(
     () => computePipelineStages(state),
     [

@@ -1,17 +1,17 @@
 export const colors = {
   bg: '#0d1117',
   surface: '#161b22',
-  surfaceHover: '#1c2129',
+  surfaceHover: '#272d36',
   surfaceInput: '#0d1117',
   border: '#30363d',
-  borderSubtle: '#21262d',
+  borderSubtle: '#2d333b',
 
   textPrimary: '#e6edf3',
   textSecondary: '#8b949e',
-  textTertiary: '#484f58',
+  textTertiary: '#6e7681',
 
   accent: '#58a6ff',
-  accentDim: 'rgba(88, 166, 255, 0.15)',
+  accentDim: 'rgba(88, 166, 255, 0.25)',
 
   // 10-color variable palette
   palette: [
@@ -29,6 +29,9 @@ export const colors = {
 
   paneAccentLeft: '#58a6ff',
   paneAccentRight: '#d19a66',
+
+  warning: '#d19a66',
+  warningDim: '#d19a6615',
 } as const;
 
 export const fonts = {

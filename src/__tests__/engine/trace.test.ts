@@ -102,8 +102,10 @@ describe('degradeTracesToChunkLevel', () => {
 
     expect(output.length).toBe(10);
     for (const t of output) {
-      expect(t.traceId).toBe('chunk:chunk:0');
+      expect(t.traceId).toBe('chunk:0');
       expect(t.dtype).toBe('uint8');
+      expect(t.byteInValue).toBe(0);
+      expect(t.byteCount).toBe(1);
     }
   });
 
@@ -117,11 +119,51 @@ describe('degradeTracesToChunkLevel', () => {
     const output = degradeTracesToChunkLevel(input, 0);
     expect(output).toEqual([]);
   });
+
+  it('preserves variableName and variableColor when all traces share same variable', () => {
+    const input = makeFloat32Traces(3); // all have variableName='var', variableColor='#f00'
+    const output = degradeTracesToChunkLevel(input, 5);
+
+    expect(output.length).toBe(5);
+    for (const t of output) {
+      expect(t.variableName).toBe('var');
+      expect(t.variableColor).toBe('#f00');
+    }
+  });
+
+  it('clears variableName and variableColor when traces have mixed variables', () => {
+    const input = [
+      makeTrace({ variableName: 'a', variableColor: '#f00' }),
+      makeTrace({ variableName: 'a', variableColor: '#f00' }),
+      makeTrace({ variableName: 'b', variableColor: '#0f0' }),
+      makeTrace({ variableName: 'b', variableColor: '#0f0' }),
+    ];
+    const output = degradeTracesToChunkLevel(input, 3);
+
+    expect(output.length).toBe(3);
+    for (const t of output) {
+      expect(t.variableName).toBe('');
+      expect(t.variableColor).toBe('');
+    }
+  });
+
+  it('clears variable info when variableName is empty', () => {
+    const input = [
+      makeTrace({ variableName: '', variableColor: '' }),
+      makeTrace({ variableName: '', variableColor: '' }),
+    ];
+    const output = degradeTracesToChunkLevel(input, 2);
+
+    for (const t of output) {
+      expect(t.variableName).toBe('');
+      expect(t.variableColor).toBe('');
+    }
+  });
 });
 
 describe('isChunkLevelTrace', () => {
   it('detects chunk-level trace ids', () => {
-    expect(isChunkLevelTrace('chunk:chunk:0')).toBe(true);
+    expect(isChunkLevelTrace('chunk:0')).toBe(true);
     expect(isChunkLevelTrace('chunk:0,1')).toBe(true);
   });
 

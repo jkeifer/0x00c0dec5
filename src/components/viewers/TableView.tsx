@@ -1,16 +1,21 @@
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
 import { getDtype } from '../../types/dtypes.ts';
 import { bytesToValues, formatValue } from '../../engine/elements.ts';
+import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { useHover } from '../../hooks/useHover.ts';
+import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 
 interface TableViewProps {
   stage: PipelineStage;
   variables: Variable[];
+  shape: number[];
   paneId: 'left' | 'right';
+  chunkTraceMap?: Map<string, Set<string>>;
+  traceChunkMap?: Map<string, string>;
 }
 
 const ROW_HEIGHT = 24;
@@ -21,8 +26,8 @@ interface ColumnData {
   values: number[];
 }
 
-export function TableView({ stage, variables, paneId }: TableViewProps) {
-  const { hoveredTraceId, hoverSource, setHover, clearHover } = useHover();
+export function TableView({ stage, variables, shape, paneId, chunkTraceMap, traceChunkMap }: TableViewProps) {
+  const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
 
   // Reconstruct column values from the Values stage bytes
@@ -52,24 +57,56 @@ export function TableView({ stage, variables, paneId }: TableViewProps) {
     paddingStart: HEADER_HEIGHT,
   });
 
-  // Scroll to hovered trace from other pane
-  // traceId format for values stage: "{varName}:{flatIndex}"
-  const hoveredRowIndex = useMemo(() => {
-    if (!hoveredTraceId || hoverSource === paneId) return null;
-    const colonIdx = hoveredTraceId.lastIndexOf(':');
+  const virtualizerRef = useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
+
+  // Resolve traceId → row index for auto-scroll
+  const traceIdToRowIndex = useCallback((traceId: string): number | null => {
+    const colonIdx = traceId.indexOf(':');
     if (colonIdx < 0) return null;
-    const idx = parseInt(hoveredTraceId.slice(colonIdx + 1), 10);
-    return isNaN(idx) ? null : idx;
-  }, [hoveredTraceId, hoverSource, paneId]);
+    const coordStr = traceId.slice(colonIdx + 1);
+    const parts = coordStr.split(',').map(Number);
+    if (parts.some(isNaN)) return null;
+    let idx = 0;
+    for (let d = 0; d < parts.length; d++) {
+      idx = idx * (shape[d] ?? 1) + parts[d];
+    }
+    return idx;
+  }, [shape]);
+
+  // Scroll to hovered trace from other pane (value-level or chunk-level)
+  const hoveredRowIndex = useMemo(() => {
+    if (hoverSource === paneId) return null;
+    // Try exact traceId first
+    if (hoveredTraceId) {
+      const idx = traceIdToRowIndex(hoveredTraceId);
+      if (idx !== null) return idx;
+    }
+    // Fall back to chunk-level: find first traceId in the chunk
+    if (hoveredChunkId) {
+      const traceIds = chunkTraceMap?.get(hoveredChunkId);
+      if (traceIds) {
+        for (const tid of traceIds) {
+          const idx = traceIdToRowIndex(tid);
+          if (idx !== null) return idx;
+        }
+      }
+    }
+    return null;
+  }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, traceIdToRowIndex, chunkTraceMap]);
 
   // Auto-scroll
-  useMemo(() => {
+  useEffect(() => {
     if (hoveredRowIndex !== null && hoveredRowIndex < rowCount) {
-      virtualizer.scrollToIndex(hoveredRowIndex, { align: 'auto' });
+      virtualizerRef.current.scrollToIndex(hoveredRowIndex, { align: 'auto' });
     }
-  }, [hoveredRowIndex, rowCount, virtualizer]);
+  }, [hoveredRowIndex, rowCount]);
 
-  const colWidth = Math.max(100, Math.floor(600 / Math.max(columns.length, 1)));
+  const containerWidth = useContainerWidth(parentRef);
+  const availableWidth = (containerWidth > 0 ? containerWidth : 600) - 50; // subtract row index column
+  const colWidth = Math.max(100, Math.floor(availableWidth / Math.max(columns.length, 1)));
+  const totalWidth = 50 + colWidth * columns.length;
+  const minTableWidth = columns.length > 0 ? 50 + 100 * columns.length : undefined;
 
   return (
     <div
@@ -95,6 +132,7 @@ export function TableView({ stage, variables, paneId }: TableViewProps) {
           alignItems: 'center',
           fontWeight: 600,
           fontSize: fontSizes.sm,
+          minWidth: minTableWidth,
         }}
       >
         <div
@@ -131,6 +169,7 @@ export function TableView({ stage, variables, paneId }: TableViewProps) {
           height: virtualizer.getTotalSize(),
           width: '100%',
           position: 'relative',
+          minWidth: minTableWidth,
         }}
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -164,21 +203,26 @@ export function TableView({ stage, variables, paneId }: TableViewProps) {
 
               {/* Cells */}
               {columns.map((col) => {
-                const traceId = `${col.variable.name}:${rowIdx}`;
-                const isHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
+                const coords = flatIndexToCoords(rowIdx, shape);
+                const traceId = `${col.variable.name}:${coords.join(',')}`;
+                const isValueHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
+                const tableChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
+                const isChunkHovered = !isValueHovered && tableChunkTraceIds != null && tableChunkTraceIds.has(traceId);
                 const val = rowIdx < col.values.length ? col.values[rowIdx] : undefined;
+                const chunkId = traceChunkMap?.get(traceId) ?? null;
 
                 return (
                   <div
                     key={col.variable.id}
-                    onMouseEnter={() => setHover(traceId, paneId)}
+                    onMouseEnter={() => setHover(traceId, chunkId, paneId)}
                     style={{
                       width: colWidth,
                       flexShrink: 0,
                       padding: `0 ${spacing.xs}px`,
                       color: colors.textPrimary,
-                      backgroundColor: isHovered ? 'rgba(255,255,255,0.08)' : undefined,
+                      backgroundColor: isValueHovered ? 'rgba(255,255,255,0.16)' : isChunkHovered ? 'rgba(255,255,255,0.07)' : undefined,
                       cursor: 'default',
+                      transition: 'background-color 0.1s ease',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',

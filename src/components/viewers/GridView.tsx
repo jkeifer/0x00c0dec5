@@ -1,8 +1,9 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
 import { getDtype } from '../../types/dtypes.ts';
 import { bytesToValues } from '../../engine/elements.ts';
+import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 
@@ -11,6 +12,8 @@ interface GridViewProps {
   variables: Variable[];
   shape: number[];
   paneId: 'left' | 'right';
+  chunkTraceMap?: Map<string, Set<string>>;
+  traceChunkMap?: Map<string, string>;
 }
 
 const CELL_SIZE = 20;
@@ -33,9 +36,10 @@ function valueToColor(value: number, min: number, max: number, baseColor: string
   return `rgb(${outR},${outG},${outB})`;
 }
 
-export function GridView({ stage, variables, shape, paneId }: GridViewProps) {
-  const { hoveredTraceId, setHover, clearHover } = useHover();
+export function GridView({ stage, variables, shape, paneId, chunkTraceMap, traceChunkMap }: GridViewProps) {
+  const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const [selectedVarIdx, setSelectedVarIdx] = useState(0);
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const selectedVar = variables[selectedVarIdx] ?? variables[0];
   if (!selectedVar) {
@@ -75,6 +79,26 @@ export function GridView({ stage, variables, shape, paneId }: GridViewProps) {
   const cols = shape.length >= 2 ? shape[1] : shape[0] ?? 0;
   const is1D = shape.length < 2;
   const cellCount = Math.min(values.length, MAX_CELLS);
+
+  // Cross-pane auto-scroll
+  useEffect(() => {
+    if (!hoveredTraceId || hoverSource === paneId || !gridRef.current) return;
+    const colonIdx = hoveredTraceId.indexOf(':');
+    if (colonIdx < 0) return;
+    const varName = hoveredTraceId.slice(0, colonIdx);
+    if (varName !== selectedVar.name) return;
+    const coordStr = hoveredTraceId.slice(colonIdx + 1);
+    const parts = coordStr.split(',').map(Number);
+    if (parts.some(isNaN)) return;
+    let idx = 0;
+    for (let d = 0; d < parts.length; d++) {
+      idx = idx * (shape[d] ?? 1) + parts[d];
+    }
+    const cell = gridRef.current.querySelector(`[data-cell-idx="${idx}"]`);
+    if (cell) {
+      cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }
+  }, [hoveredTraceId, hoverSource, paneId, selectedVar.name, shape]);
 
   return (
     <div
@@ -131,6 +155,7 @@ export function GridView({ stage, variables, shape, paneId }: GridViewProps) {
 
       {/* Grid */}
       <div
+        ref={gridRef}
         style={{
           flex: 1,
           overflow: 'auto',
@@ -150,22 +175,28 @@ export function GridView({ stage, variables, shape, paneId }: GridViewProps) {
             if (row >= rows && !is1D) return null;
 
             const val = values[i];
-            const traceId = `${selectedVar.name}:${i}`;
-            const isHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
+            const coords = flatIndexToCoords(i, shape);
+            const traceId = `${selectedVar.name}:${coords.join(',')}`;
+            const isValueHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
+            const gridChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
+            const isChunkHovered = !isValueHovered && gridChunkTraceIds != null && gridChunkTraceIds.has(traceId);
             const cellColor = valueToColor(val, min, max, selectedVar.color);
+            const chunkId = traceChunkMap?.get(traceId) ?? null;
 
             return (
               <div
                 key={i}
-                onMouseEnter={() => setHover(traceId, paneId)}
+                data-cell-idx={i}
+                onMouseEnter={() => setHover(traceId, chunkId, paneId)}
                 title={`${selectedVar.name}[${is1D ? i : `${row},${col}`}] = ${val}`}
                 style={{
                   width: CELL_SIZE,
                   height: CELL_SIZE,
                   backgroundColor: cellColor,
-                  outline: isHovered ? `2px solid ${colors.textPrimary}` : undefined,
+                  outline: isValueHovered ? `2px solid ${colors.textPrimary}` : isChunkHovered ? `1px solid rgba(255,255,255,0.6)` : undefined,
                   outlineOffset: -1,
                   cursor: 'default',
+                  transition: 'background-color 0.1s ease',
                 }}
               />
             );

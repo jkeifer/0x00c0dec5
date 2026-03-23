@@ -13,19 +13,25 @@ export function linearizeChunk(
   chunk: Chunk,
   interleaving: 'row' | 'column',
 ): LinearizedChunk {
-  const chunkId = `chunk:${chunk.coords.join(',')}`;
-  const traces = buildTraces(chunk, interleaving);
+  // Per-variable chunks in column mode get variable-specific chunkIds
+  const isSingleVarColumn = interleaving === 'column' && chunk.variables.length === 1;
+  const chunkId = isSingleVarColumn
+    ? `chunk:${chunk.variables[0].variableName}:${chunk.coords.join(',')}`
+    : `chunk:${chunk.coords.join(',')}`;
+  const variableName = isSingleVarColumn ? chunk.variables[0].variableName : undefined;
+  const traces = buildTraces(chunk, interleaving, chunkId);
   const bytes = buildBytes(chunk, interleaving);
 
-  return { chunkId, coords: chunk.coords, bytes, traces };
+  return { chunkId, coords: chunk.coords, bytes, traces, variableName };
 }
 
 /** Build per-byte traces for the linearized chunk. */
 export function buildTraces(
   chunk: Chunk,
   interleaving: 'row' | 'column',
+  chunkId?: string,
 ): ByteTrace[] {
-  const chunkId = `chunk:${chunk.coords.join(',')}`;
+  const resolvedChunkId = chunkId ?? `chunk:${chunk.coords.join(',')}`;
   const traces: ByteTrace[] = [];
 
   if (interleaving === 'column') {
@@ -41,7 +47,7 @@ export function buildTraces(
             coords: cv.sourceCoords[i],
             displayValue: formatValue(cv.values[i], cv.dtype as DtypeKey),
             dtype: cv.dtype,
-            chunkId,
+            chunkId: resolvedChunkId,
             byteInValue: b,
             byteCount: dtypeInfo.size,
           });
@@ -62,7 +68,7 @@ export function buildTraces(
             coords: cv.sourceCoords[i],
             displayValue: formatValue(cv.values[i], cv.dtype as DtypeKey),
             dtype: cv.dtype,
-            chunkId,
+            chunkId: resolvedChunkId,
             byteInValue: b,
             byteCount: dtypeInfo.size,
           });

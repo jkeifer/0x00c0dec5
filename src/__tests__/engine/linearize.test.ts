@@ -172,4 +172,76 @@ describe('buildTraces', () => {
     expect(traces[0].traceId).toBe('a:0');
     expect(traces[4].traceId).toBe('a:1');
   });
+
+  it('uses provided chunkId when given', () => {
+    const chunk = makeChunk({ coords: [0] });
+    const traces = buildTraces(chunk, 'column', 'chunk:temperature:0');
+    expect(traces[0].chunkId).toBe('chunk:temperature:0');
+  });
+});
+
+describe('linearizeChunk - per-variable chunkId in column mode', () => {
+  it('uses variable-specific chunkId for single-variable chunk', () => {
+    const chunk: Chunk = {
+      coords: [0],
+      flatIndex: 0,
+      variables: [
+        {
+          variableName: 'temperature',
+          variableColor: '#f00',
+          dtype: 'float32',
+          values: [1.0, 2.0],
+          sourceCoords: [[0], [1]],
+        },
+      ],
+    };
+    const result = linearizeChunk(chunk, 'column');
+    expect(result.chunkId).toBe('chunk:temperature:0');
+    expect(result.variableName).toBe('temperature');
+    expect(result.traces[0].chunkId).toBe('chunk:temperature:0');
+  });
+
+  it('uses standard chunkId for multi-variable chunk in column mode', () => {
+    const chunk = makeChunk({ coords: [1, 2] });
+    const result = linearizeChunk(chunk, 'column');
+    expect(result.chunkId).toBe('chunk:1,2');
+    expect(result.variableName).toBeUndefined();
+  });
+
+  it('uses standard chunkId for single-variable chunk in row mode', () => {
+    const chunk: Chunk = {
+      coords: [0],
+      flatIndex: 0,
+      variables: [
+        {
+          variableName: 'temperature',
+          variableColor: '#f00',
+          dtype: 'float32',
+          values: [1.0, 2.0],
+          sourceCoords: [[0], [1]],
+        },
+      ],
+    };
+    const result = linearizeChunk(chunk, 'row');
+    expect(result.chunkId).toBe('chunk:0');
+    expect(result.variableName).toBeUndefined();
+  });
+
+  it('includes 2-d coords in variable-specific chunkId', () => {
+    const chunk: Chunk = {
+      coords: [1, 2],
+      flatIndex: 5,
+      variables: [
+        {
+          variableName: 'pressure',
+          variableColor: '#0f0',
+          dtype: 'float32',
+          values: [100.0],
+          sourceCoords: [[1, 2]],
+        },
+      ],
+    };
+    const result = linearizeChunk(chunk, 'column');
+    expect(result.chunkId).toBe('chunk:pressure:1,2');
+  });
 });

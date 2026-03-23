@@ -4,6 +4,7 @@ import {
   computeChunkCount,
   enumerateChunkCoords,
   chunkData,
+  chunkDataPerVariable,
   coordsToFlatIndex,
   flatIndexToCoords,
 } from '../../engine/chunk.ts';
@@ -169,5 +170,103 @@ describe('chunkData', () => {
     const chunks = chunkData([4], [2], variables, values);
     expect(chunks[0].variables[0].sourceCoords).toEqual([[0], [1]]);
     expect(chunks[1].variables[0].sourceCoords).toEqual([[2], [3]]);
+  });
+});
+
+describe('chunkDataPerVariable', () => {
+  const variables: Variable[] = [
+    { id: 'a', name: 'a', dtype: 'float32', color: '#f00' },
+    { id: 'b', name: 'b', dtype: 'uint8', color: '#0f0' },
+  ];
+
+  it('produces one chunk per variable per spatial region', () => {
+    const values = new Map<string, number[]>();
+    values.set('a', [1, 2, 3, 4]);
+    values.set('b', [10, 20, 30, 40]);
+
+    // 4 elements, chunkShape 2 → 2 spatial chunks × 2 variables = 4 chunks
+    const chunks = chunkDataPerVariable([4], [2], variables, values);
+    expect(chunks).toHaveLength(4);
+  });
+
+  it('each chunk has exactly one variable', () => {
+    const values = new Map<string, number[]>();
+    values.set('a', [1, 2, 3, 4]);
+    values.set('b', [10, 20, 30, 40]);
+
+    const chunks = chunkDataPerVariable([4], [2], variables, values);
+    for (const chunk of chunks) {
+      expect(chunk.variables).toHaveLength(1);
+    }
+  });
+
+  it('orders all spatial chunks for var A before var B', () => {
+    const values = new Map<string, number[]>();
+    values.set('a', [1, 2, 3, 4]);
+    values.set('b', [10, 20, 30, 40]);
+
+    const chunks = chunkDataPerVariable([4], [2], variables, values);
+    // First 2 chunks should be for 'a', next 2 for 'b'
+    expect(chunks[0].variables[0].variableName).toBe('a');
+    expect(chunks[1].variables[0].variableName).toBe('a');
+    expect(chunks[2].variables[0].variableName).toBe('b');
+    expect(chunks[3].variables[0].variableName).toBe('b');
+  });
+
+  it('preserves all values per variable across spatial chunks', () => {
+    const values = new Map<string, number[]>();
+    values.set('a', [1, 2, 3, 4, 5]);
+    values.set('b', [10, 20, 30, 40, 50]);
+
+    const chunks = chunkDataPerVariable([5], [2], variables, values);
+    // 3 spatial chunks × 2 variables = 6 chunks
+    expect(chunks).toHaveLength(6);
+
+    // Collect all 'a' values
+    const aChunks = chunks.filter((c) => c.variables[0].variableName === 'a');
+    const aValues = aChunks.flatMap((c) => c.variables[0].values);
+    expect(aValues).toEqual([1, 2, 3, 4, 5]);
+
+    // Collect all 'b' values
+    const bChunks = chunks.filter((c) => c.variables[0].variableName === 'b');
+    const bValues = bChunks.flatMap((c) => c.variables[0].values);
+    expect(bValues).toEqual([10, 20, 30, 40, 50]);
+  });
+
+  it('single chunk per variable when chunkShape equals shape', () => {
+    const values = new Map<string, number[]>();
+    values.set('a', [1, 2, 3]);
+    values.set('b', [10, 20, 30]);
+
+    const chunks = chunkDataPerVariable([3], [3], variables, values);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0].variables[0].variableName).toBe('a');
+    expect(chunks[0].variables[0].values).toEqual([1, 2, 3]);
+    expect(chunks[1].variables[0].variableName).toBe('b');
+    expect(chunks[1].variables[0].values).toEqual([10, 20, 30]);
+  });
+
+  it('handles 2-d shape', () => {
+    const shape = [4, 4];
+    const chunkShape = [2, 2];
+    const singleVar: Variable[] = [
+      { id: 'x', name: 'x', dtype: 'float32', color: '#f00' },
+      { id: 'y', name: 'y', dtype: 'uint8', color: '#0f0' },
+    ];
+    const values = new Map<string, number[]>();
+    values.set('x', Array.from({ length: 16 }, (_, i) => i));
+    values.set('y', Array.from({ length: 16 }, (_, i) => i + 100));
+
+    // 4 spatial chunks × 2 variables = 8 chunks
+    const chunks = chunkDataPerVariable(shape, chunkShape, singleVar, values);
+    expect(chunks).toHaveLength(8);
+
+    // First 4 chunks are for 'x', next 4 for 'y'
+    for (let i = 0; i < 4; i++) {
+      expect(chunks[i].variables[0].variableName).toBe('x');
+    }
+    for (let i = 4; i < 8; i++) {
+      expect(chunks[i].variables[0].variableName).toBe('y');
+    }
   });
 });

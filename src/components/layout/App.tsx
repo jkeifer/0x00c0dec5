@@ -10,7 +10,7 @@ import { HoverBar } from '../shared/HoverBar.tsx';
 
 function MainLayout() {
   const { state, dispatch } = useAppState();
-  const stages = usePipeline(state);
+  const { stages, files, chunkTraceMap, traceChunkMap } = usePipeline(state);
 
   const mainPersist = useDefaultLayout({ id: 'main-layout' });
   const panesPersist = useDefaultLayout({ id: 'panes-layout' });
@@ -22,7 +22,7 @@ function MainLayout() {
       onLayoutChanged={mainPersist.onLayoutChanged}
     >
       <Panel id="sidebar" defaultSize="25%" minSize="15%" maxSize="35%">
-        <Sidebar />
+        <Sidebar files={files} />
       </Panel>
       <Separator className="resize-handle" />
       <Panel id="main" minSize="30%">
@@ -57,6 +57,9 @@ function MainLayout() {
                 accentColor={colors.paneAccentLeft}
                 variables={state.variables}
                 shape={state.shape}
+                files={files}
+                chunkTraceMap={chunkTraceMap}
+                traceChunkMap={traceChunkMap}
               />
             </Panel>
             <Separator className="resize-handle" />
@@ -75,6 +78,9 @@ function MainLayout() {
                 accentColor={colors.paneAccentRight}
                 variables={state.variables}
                 shape={state.shape}
+                files={files}
+                chunkTraceMap={chunkTraceMap}
+                traceChunkMap={traceChunkMap}
               />
             </Panel>
           </Group>

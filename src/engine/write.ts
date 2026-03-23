@@ -19,25 +19,39 @@ export function hexToBytes(hex: string): Uint8Array {
  * Order chunks according to the specified ordering.
  * Row-major: natural order (as enumerated). Already in row-major from enumerateChunkCoords.
  * Column-major: reverse the coordinate priority.
+ * When variableOrder is provided, first group by variable (preserving spatial order within).
  */
 export function orderChunks(
   chunks: EncodedChunk[],
   chunkGrid: number[],
   order: 'row-major' | 'column-major',
+  variableOrder?: string[],
 ): EncodedChunk[] {
-  if (order === 'row-major' || chunkGrid.length <= 1) {
-    return [...chunks];
+  let sorted = [...chunks];
+
+  // Apply spatial ordering first
+  if (order === 'column-major' && chunkGrid.length > 1) {
+    sorted.sort((a, b) => {
+      for (let d = chunkGrid.length - 1; d >= 0; d--) {
+        if (a.coords[d] !== b.coords[d]) {
+          return a.coords[d] - b.coords[d];
+        }
+      }
+      return 0;
+    });
   }
 
-  // Column-major: sort by coordinates in reverse dimension order
-  return [...chunks].sort((a, b) => {
-    for (let d = chunkGrid.length - 1; d >= 0; d--) {
-      if (a.coords[d] !== b.coords[d]) {
-        return a.coords[d] - b.coords[d];
-      }
-    }
-    return 0;
-  });
+  // Then stable-sort by variable order if provided
+  if (variableOrder && variableOrder.length > 0) {
+    const varIndex = new Map(variableOrder.map((name, i) => [name, i]));
+    sorted.sort((a, b) => {
+      const aIdx = varIndex.get(a.variableName ?? '') ?? variableOrder.length;
+      const bIdx = varIndex.get(b.variableName ?? '') ?? variableOrder.length;
+      return aIdx - bIdx;
+    });
+  }
+
+  return sorted;
 }
 
 /**
@@ -50,7 +64,10 @@ export function assembleFiles(
   chunkGrid: number[],
 ): VirtualFile[] {
   const magic = state.write.magicNumber ? hexToBytes(state.write.magicNumber) : new Uint8Array(0);
-  const orderedChunks = orderChunks(encodedChunks, chunkGrid, state.write.chunkOrder);
+  const variableOrder = state.interleaving === 'column'
+    ? state.variables.map((v) => v.name)
+    : undefined;
+  const orderedChunks = orderChunks(encodedChunks, chunkGrid, state.write.chunkOrder, variableOrder);
 
   if (state.write.partitioning === 'per-chunk') {
     return assemblePerChunkFiles(state, orderedChunks, magic);
@@ -124,7 +141,7 @@ function assembleSingleFile(
   const sidecarFile: VirtualFile = {
     name: 'metadata',
     bytes: metaBytes,
-    traces: [],
+    traces: makeMetadataTraces(metaBytes.length),
   };
 
   return [...dataFile, sidecarFile];
@@ -187,7 +204,9 @@ function assemblePerChunkFiles(
   const files: VirtualFile[] = [];
 
   for (const chunk of orderedChunks) {
-    const name = `chunk_${chunk.coords.join('_')}`;
+    const name = chunk.variableName
+      ? `${chunk.variableName}_chunk_${chunk.coords.join('_')}`
+      : `chunk_${chunk.coords.join('_')}`;
     const parts: Uint8Array[] = [magic, chunk.bytes, magic];
     const totalLength = parts.reduce((acc, p) => acc + p.length, 0);
     const bytes = new Uint8Array(totalLength);
@@ -216,7 +235,7 @@ function assemblePerChunkFiles(
   }));
   const meta = collectMetadata(state, orderedChunks, chunkOffsets);
   const metaBytes = serializeMetadata(meta, state.metadata.serialization);
-  files.push({ name: 'metadata', bytes: metaBytes, traces: [] });
+  files.push({ name: 'metadata', bytes: metaBytes, traces: makeMetadataTraces(metaBytes.length) });
 
   return files;
 }

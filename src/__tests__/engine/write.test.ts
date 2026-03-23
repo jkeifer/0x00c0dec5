@@ -81,6 +81,45 @@ describe('orderChunks', () => {
     const colMajor = orderChunks(chunks, [3], 'column-major');
     expect(rowMajor.map((c) => c.coords)).toEqual(colMajor.map((c) => c.coords));
   });
+
+  it('groups by variable when variableOrder is provided', () => {
+    const chunks = [
+      { ...makeEncodedChunk([0], [1]), variableName: 'a' },
+      { ...makeEncodedChunk([0], [2]), variableName: 'b' },
+      { ...makeEncodedChunk([1], [3]), variableName: 'a' },
+      { ...makeEncodedChunk([1], [4]), variableName: 'b' },
+    ];
+    const ordered = orderChunks(chunks, [2], 'row-major', ['a', 'b']);
+    expect(ordered.map((c) => c.variableName)).toEqual(['a', 'a', 'b', 'b']);
+  });
+
+  it('preserves spatial order within variable groups', () => {
+    const chunks = [
+      { ...makeEncodedChunk([0], [1]), variableName: 'temp' },
+      { ...makeEncodedChunk([1], [2]), variableName: 'temp' },
+      { ...makeEncodedChunk([2], [3]), variableName: 'temp' },
+      { ...makeEncodedChunk([0], [4]), variableName: 'pres' },
+      { ...makeEncodedChunk([1], [5]), variableName: 'pres' },
+      { ...makeEncodedChunk([2], [6]), variableName: 'pres' },
+    ];
+    const ordered = orderChunks(chunks, [3], 'row-major', ['temp', 'pres']);
+    expect(ordered.map((c) => [c.variableName, c.coords[0]])).toEqual([
+      ['temp', 0], ['temp', 1], ['temp', 2],
+      ['pres', 0], ['pres', 1], ['pres', 2],
+    ]);
+  });
+
+  it('without variableOrder, does not group by variable', () => {
+    const chunks = [
+      { ...makeEncodedChunk([0], [1]), variableName: 'a' },
+      { ...makeEncodedChunk([0], [2]), variableName: 'b' },
+      { ...makeEncodedChunk([1], [3]), variableName: 'a' },
+      { ...makeEncodedChunk([1], [4]), variableName: 'b' },
+    ];
+    const ordered = orderChunks(chunks, [2], 'row-major');
+    // Should preserve input order
+    expect(ordered.map((c) => c.variableName)).toEqual(['a', 'b', 'a', 'b']);
+  });
 });
 
 describe('assembleFiles', () => {
@@ -146,6 +185,7 @@ describe('assembleFiles', () => {
     ];
     const state = {
       ...DEFAULT_STATE,
+      interleaving: 'row' as const,
       write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
     };
     const files = assembleFiles(state, chunks, [2]);
@@ -155,6 +195,28 @@ describe('assembleFiles', () => {
     expect(files[0].name).toBe('chunk_0');
     expect(files[1].name).toBe('chunk_1');
     expect(files[2].name).toBe('metadata');
+  });
+
+  it('per-chunk files include variable name when set', () => {
+    const chunks = [
+      { ...makeEncodedChunk([0], [0x01]), variableName: 'temperature' },
+      { ...makeEncodedChunk([1], [0x02]), variableName: 'temperature' },
+      { ...makeEncodedChunk([0], [0x03]), variableName: 'pressure' },
+      { ...makeEncodedChunk([1], [0x04]), variableName: 'pressure' },
+    ];
+    const state = {
+      ...DEFAULT_STATE,
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
+    };
+    const files = assembleFiles(state, chunks, [2]);
+
+    // 4 chunk files + 1 metadata sidecar
+    expect(files).toHaveLength(5);
+    expect(files[0].name).toBe('temperature_chunk_0');
+    expect(files[1].name).toBe('temperature_chunk_1');
+    expect(files[2].name).toBe('pressure_chunk_0');
+    expect(files[3].name).toBe('pressure_chunk_1');
+    expect(files[4].name).toBe('metadata');
   });
 
   it('trace count matches byte count', () => {
@@ -174,6 +236,36 @@ describe('assembleFiles', () => {
     };
     const files = assembleFiles(state, [chunk], [1]);
     expect(files[0].bytes.length).toBeGreaterThan(0);
+  });
+
+  it('sidecar metadata file has traces matching byte count', () => {
+    const state = {
+      ...DEFAULT_STATE,
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'sidecar' as const },
+    };
+    const files = assembleFiles(state, [chunk], [1]);
+    const sidecar = files.find((f) => f.name === 'metadata')!;
+    expect(sidecar.traces.length).toBe(sidecar.bytes.length);
+    for (const t of sidecar.traces) {
+      expect(t.traceId).toBe('metadata');
+    }
+  });
+
+  it('per-chunk sidecar metadata file has traces', () => {
+    const chunks = [
+      makeEncodedChunk([0], [0x01, 0x02]),
+      makeEncodedChunk([1], [0x03, 0x04]),
+    ];
+    const state = {
+      ...DEFAULT_STATE,
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
+    };
+    const files = assembleFiles(state, chunks, [2]);
+    const sidecar = files.find((f) => f.name === 'metadata')!;
+    expect(sidecar.traces.length).toBe(sidecar.bytes.length);
+    for (const t of sidecar.traces) {
+      expect(t.traceId).toBe('metadata');
+    }
   });
 
   it('chunk index offsets are correct', () => {

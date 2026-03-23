@@ -1,17 +1,17 @@
 :root {
   --bg: #0d1117;
   --surface: #161b22;
-  --surface-hover: #1c2129;
+  --surface-hover: #272d36;
   --surface-input: #0d1117;
   --border: #30363d;
-  --border-subtle: #21262d;
+  --border-subtle: #2d333b;
 
   --text-primary: #e6edf3;
   --text-secondary: #8b949e;
-  --text-tertiary: #484f58;
+  --text-tertiary: #6e7681;
 
   --accent: #58a6ff;
-  --accent-dim: rgba(88, 166, 255, 0.15);
+  --accent-dim: rgba(88, 166, 255, 0.25);
 
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, Consolas, monospace;

@@ -1,22 +1,26 @@
 import { colors, fontSizes, spacing } from '../../theme.ts';
 import { Radio } from '../shared/Radio.tsx';
 import type { PipelineStage } from '../../types/pipeline.ts';
+import type { VirtualFile } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
 import { HexView } from './HexView.tsx';
 import { FlatView } from './FlatView.tsx';
 import { TableView } from './TableView.tsx';
 import { GridView } from './GridView.tsx';
+import { WriteView } from './WriteView.tsx';
 
 const VALUES_VIEW_MODES = [
   { value: 'table', label: 'Table' },
   { value: 'grid', label: 'Grid' },
-  { value: 'hex', label: 'Hex' },
   { value: 'flat', label: 'Flat' },
 ];
 
 const DEFAULT_VIEW_MODES = [
   { value: 'hex', label: 'Hex' },
-  { value: 'flat', label: 'Flat' },
+];
+
+const WRITE_VIEW_MODES = [
+  { value: 'hex', label: 'Hex' },
 ];
 
 interface StagePaneProps {
@@ -29,6 +33,9 @@ interface StagePaneProps {
   accentColor: string;
   variables: Variable[];
   shape: number[];
+  files?: VirtualFile[];
+  chunkTraceMap: Map<string, Set<string>>;
+  traceChunkMap: Map<string, string>;
 }
 
 export function StagePane({
@@ -41,12 +48,16 @@ export function StagePane({
   accentColor,
   variables,
   shape,
+  files,
+  chunkTraceMap,
+  traceChunkMap,
 }: StagePaneProps) {
   // Resolve -1 to last stage
   const resolvedIndex = selectedStage < 0 ? stages.length - 1 : selectedStage;
   const stage = stages[resolvedIndex];
   const isValuesStage = resolvedIndex === 0;
-  const viewModes = isValuesStage ? VALUES_VIEW_MODES : DEFAULT_VIEW_MODES;
+  const isWriteStage = resolvedIndex === stages.length - 1;
+  const viewModes = isValuesStage ? VALUES_VIEW_MODES : isWriteStage ? WRITE_VIEW_MODES : DEFAULT_VIEW_MODES;
 
   // Auto-fallback: if current view mode isn't available for this stage, use first available
   const effectiveView = viewModes.some((m) => m.value === viewMode)
@@ -73,15 +84,18 @@ export function StagePane({
 
     switch (effectiveView) {
       case 'hex':
-        return <HexView stage={stage} paneId={paneId} />;
+        if (isWriteStage && files && files.length >= 1) {
+          return <WriteView files={files} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
+        }
+        return <HexView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
       case 'flat':
-        return <FlatView stage={stage} paneId={paneId} />;
+        return <FlatView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
       case 'table':
-        return <TableView stage={stage} variables={variables} paneId={paneId} />;
+        return <TableView stage={stage} variables={variables} shape={shape} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
       case 'grid':
-        return <GridView stage={stage} variables={variables} shape={shape} paneId={paneId} />;
+        return <GridView stage={stage} variables={variables} shape={shape} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
       default:
-        return <HexView stage={stage} paneId={paneId} />;
+        return <HexView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
     }
   }
 
@@ -125,7 +139,6 @@ export function StagePane({
               {s.name}
             </option>
           ))}
-          <option value={-1}>Write (final)</option>
         </select>
         <Radio
           options={viewModes}

@@ -89,6 +89,63 @@ export function chunkData(
   });
 }
 
+/**
+ * Produce one chunk per variable per spatial region (for column-oriented mode).
+ * Each chunk has a single-element `variables` array.
+ * Ordering: all spatial chunks for var A, then all spatial chunks for var B, etc.
+ */
+export function chunkDataPerVariable(
+  shape: number[],
+  chunkShape: number[],
+  variables: Variable[],
+  variableValues: Map<string, number[]>,
+): Chunk[] {
+  const clampedChunkShape = chunkShape.map((cs, d) => Math.min(cs, shape[d]));
+  const chunkGrid = computeChunkGrid(shape, chunkShape);
+  const chunkCoords = enumerateChunkCoords(chunkGrid);
+
+  const result: Chunk[] = [];
+
+  for (const v of variables) {
+    for (let spatialIdx = 0; spatialIdx < chunkCoords.length; spatialIdx++) {
+      const coords = chunkCoords[spatialIdx];
+      const allValues = variableValues.get(v.name);
+
+      const chunkVar: ChunkVariable = allValues
+        ? (() => {
+            const { values, sourceCoords } = extractChunkValues(
+              allValues,
+              shape,
+              clampedChunkShape,
+              coords,
+            );
+            return {
+              variableName: v.name,
+              variableColor: v.color,
+              dtype: v.dtype,
+              values,
+              sourceCoords,
+            };
+          })()
+        : {
+            variableName: v.name,
+            variableColor: v.color,
+            dtype: v.dtype,
+            values: [],
+            sourceCoords: [],
+          };
+
+      result.push({
+        coords,
+        flatIndex: spatialIdx,
+        variables: [chunkVar],
+      });
+    }
+  }
+
+  return result;
+}
+
 /** Extract values belonging to a specific chunk, returning values and their source coordinates. */
 function extractChunkValues(
   allValues: number[],
