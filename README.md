@@ -1,73 +1,39 @@
-# React + TypeScript + Vite
+# 0x00C0DEC5
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An interactive web tool for learning how data file formats are constructed.
 
-Currently, two official plugins are available:
+Every file format -- Parquet, GeoTIFF, Zarr, HDF5 -- solves the same fundamental problems: how to structure data, encode it efficiently, and provide enough metadata to read it back. This tool lets you discover those problems firsthand by building a format from scratch.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## How it works
 
-## React Compiler
+Define a dataset, then watch it transform step-by-step from human-readable values into raw bytes on disk. The transformation pipeline covers:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Chunking** -- splitting data into spatial slices
+- **Interleaving** -- row-oriented (BIP) vs. column-oriented (BSQ) byte layout
+- **Codecs** -- delta encoding, byte shuffle, bit rounding, scale/offset, RLE, LZ compression
+- **Metadata assembly** -- JSON or binary serialization of structural and user-defined metadata
+- **File assembly** -- magic numbers, metadata placement, chunk ordering, partitioning
 
-## Expanding the ESLint configuration
+A dual-pane comparison view lets you inspect any two pipeline stages side-by-side, with cross-pane hover tracing that links human-readable values to their encoded bytes.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## Use cases
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+**Live talks**: walk an audience through building a file format interactively, letting them choose options (row vs. column orientation, which codecs to apply) and see the consequences in real time.
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+**Self-guided exploration**: experiment independently with different format designs to understand why real-world formats make the choices they do.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## Development
+
+Requires Node.js.
+
+```bash
+npm install
+npm run dev       # start dev server at localhost:5173
+npm run build     # production build
+npm test          # run tests (watch mode)
+npx vitest run    # run tests (single run)
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## License
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+MIT
