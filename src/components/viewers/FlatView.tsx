@@ -109,7 +109,7 @@ export function FlatView({ stage, paneId, chunkTraceMap }: FlatViewProps) {
             (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && group.chunkId === hoveredChunkId)
             || (flatChunkTraceIds != null && flatChunkTraceIds.has(group.traceId))
           );
-          const isHovered = isValueHovered || isChunkHovered;
+          void (isValueHovered || isChunkHovered);
 
           const label = group.isChunkLevel
             ? `${group.chunkId} [${group.byteOffset}\u2013${group.byteOffset + group.byteCount - 1}]`

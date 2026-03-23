@@ -1,5 +1,11 @@
-import type { Variable } from '../types/state.ts';
 import type { Chunk, ChunkVariable } from '../types/pipeline.ts';
+
+/** Minimal variable interface needed by chunking — decoupled from state.Variable. */
+interface ChunkableVariable {
+  name: string;
+  color: string;
+  dtype: string;
+}
 
 /** Compute the chunk grid dimensions: ceil(shape[d] / chunkShape[d]) per dimension. */
 export function computeChunkGrid(shape: number[], chunkShape: number[]): number[] {
@@ -49,7 +55,7 @@ export function coordsToFlatIndex(coords: number[], shape: number[]): number {
 export function chunkData(
   shape: number[],
   chunkShape: number[],
-  variables: Variable[],
+  variables: ChunkableVariable[],
   variableValues: Map<string, number[]>,
 ): Chunk[] {
   const clampedChunkShape = chunkShape.map((cs, d) => Math.min(cs, shape[d]));
@@ -97,7 +103,7 @@ export function chunkData(
 export function chunkDataPerVariable(
   shape: number[],
   chunkShape: number[],
-  variables: Variable[],
+  variables: ChunkableVariable[],
   variableValues: Map<string, number[]>,
 ): Chunk[] {
   const clampedChunkShape = chunkShape.map((cs, d) => Math.min(cs, shape[d]));

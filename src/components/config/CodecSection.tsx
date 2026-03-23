@@ -22,7 +22,8 @@ export function CodecSection({
   onFieldPipelineChange,
   onChunkPipelineChange,
 }: CodecSectionProps) {
-  const mixedDtypes = new Set(variables.map((v) => v.dtype)).size > 1;
+  const dtypes = variables.map((v) => v.typeAssignment.storageDtype);
+  const mixedDtypes = new Set(dtypes).size > 1;
 
   if (interleaving === 'column') {
     return (
@@ -55,12 +56,12 @@ export function CodecSection({
                 {v.name || '(unnamed)'}
               </span>
               <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
-                {DTYPE_REGISTRY[v.dtype]?.label ?? v.dtype}
+                {DTYPE_REGISTRY[v.typeAssignment.storageDtype]?.label ?? v.typeAssignment.storageDtype}
               </span>
             </div>
             <CodecPipelineEditor
               steps={fieldPipelines[v.name] ?? []}
-              inputDtype={v.dtype}
+              inputDtype={v.typeAssignment.storageDtype}
               onChange={(steps) => onFieldPipelineChange(v.name, steps)}
             />
           </div>
@@ -73,7 +74,7 @@ export function CodecSection({
   const inputDtype: DtypeKey = mixedDtypes
     ? 'uint8'
     : variables.length > 0
-      ? variables[0].dtype
+      ? variables[0].typeAssignment.storageDtype
       : 'uint8';
 
   return (

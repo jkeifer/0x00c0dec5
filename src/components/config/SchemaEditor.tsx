@@ -1,6 +1,4 @@
-import type { Variable } from '../../types/state.ts';
-import type { DtypeKey } from '../../types/dtypes.ts';
-import { DTYPE_KEYS, DTYPE_REGISTRY } from '../../types/dtypes.ts';
+import type { Variable, LogicalTypeConfig, LogicalType } from '../../types/state.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 
 interface SchemaEditorProps {
@@ -9,7 +7,7 @@ interface SchemaEditorProps {
   dataModel: 'tabular' | 'array';
   onAddVariable: () => void;
   onRemoveVariable: (id: string) => void;
-  onUpdateVariable: (id: string, changes: Partial<Pick<Variable, 'name' | 'dtype'>>) => void;
+  onUpdateVariable: (id: string, changes: Partial<Pick<Variable, 'name' | 'logicalType' | 'typeAssignment'>>) => void;
   onShapeChange: (shape: number[]) => void;
 }
 
@@ -23,6 +21,12 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
   fontFamily: 'inherit',
 };
+
+const LOGICAL_TYPES: { value: LogicalType; label: string }[] = [
+  { value: 'integer', label: 'Integer' },
+  { value: 'decimal', label: 'Decimal' },
+  { value: 'continuous', label: 'Continuous' },
+];
 
 export function SchemaEditor({
   variables,
@@ -40,6 +44,11 @@ export function SchemaEditor({
     seen.add(v.name);
   }
 
+  function updateLogicalType(v: Variable, changes: Partial<LogicalTypeConfig>) {
+    const newType = { ...v.logicalType, ...changes };
+    onUpdateVariable(v.id, { logicalType: newType });
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
       {/* Shape inputs */}
@@ -54,8 +63,8 @@ export function SchemaEditor({
               min={1}
               value={shape[0]}
               onChange={(e) => {
-                const v = Math.max(1, parseInt(e.target.value) || 1);
-                onShapeChange([v]);
+                const val = Math.max(1, parseInt(e.target.value) || 1);
+                onShapeChange([val]);
               }}
               style={{ ...inputStyle, width: 60 }}
             />
@@ -74,9 +83,9 @@ export function SchemaEditor({
                   min={1}
                   value={dim}
                   onChange={(e) => {
-                    const v = Math.max(1, parseInt(e.target.value) || 1);
+                    const val = Math.max(1, parseInt(e.target.value) || 1);
                     const newShape = [...shape];
-                    newShape[d] = v;
+                    newShape[d] = val;
                     onShapeChange(newShape);
                   }}
                   style={{ ...inputStyle, width: 60 }}
@@ -142,62 +151,122 @@ export function SchemaEditor({
           Add a variable to get started
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
           {variables.map((v) => {
             const hasWarning = !v.name || duplicateNames.has(v.name);
             return (
               <div
                 key={v.id}
-                style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: spacing.xs,
+                  background: colors.surfaceInput,
+                  border: `1px solid ${colors.border}`,
+                  borderRadius: radii.sm,
+                  padding: spacing.xs,
+                }}
               >
-                <div
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    background: v.color,
-                    flexShrink: 0,
-                  }}
-                />
-                <input
-                  type="text"
-                  value={v.name}
-                  placeholder="name"
-                  onChange={(e) => onUpdateVariable(v.id, { name: e.target.value })}
-                  style={{
-                    ...inputStyle,
-                    flex: 1,
-                    minWidth: 0,
-                    borderColor: hasWarning ? colors.paneAccentRight : colors.border,
-                  }}
-                />
-                <select
-                  value={v.dtype}
-                  onChange={(e) =>
-                    onUpdateVariable(v.id, { dtype: e.target.value as DtypeKey })
-                  }
-                  style={{ ...inputStyle, cursor: 'pointer' }}
-                >
-                  {DTYPE_KEYS.map((dk) => (
-                    <option key={dk} value={dk}>
-                      {DTYPE_REGISTRY[dk].label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  onClick={() => onRemoveVariable(v.id)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: colors.textTertiary,
-                    cursor: 'pointer',
-                    fontSize: fontSizes.sm,
-                    padding: `0 ${spacing.xs}px`,
-                    lineHeight: 1,
-                  }}
-                >
-                  x
-                </button>
+                {/* Name + delete row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
+                  <div
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      background: v.color,
+                      flexShrink: 0,
+                    }}
+                  />
+                  <input
+                    type="text"
+                    value={v.name}
+                    placeholder="name"
+                    onChange={(e) => onUpdateVariable(v.id, { name: e.target.value })}
+                    style={{
+                      ...inputStyle,
+                      flex: 1,
+                      minWidth: 0,
+                      borderColor: hasWarning ? colors.paneAccentRight : colors.border,
+                    }}
+                  />
+                  <button
+                    onClick={() => onRemoveVariable(v.id)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: colors.textTertiary,
+                      cursor: 'pointer',
+                      fontSize: fontSizes.sm,
+                      padding: `0 ${spacing.xs}px`,
+                      lineHeight: 1,
+                    }}
+                  >
+                    x
+                  </button>
+                </div>
+
+                {/* Logical type + params row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>
+                  <select
+                    value={v.logicalType.type}
+                    onChange={(e) => {
+                      const newType = e.target.value as LogicalType;
+                      const base: LogicalTypeConfig = { type: newType, min: v.logicalType.min, max: v.logicalType.max };
+                      if (newType === 'decimal') base.decimalPlaces = 1;
+                      if (newType === 'continuous') base.significantFigures = 6;
+                      onUpdateVariable(v.id, { logicalType: base });
+                    }}
+                    style={{ ...inputStyle, cursor: 'pointer', fontSize: fontSizes.xs }}
+                  >
+                    {LOGICAL_TYPES.map((lt) => (
+                      <option key={lt.value} value={lt.value}>{lt.label}</option>
+                    ))}
+                  </select>
+
+                  <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>min</span>
+                  <input
+                    type="number"
+                    value={v.logicalType.min}
+                    onChange={(e) => updateLogicalType(v, { min: parseFloat(e.target.value) || 0 })}
+                    style={{ ...inputStyle, width: 55, fontSize: fontSizes.xs }}
+                  />
+                  <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>max</span>
+                  <input
+                    type="number"
+                    value={v.logicalType.max}
+                    onChange={(e) => updateLogicalType(v, { max: parseFloat(e.target.value) || 0 })}
+                    style={{ ...inputStyle, width: 55, fontSize: fontSizes.xs }}
+                  />
+
+                  {v.logicalType.type === 'decimal' && (
+                    <>
+                      <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>places</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        value={v.logicalType.decimalPlaces ?? 1}
+                        onChange={(e) => updateLogicalType(v, { decimalPlaces: Math.max(0, parseInt(e.target.value) || 0) })}
+                        style={{ ...inputStyle, width: 40, fontSize: fontSizes.xs }}
+                      />
+                    </>
+                  )}
+
+                  {v.logicalType.type === 'continuous' && (
+                    <>
+                      <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>sig figs</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={15}
+                        value={v.logicalType.significantFigures ?? 6}
+                        onChange={(e) => updateLogicalType(v, { significantFigures: Math.max(1, parseInt(e.target.value) || 6) })}
+                        style={{ ...inputStyle, width: 40, fontSize: fontSizes.xs }}
+                      />
+                    </>
+                  )}
+                </div>
               </div>
             );
           })}

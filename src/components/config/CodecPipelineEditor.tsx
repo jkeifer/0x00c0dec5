@@ -37,19 +37,16 @@ function computeRunningDtype(steps: CodecStep[], inputDtype: DtypeKey, upTo: num
     const step = steps[i];
     const codec = CODEC_REGISTRY[step.codec];
     if (!codec) continue;
-    if (step.codec === 'scale-offset' && step.params.outputDtype) {
-      dtype = step.params.outputDtype as DtypeKey;
-    } else if (codec.category === 'entropy') {
+    if (codec.category === 'entropy') {
       dtype = 'uint8';
     }
-    // Others preserve dtype
+    // Reordering codecs preserve dtype
   }
   return dtype;
 }
 
 const codecEntries = Object.values(CODEC_REGISTRY);
 const categories: Array<{ label: string; key: string }> = [
-  { label: 'Mapping', key: 'mapping' },
   { label: 'Reordering', key: 'reordering' },
   { label: 'Entropy', key: 'entropy' },
 ];

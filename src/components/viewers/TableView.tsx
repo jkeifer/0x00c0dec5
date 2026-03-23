@@ -2,8 +2,9 @@ import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
+import type { DtypeKey } from '../../types/dtypes.ts';
 import { getDtype } from '../../types/dtypes.ts';
-import { bytesToValues, formatValue } from '../../engine/elements.ts';
+import { bytesToValues, formatValue, formatLogicalValue } from '../../engine/elements.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
@@ -16,6 +17,9 @@ interface TableViewProps {
   paneId: 'left' | 'right';
   chunkTraceMap?: Map<string, Set<string>>;
   traceChunkMap?: Map<string, string>;
+  diffValues?: Map<string, number[]>;
+  showDiff?: boolean;
+  isLogicalValues?: boolean; // true for Values/Read stage (float64 logical values)
 }
 
 const ROW_HEIGHT = 24;
@@ -24,28 +28,32 @@ const HEADER_HEIGHT = 28;
 interface ColumnData {
   variable: Variable;
   values: number[];
+  dtype: DtypeKey;
 }
 
-export function TableView({ stage, variables, shape, paneId, chunkTraceMap, traceChunkMap }: TableViewProps) {
+export function TableView({ stage, variables, shape, paneId, chunkTraceMap, traceChunkMap, diffValues, showDiff, isLogicalValues }: TableViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
 
-  // Reconstruct column values from the Values stage bytes
+  // Reconstruct column values from the stage bytes
   // Layout: all bytes for var0, then var1, etc. (column-oriented)
   const columns = useMemo((): ColumnData[] => {
     let offset = 0;
     return variables.map((v) => {
-      const dtypeInfo = getDtype(v.dtype);
+      // For Values/Read stages (isLogicalValues), data is float64
+      // For Typed stage, data is in storageDtype
+      const dtype: DtypeKey = isLogicalValues ? 'float64' : v.typeAssignment.storageDtype;
+      const dtypeInfo = getDtype(dtype);
       const totalElements = stage.bytes.length > 0
-        ? computeVarElementCount(stage, variables, v)
+        ? computeVarElementCount(stage, variables, isLogicalValues)
         : 0;
       const byteLen = totalElements * dtypeInfo.size;
       const varBytes = stage.bytes.slice(offset, offset + byteLen);
-      const values = bytesToValues(varBytes, v.dtype);
+      const values = bytesToValues(varBytes, dtype);
       offset += byteLen;
-      return { variable: v, values };
+      return { variable: v, values, dtype };
     });
-  }, [stage, variables]);
+  }, [stage, variables, isLogicalValues]);
 
   const rowCount = columns.length > 0 ? columns[0].values.length : 0;
 
@@ -105,7 +113,6 @@ export function TableView({ stage, variables, shape, paneId, chunkTraceMap, trac
   const containerWidth = useContainerWidth(parentRef);
   const availableWidth = (containerWidth > 0 ? containerWidth : 600) - 50; // subtract row index column
   const colWidth = Math.max(100, Math.floor(availableWidth / Math.max(columns.length, 1)));
-  const totalWidth = 50 + colWidth * columns.length;
   const minTableWidth = columns.length > 0 ? 50 + 100 * columns.length : undefined;
 
   return (
@@ -211,16 +218,36 @@ export function TableView({ stage, variables, shape, paneId, chunkTraceMap, trac
                 const val = rowIdx < col.values.length ? col.values[rowIdx] : undefined;
                 const chunkId = traceChunkMap?.get(traceId) ?? null;
 
+                // Diff detection
+                const origVals = showDiff && diffValues ? diffValues.get(col.variable.name) : undefined;
+                const origVal = origVals && rowIdx < origVals.length ? origVals[rowIdx] : undefined;
+                const hasDiff = showDiff && val !== undefined && origVal !== undefined && val !== origVal;
+                const diffDelta = hasDiff ? val - origVal! : 0;
+                const diffBg = hasDiff ? colors.warningDim : undefined;
+                const diffTitle = hasDiff
+                  ? `Original: ${formatLogicalValue(origVal!)} → Reconstructed: ${formatLogicalValue(val)} (Δ = ${diffDelta >= 0 ? '+' : ''}${diffDelta.toPrecision(4)})`
+                  : undefined;
+
+                // Format value based on whether this is logical or typed stage
+                const displayValue = val !== undefined
+                  ? (isLogicalValues ? formatLogicalValue(val) : formatValue(val, col.dtype))
+                  : '';
+
                 return (
                   <div
                     key={col.variable.id}
                     onMouseEnter={() => setHover(traceId, chunkId, paneId)}
+                    title={diffTitle}
                     style={{
                       width: colWidth,
                       flexShrink: 0,
                       padding: `0 ${spacing.xs}px`,
                       color: colors.textPrimary,
-                      backgroundColor: isValueHovered ? 'rgba(255,255,255,0.16)' : isChunkHovered ? 'rgba(255,255,255,0.07)' : undefined,
+                      backgroundColor: isValueHovered
+                        ? 'rgba(255,255,255,0.16)'
+                        : isChunkHovered
+                          ? 'rgba(255,255,255,0.07)'
+                          : diffBg,
                       cursor: 'default',
                       transition: 'background-color 0.1s ease',
                       overflow: 'hidden',
@@ -228,7 +255,7 @@ export function TableView({ stage, variables, shape, paneId, chunkTraceMap, trac
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {val !== undefined ? formatValue(val, col.variable.dtype) : ''}
+                    {displayValue}
                   </div>
                 );
               })}
@@ -240,20 +267,16 @@ export function TableView({ stage, variables, shape, paneId, chunkTraceMap, trac
   );
 }
 
-/** Compute element count for a variable in the Values stage. */
+/** Compute element count for a variable in a given stage. */
 function computeVarElementCount(
   stage: PipelineStage,
   variables: Variable[],
-  targetVar: Variable,
+  isLogicalValues?: boolean,
 ): number {
-  // Total bytes / total bytes-per-element across all variables = elements per variable
-  // But variables can have different dtypes, so we compute from total byte budget
   let totalBytesPerElement = 0;
   for (const v of variables) {
-    totalBytesPerElement += getDtype(v.dtype).size;
+    const dtype: DtypeKey = isLogicalValues ? 'float64' : v.typeAssignment.storageDtype;
+    totalBytesPerElement += getDtype(dtype).size;
   }
-  const totalElements = Math.floor(stage.bytes.length / totalBytesPerElement);
-  // Verify: for this specific variable
-  void targetVar; // all variables have the same element count in the Values stage
-  return totalElements;
+  return totalBytesPerElement > 0 ? Math.floor(stage.bytes.length / totalBytesPerElement) : 0;
 }

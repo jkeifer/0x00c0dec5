@@ -1,6 +1,6 @@
 import { colors, fontSizes, spacing } from '../../theme.ts';
 import { Radio } from '../shared/Radio.tsx';
-import type { PipelineStage } from '../../types/pipeline.ts';
+import type { PipelineStage, ReadFileResult } from '../../types/pipeline.ts';
 import type { VirtualFile } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
 import { HexView } from './HexView.tsx';
@@ -10,6 +10,19 @@ import { GridView } from './GridView.tsx';
 import { WriteView } from './WriteView.tsx';
 
 const VALUES_VIEW_MODES = [
+  { value: 'table', label: 'Table' },
+  { value: 'grid', label: 'Grid' },
+  { value: 'flat', label: 'Flat' },
+];
+
+const TYPED_VIEW_MODES = [
+  { value: 'table', label: 'Table' },
+  { value: 'grid', label: 'Grid' },
+  { value: 'flat', label: 'Flat' },
+  { value: 'hex', label: 'Hex' },
+];
+
+const READ_VIEW_MODES = [
   { value: 'table', label: 'Table' },
   { value: 'grid', label: 'Grid' },
   { value: 'flat', label: 'Flat' },
@@ -36,6 +49,9 @@ interface StagePaneProps {
   files?: VirtualFile[];
   chunkTraceMap: Map<string, Set<string>>;
   traceChunkMap: Map<string, string>;
+  readResult: ReadFileResult;
+  showDiff: boolean;
+  originalValues?: Map<string, number[]>;
 }
 
 export function StagePane({
@@ -51,18 +67,36 @@ export function StagePane({
   files,
   chunkTraceMap,
   traceChunkMap,
+  readResult,
+  showDiff,
+  originalValues,
 }: StagePaneProps) {
   // Resolve -1 to last stage
   const resolvedIndex = selectedStage < 0 ? stages.length - 1 : selectedStage;
   const stage = stages[resolvedIndex];
   const isValuesStage = resolvedIndex === 0;
-  const isWriteStage = resolvedIndex === stages.length - 1;
-  const viewModes = isValuesStage ? VALUES_VIEW_MODES : isWriteStage ? WRITE_VIEW_MODES : DEFAULT_VIEW_MODES;
+  const isTypedStage = resolvedIndex === 1;
+  const isReadStage = stage?.name === 'Read';
+  const isWriteStage = stage?.name === 'Write';
+  const viewModes = isValuesStage
+    ? VALUES_VIEW_MODES
+    : isTypedStage
+      ? TYPED_VIEW_MODES
+      : isReadStage
+        ? READ_VIEW_MODES
+        : isWriteStage
+          ? WRITE_VIEW_MODES
+          : DEFAULT_VIEW_MODES;
 
   // Auto-fallback: if current view mode isn't available for this stage, use first available
   const effectiveView = viewModes.some((m) => m.value === viewMode)
     ? viewMode
     : viewModes[0].value;
+
+  // Compute diff values when viewing Read stage with diff enabled
+  const diffValues = (isReadStage && showDiff && readResult.success && originalValues)
+    ? originalValues
+    : undefined;
 
   function renderViewer() {
     if (!stage) {
@@ -82,6 +116,31 @@ export function StagePane({
       );
     }
 
+    // Read stage: show failure message or route to value viewers
+    if (isReadStage && !readResult.success) {
+      return (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: spacing.xl,
+            textAlign: 'center',
+          }}
+        >
+          <div style={{ maxWidth: 400 }}>
+            <div style={{ color: '#e06c75', fontSize: fontSizes.lg, fontWeight: 700, marginBottom: spacing.sm }}>
+              Cannot read file
+            </div>
+            <div style={{ color: colors.textSecondary, fontSize: fontSizes.sm, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+              {readResult.errorMessage}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     switch (effectiveView) {
       case 'hex':
         if (isWriteStage && files && files.length >= 1) {
@@ -91,9 +150,9 @@ export function StagePane({
       case 'flat':
         return <FlatView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
       case 'table':
-        return <TableView stage={stage} variables={variables} shape={shape} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
+        return <TableView stage={stage} variables={variables} shape={shape} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} diffValues={diffValues} showDiff={!!diffValues} isLogicalValues={isValuesStage || isReadStage} />;
       case 'grid':
-        return <GridView stage={stage} variables={variables} shape={shape} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
+        return <GridView stage={stage} variables={variables} shape={shape} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} diffValues={diffValues} showDiff={!!diffValues} isLogicalValues={isValuesStage || isReadStage} />;
       default:
         return <HexView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
     }

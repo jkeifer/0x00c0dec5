@@ -2,14 +2,16 @@ import { useAppState } from '../../state/useAppState.ts';
 import { SchemaEditor } from '../config/SchemaEditor.tsx';
 import { ChunkConfig } from '../config/ChunkConfig.tsx';
 import { InterleaveConfig } from '../config/InterleaveConfig.tsx';
+import { TypeAssignConfig } from '../config/TypeAssignConfig.tsx';
 import { CodecSection } from '../config/CodecSection.tsx';
 import { MetadataEditor } from '../config/MetadataEditor.tsx';
 import { WriteConfig } from '../config/WriteConfig.tsx';
+import { ReadStatus } from '../config/ReadStatus.tsx';
 import { FileExplorer } from '../files/FileExplorer.tsx';
 import { colors, fontSizes, spacing } from '../../theme.ts';
-import type { VirtualFile } from '../../types/pipeline.ts';
+import type { VirtualFile, ReadFileResult, VariableStats } from '../../types/pipeline.ts';
 
-const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Codecs', 'Metadata', 'Write'] as const;
+const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Type Assignment', 'Codecs', 'Metadata', 'Write', 'Read'] as const;
 
 const sectionLabelStyle: React.CSSProperties = {
   fontSize: fontSizes.sm,
@@ -28,9 +30,11 @@ const dividerStyle: React.CSSProperties = {
 
 interface SidebarProps {
   files: VirtualFile[];
+  readResult: ReadFileResult;
+  variableStats: Map<string, VariableStats>;
 }
 
-export function Sidebar({ files }: SidebarProps) {
+export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
   const { state, dispatch } = useAppState();
 
   function renderSection(section: (typeof SECTIONS)[number]) {
@@ -49,7 +53,8 @@ export function Sidebar({ files }: SidebarProps) {
                 variable: {
                   id: `var_${Date.now()}`,
                   name: '',
-                  dtype: 'float32',
+                  logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+                  typeAssignment: { storageDtype: 'float32' },
                   color,
                 },
               });
@@ -78,6 +83,16 @@ export function Sidebar({ files }: SidebarProps) {
             dataModel={state.dataModel}
             onChange={(interleaving) =>
               dispatch({ type: 'SET_INTERLEAVING', interleaving })
+            }
+          />
+        );
+      case 'Type Assignment':
+        return (
+          <TypeAssignConfig
+            variables={state.variables}
+            variableStats={variableStats}
+            onUpdateVariable={(id, changes) =>
+              dispatch({ type: 'UPDATE_VARIABLE', id, changes })
             }
           />
         );
@@ -130,14 +145,25 @@ export function Sidebar({ files }: SidebarProps) {
               onChunkOrderChange={(chunkOrder) =>
                 dispatch({ type: 'SET_WRITE_CHUNK_ORDER', chunkOrder })
               }
+              onIncludeMetadataChange={(includeMetadata) =>
+                dispatch({ type: 'SET_WRITE_INCLUDE_METADATA', includeMetadata })
+              }
             />
             <FileExplorer files={files} />
           </>
         );
-      default: {
-        const _exhaustive: never = section;
+      case 'Read':
+        return (
+          <ReadStatus
+            readResult={readResult}
+            showDiff={state.ui.showDiff}
+            onShowDiffChange={(showDiff) =>
+              dispatch({ type: 'SET_SHOW_DIFF', showDiff })
+            }
+          />
+        );
+      default:
         return null;
-      }
     }
   }
 

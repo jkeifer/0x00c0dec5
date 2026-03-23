@@ -11,13 +11,21 @@ export interface ParamDef {
 export interface CodecDefinition {
   key: string;
   label: string;
-  category: 'mapping' | 'reordering' | 'entropy';
+  category: 'reordering' | 'entropy';
   description: string;
   params: Record<string, ParamDef>;
   applicableTo: (dtype: string) => boolean;
   encode: (
     bytes: Uint8Array,
     inputDtype: string,
+    params: Record<string, number | string>,
+  ) => {
+    bytes: Uint8Array;
+    outputDtype: string;
+  };
+  decode: (
+    bytes: Uint8Array,
+    encodedDtype: string,
     params: Record<string, number | string>,
   ) => {
     bytes: Uint8Array;

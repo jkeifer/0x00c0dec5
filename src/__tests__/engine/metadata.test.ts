@@ -5,6 +5,8 @@ import {
   serializeMetadataBinary,
   serializeMetadata,
   deserializeMetadataBinary,
+  deserializeMetadataJSON,
+  deserializeMetadata,
 } from '../../engine/metadata.ts';
 import type { MetadataEntry } from '../../engine/metadata.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
@@ -106,9 +108,48 @@ describe('serializeMetadata', () => {
   });
 });
 
+describe('deserializeMetadataJSON', () => {
+  it('roundtrips JSON entries', () => {
+    const entries: MetadataEntry[] = [
+      { key: 'shape', value: '[32]' },
+      { key: 'order', value: 'little' },
+    ];
+    const bytes = serializeMetadataJSON(entries);
+    const result = deserializeMetadataJSON(bytes);
+    expect(result).toEqual(entries);
+  });
+
+  it('handles empty entries', () => {
+    const bytes = serializeMetadataJSON([]);
+    const result = deserializeMetadataJSON(bytes);
+    expect(result).toEqual([]);
+  });
+});
+
+describe('deserializeMetadata (auto-detect)', () => {
+  it('detects JSON format (starts with {)', () => {
+    const entries: MetadataEntry[] = [{ key: 'x', value: 'y' }];
+    const bytes = serializeMetadataJSON(entries);
+    const result = deserializeMetadata(bytes);
+    expect(result).toEqual(entries);
+  });
+
+  it('detects binary format (starts with uint32 count)', () => {
+    const entries: MetadataEntry[] = [{ key: 'x', value: 'y' }];
+    const bytes = serializeMetadataBinary(entries);
+    const result = deserializeMetadata(bytes);
+    expect(result).toEqual(entries);
+  });
+
+  it('handles empty bytes', () => {
+    const result = deserializeMetadata(new Uint8Array(0));
+    expect(result).toEqual([]);
+  });
+});
+
 describe('collectMetadata', () => {
   it('includes all auto-collected keys', () => {
-    const entries = collectMetadata(DEFAULT_STATE, []);
+    const entries = collectMetadata(DEFAULT_STATE, [], undefined);
     const keys = entries.map((e) => e.key);
     expect(keys).toContain('schema');
     expect(keys).toContain('shape');
@@ -116,6 +157,8 @@ describe('collectMetadata', () => {
     expect(keys).toContain('chunk_grid');
     expect(keys).toContain('codec_pipelines');
     expect(keys).toContain('byte_order');
+    expect(keys).toContain('interleaving');
+    expect(keys).toContain('metadata_format');
   });
 
   it('includes custom entries', () => {
@@ -129,7 +172,7 @@ describe('collectMetadata', () => {
         ],
       },
     };
-    const entries = collectMetadata(state, []);
+    const entries = collectMetadata(state, [], undefined);
     const keys = entries.map((e) => e.key);
     expect(keys).toContain('crs');
     expect(keys).toContain('transform');
@@ -137,13 +180,13 @@ describe('collectMetadata', () => {
 
   it('includes chunk index when provided', () => {
     const offsets = [{ coords: [0], offset: 4, size: 128 }];
-    const entries = collectMetadata(DEFAULT_STATE, [], offsets);
+    const entries = collectMetadata(DEFAULT_STATE, [], undefined, offsets);
     const keys = entries.map((e) => e.key);
     expect(keys).toContain('chunk_index');
   });
 
   it('sets byte_order to little', () => {
-    const entries = collectMetadata(DEFAULT_STATE, []);
+    const entries = collectMetadata(DEFAULT_STATE, [], undefined);
     const byteOrder = entries.find((e) => e.key === 'byte_order');
     expect(byteOrder?.value).toBe('little');
   });
@@ -159,7 +202,7 @@ describe('collectMetadata', () => {
         ],
       },
     };
-    const entries = collectMetadata(state, []);
+    const entries = collectMetadata(state, [], undefined);
     const keys = entries.map((e) => e.key);
     expect(keys).not.toContain('');
     expect(keys).toContain('valid');

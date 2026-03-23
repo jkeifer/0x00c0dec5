@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
+import type { DtypeKey } from '../../types/dtypes.ts';
 import { getDtype } from '../../types/dtypes.ts';
 import { bytesToValues } from '../../engine/elements.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
@@ -14,6 +15,9 @@ interface GridViewProps {
   paneId: 'left' | 'right';
   chunkTraceMap?: Map<string, Set<string>>;
   traceChunkMap?: Map<string, string>;
+  diffValues?: Map<string, number[]>;
+  showDiff?: boolean;
+  isLogicalValues?: boolean; // true for Values/Read stage (float64 logical values)
 }
 
 const CELL_SIZE = 20;
@@ -21,6 +25,24 @@ const MAX_CELLS = 10000;
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
+}
+
+function diffToColor(diff: number, maxAbsDiff: number): string {
+  if (maxAbsDiff === 0) return 'rgb(40,40,40)';
+  const t = Math.max(-1, Math.min(1, diff / maxAbsDiff));
+  // Diverging: negative = blue, zero = neutral gray, positive = red
+  if (t >= 0) {
+    const r = Math.round(lerp(40, 224, t));
+    const g = Math.round(lerp(40, 108, t));
+    const b = Math.round(lerp(40, 117, t));
+    return `rgb(${r},${g},${b})`;
+  } else {
+    const at = -t;
+    const r = Math.round(lerp(40, 97, at));
+    const g = Math.round(lerp(40, 175, at));
+    const b = Math.round(lerp(40, 239, at));
+    return `rgb(${r},${g},${b})`;
+  }
 }
 
 function valueToColor(value: number, min: number, max: number, baseColor: string): string {
@@ -36,7 +58,7 @@ function valueToColor(value: number, min: number, max: number, baseColor: string
   return `rgb(${outR},${outG},${outB})`;
 }
 
-export function GridView({ stage, variables, shape, paneId, chunkTraceMap, traceChunkMap }: GridViewProps) {
+export function GridView({ stage, variables, shape, paneId, chunkTraceMap, traceChunkMap, diffValues, showDiff, isLogicalValues }: GridViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const [selectedVarIdx, setSelectedVarIdx] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -50,19 +72,24 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
     );
   }
 
+  // Compute diff data for the selected variable
+  const origVarVals = showDiff && diffValues ? diffValues.get(selectedVar.name) : undefined;
+
   // Reconstruct values for selected variable
   const { values, min, max } = useMemo(() => {
     let offset = 0;
     for (let i = 0; i < selectedVarIdx && i < variables.length; i++) {
-      const info = getDtype(variables[i].dtype);
-      const totalElements = computeTotalElements(stage, variables);
+      const dtype: DtypeKey = isLogicalValues ? 'float64' : variables[i].typeAssignment.storageDtype;
+      const info = getDtype(dtype);
+      const totalElements = computeTotalElements(stage, variables, isLogicalValues);
       offset += totalElements * info.size;
     }
-    const info = getDtype(selectedVar.dtype);
-    const totalElements = computeTotalElements(stage, variables);
+    const dtype: DtypeKey = isLogicalValues ? 'float64' : selectedVar.typeAssignment.storageDtype;
+    const info = getDtype(dtype);
+    const totalElements = computeTotalElements(stage, variables, isLogicalValues);
     const byteLen = totalElements * info.size;
     const varBytes = stage.bytes.slice(offset, offset + byteLen);
-    const vals = bytesToValues(varBytes, selectedVar.dtype);
+    const vals = bytesToValues(varBytes, dtype);
 
     let mn = Infinity;
     let mx = -Infinity;
@@ -72,7 +99,7 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
     }
 
     return { values: vals, min: mn, max: mx };
-  }, [stage, variables, selectedVarIdx, selectedVar]);
+  }, [stage, variables, selectedVarIdx, selectedVar, isLogicalValues]);
 
   // Determine grid dimensions from shape
   const rows = shape.length >= 2 ? shape[0] : 1;
@@ -180,15 +207,28 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
             const isValueHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
             const gridChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
             const isChunkHovered = !isValueHovered && gridChunkTraceIds != null && gridChunkTraceIds.has(traceId);
-            const cellColor = valueToColor(val, min, max, selectedVar.color);
             const chunkId = traceChunkMap?.get(traceId) ?? null;
+
+            // Diff mode
+            const origVal = origVarVals && i < origVarVals.length ? origVarVals[i] : undefined;
+            const diffActive = showDiff && origVal !== undefined;
+            const diff = diffActive ? val - origVal : 0;
+            const maxAbsDiff = diffActive
+              ? origVarVals!.reduce((mx, ov, j) => Math.max(mx, Math.abs(values[j] - ov)), 0)
+              : 0;
+            const cellColor = diffActive
+              ? diffToColor(diff, maxAbsDiff)
+              : valueToColor(val, min, max, selectedVar.color);
+            const cellTitle = diffActive
+              ? `Original: ${origVal}, Reconstructed: ${val}, Δ = ${(diff >= 0 ? '+' : '') + diff.toPrecision(4)}`
+              : `${selectedVar.name}[${is1D ? i : `${row},${col}`}] = ${val}`;
 
             return (
               <div
                 key={i}
                 data-cell-idx={i}
                 onMouseEnter={() => setHover(traceId, chunkId, paneId)}
-                title={`${selectedVar.name}[${is1D ? i : `${row},${col}`}] = ${val}`}
+                title={cellTitle}
                 style={{
                   width: CELL_SIZE,
                   height: CELL_SIZE,
@@ -207,10 +247,11 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
   );
 }
 
-function computeTotalElements(stage: PipelineStage, variables: Variable[]): number {
+function computeTotalElements(stage: PipelineStage, variables: Variable[], isLogicalValues?: boolean): number {
   let totalBytesPerElement = 0;
   for (const v of variables) {
-    totalBytesPerElement += getDtype(v.dtype).size;
+    const dtype: DtypeKey = isLogicalValues ? 'float64' : v.typeAssignment.storageDtype;
+    totalBytesPerElement += getDtype(dtype).size;
   }
   if (totalBytesPerElement === 0) return 0;
   return Math.floor(stage.bytes.length / totalBytesPerElement);

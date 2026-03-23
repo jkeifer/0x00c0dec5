@@ -11,7 +11,8 @@ function makeVariable(overrides: Partial<Variable> = {}): Variable {
   return {
     id: 'v1',
     name: 'temp',
-    dtype: 'float32',
+    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+    typeAssignment: { storageDtype: 'float32' },
     color: '#e06c75',
     ...overrides,
   };
@@ -108,15 +109,27 @@ describe('REMOVE_VARIABLE', () => {
 // ─── UPDATE_VARIABLE ───────────────────────────────────────────────
 
 describe('UPDATE_VARIABLE', () => {
-  it('updates dtype only', () => {
-    const v = makeVariable({ id: 'v1', name: 'temp', dtype: 'float32' });
+  it('updates typeAssignment only', () => {
+    const v = makeVariable({ id: 'v1', name: 'temp' });
     const state = makeState({ variables: [v], fieldPipelines: { temp: [] } });
     const result = reducer(state, {
       type: 'UPDATE_VARIABLE',
       id: 'v1',
-      changes: { dtype: 'int16' },
+      changes: { typeAssignment: { storageDtype: 'int16' } },
     });
-    expect(result.variables[0].dtype).toBe('int16');
+    expect(result.variables[0].typeAssignment.storageDtype).toBe('int16');
+    expect(result.variables[0].name).toBe('temp');
+  });
+
+  it('updates logicalType only', () => {
+    const v = makeVariable({ id: 'v1', name: 'temp' });
+    const state = makeState({ variables: [v], fieldPipelines: { temp: [] } });
+    const result = reducer(state, {
+      type: 'UPDATE_VARIABLE',
+      id: 'v1',
+      changes: { logicalType: { type: 'integer', min: 0, max: 100 } },
+    });
+    expect(result.variables[0].logicalType.type).toBe('integer');
     expect(result.variables[0].name).toBe('temp');
   });
 
@@ -180,7 +193,7 @@ describe('SET_FIELD_PIPELINE', () => {
   it('sets pipeline for a variable', () => {
     const state = makeState({ fieldPipelines: { temp: [] } });
     const steps: CodecStep[] = [
-      { codec: 'scale-offset', params: { scale: 10, offset: 0, outputDtype: 'int16' } },
+      { codec: 'delta', params: { order: 1 } },
     ];
     const result = reducer(state, {
       type: 'SET_FIELD_PIPELINE',
@@ -342,5 +355,41 @@ describe('SET_WRITE_CHUNK_ORDER', () => {
     const state = makeState();
     const result = reducer(state, { type: 'SET_WRITE_CHUNK_ORDER', chunkOrder: 'column-major' });
     expect(result.write.chunkOrder).toBe('column-major');
+  });
+});
+
+// ─── SET_WRITE_INCLUDE_METADATA ───────────────────────────────────
+
+describe('SET_WRITE_INCLUDE_METADATA', () => {
+  it('sets includeMetadata to true', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'SET_WRITE_INCLUDE_METADATA', includeMetadata: true });
+    expect(result.write.includeMetadata).toBe(true);
+  });
+
+  it('sets includeMetadata to false', () => {
+    const state = makeState({
+      write: { ...DEFAULT_STATE.write, includeMetadata: true },
+    });
+    const result = reducer(state, { type: 'SET_WRITE_INCLUDE_METADATA', includeMetadata: false });
+    expect(result.write.includeMetadata).toBe(false);
+  });
+});
+
+// ─── SET_SHOW_DIFF ─────────────────────────────────────────────────
+
+describe('SET_SHOW_DIFF', () => {
+  it('sets showDiff to true', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'SET_SHOW_DIFF', showDiff: true });
+    expect(result.ui.showDiff).toBe(true);
+  });
+
+  it('sets showDiff to false', () => {
+    const state = makeState({
+      ui: { ...DEFAULT_STATE.ui, showDiff: true },
+    });
+    const result = reducer(state, { type: 'SET_SHOW_DIFF', showDiff: false });
+    expect(result.ui.showDiff).toBe(false);
   });
 });

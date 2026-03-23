@@ -1,28 +1,34 @@
 import { describe, it, expect } from 'vitest';
 import { computePipelineStages } from '../../hooks/usePipeline.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
-import type { AppState } from '../../types/state.ts';
+import type { AppState, Variable } from '../../types/state.ts';
 
 function stateWith(overrides: Partial<AppState>): AppState {
   return { ...DEFAULT_STATE, ...overrides };
 }
 
 describe('computePipelineStages', () => {
-  it('produces 5 stages with correct names', () => {
+  it('produces 7 stages with correct names', () => {
     const { stages } = computePipelineStages(DEFAULT_STATE);
-    expect(stages).toHaveLength(5);
+    expect(stages).toHaveLength(7);
     expect(stages.map((s) => s.name)).toEqual([
       'Values',
+      'Typed',
       'Linearized',
       'Encoded',
       'Metadata',
       'Write',
+      'Read',
     ]);
   });
 
-  it('has non-zero byte counts for all stages', () => {
+  it('has non-zero byte counts for all stages except Read (when no metadata)', () => {
     const { stages } = computePipelineStages(DEFAULT_STATE);
     for (const stage of stages) {
+      if (stage.name === 'Read') {
+        // Read stage has 0 bytes when metadata is not included (default)
+        continue;
+      }
       expect(stage.stats.byteCount).toBeGreaterThan(0);
     }
   });
@@ -30,15 +36,23 @@ describe('computePipelineStages', () => {
   it('has traces.length === bytes.length for each stage', () => {
     const { stages } = computePipelineStages(DEFAULT_STATE);
     for (const stage of stages) {
+      // Read stage when failed has 0 bytes and 0 traces — still consistent
       expect(stage.traces.length).toBe(stage.bytes.length);
     }
   });
 
-  it('Values stage byte count matches expected from variables', () => {
+  it('Values stage uses float64 bytes (logical values)', () => {
     const { stages } = computePipelineStages(DEFAULT_STATE);
     const valuesStage = stages[0];
+    // DEFAULT_STATE: 32 elements, 3 variables, all stored as float64 = 32 * 3 * 8 = 768
+    expect(valuesStage.stats.byteCount).toBe(768);
+  });
+
+  it('Typed stage byte count matches variable storage dtypes', () => {
+    const { stages } = computePipelineStages(DEFAULT_STATE);
+    const typedStage = stages[1];
     // DEFAULT_STATE: 32 elements, 2 float32 (4B) + 1 uint16 (2B) = 32*(4+4+2) = 320
-    expect(valuesStage.stats.byteCount).toBe(320);
+    expect(typedStage.stats.byteCount).toBe(320);
   });
 
   it('computes entropy values in valid range', () => {
@@ -65,6 +79,18 @@ describe('computePipelineStages', () => {
     expect(files[0].name).toBeTruthy();
     expect(files[0].bytes.length).toBeGreaterThan(0);
   });
+
+  it('returns variableStats for each variable', () => {
+    const { variableStats } = computePipelineStages(DEFAULT_STATE);
+    expect(variableStats.size).toBe(3);
+    expect(variableStats.has('temperature')).toBe(true);
+    expect(variableStats.has('pressure')).toBe(true);
+    expect(variableStats.has('humidity')).toBe(true);
+
+    const tempStats = variableStats.get('temperature')!;
+    expect(tempStats.count).toBe(32);
+    expect(tempStats.min).toBeLessThanOrEqual(tempStats.max);
+  });
 });
 
 describe('Values stage traceId alignment with Linearized stage', () => {
@@ -72,7 +98,7 @@ describe('Values stage traceId alignment with Linearized stage', () => {
     const state = stateWith({ shape: [8], chunkShape: [8] });
     const { stages } = computePipelineStages(state);
     const valuesTraceIds = new Set(stages[0].traces.map((t) => t.traceId));
-    const linearizedTraceIds = new Set(stages[1].traces.map((t) => t.traceId));
+    const linearizedTraceIds = new Set(stages[2].traces.map((t) => t.traceId)); // index 2 = Linearized
 
     // Every linearized value traceId should exist in the values stage
     for (const id of linearizedTraceIds) {
@@ -87,13 +113,17 @@ describe('Values stage traceId alignment with Linearized stage', () => {
       shape: [4, 4],
       chunkShape: [4, 4],
       variables: [
-        { id: 'temp', name: 'temperature', dtype: 'float32', color: '#e06c75' },
+        {
+          id: 'temp', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          typeAssignment: { storageDtype: 'float32' },
+        },
       ],
       fieldPipelines: { temperature: [] },
     });
     const { stages } = computePipelineStages(state);
     const valuesTraceIds = new Set(stages[0].traces.map((t) => t.traceId));
-    const linearizedTraceIds = new Set(stages[1].traces.map((t) => t.traceId));
+    const linearizedTraceIds = new Set(stages[2].traces.map((t) => t.traceId));
 
     // Every linearized value traceId should exist in the values stage
     for (const id of linearizedTraceIds) {
@@ -112,7 +142,11 @@ describe('Values stage traceId alignment with Linearized stage', () => {
       shape: [2, 3, 4],
       chunkShape: [2, 3, 4],
       variables: [
-        { id: 'v', name: 'value', dtype: 'uint8', color: '#e06c75' },
+        {
+          id: 'v', name: 'value', color: '#e06c75',
+          logicalType: { type: 'integer', min: 0, max: 255 },
+          typeAssignment: { storageDtype: 'uint8' },
+        },
       ],
       fieldPipelines: { value: [] },
     });
@@ -130,7 +164,7 @@ describe('row-mode codec pipeline', () => {
     });
     const { stages } = computePipelineStages(state);
     // Should still produce valid output without errors
-    expect(stages).toHaveLength(5);
+    expect(stages).toHaveLength(7);
     for (const stage of stages) {
       expect(stage.traces.length).toBe(stage.bytes.length);
     }
@@ -140,13 +174,21 @@ describe('row-mode codec pipeline', () => {
     const state = stateWith({
       interleaving: 'row',
       variables: [
-        { id: 'a', name: 'a', dtype: 'float32', color: '#e06c75' },
-        { id: 'b', name: 'b', dtype: 'float32', color: '#61afef' },
+        {
+          id: 'a', name: 'a', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+        {
+          id: 'b', name: 'b', color: '#61afef',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          typeAssignment: { storageDtype: 'float32' },
+        },
       ],
       fieldPipelines: { a: [], b: [] },
     });
     const { stages } = computePipelineStages(state);
-    expect(stages).toHaveLength(5);
+    expect(stages).toHaveLength(7);
     for (const stage of stages) {
       expect(stage.traces.length).toBe(stage.bytes.length);
     }
@@ -160,7 +202,7 @@ describe('column-mode codec pipeline', () => {
     });
     const { stages } = computePipelineStages(state);
     // Without any codecs, Encoded should equal Linearized
-    expect(stages[1].stats.byteCount).toBe(stages[2].stats.byteCount);
+    expect(stages[2].stats.byteCount).toBe(stages[3].stats.byteCount); // Linearized=2, Encoded=3
   });
 
   it('produces per-variable chunk regions in column mode', () => {
@@ -169,13 +211,21 @@ describe('column-mode codec pipeline', () => {
       shape: [4],
       chunkShape: [2],
       variables: [
-        { id: 'a', name: 'temperature', dtype: 'float32', color: '#e06c75' },
-        { id: 'b', name: 'pressure', dtype: 'float32', color: '#61afef' },
+        {
+          id: 'a', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+        {
+          id: 'b', name: 'pressure', color: '#61afef',
+          logicalType: { type: 'decimal', min: 900, max: 1100, decimalPlaces: 1 },
+          typeAssignment: { storageDtype: 'float32' },
+        },
       ],
       fieldPipelines: { temperature: [], pressure: [] },
     });
     const { stages } = computePipelineStages(state);
-    const linearized = stages[1];
+    const linearized = stages[2]; // Linearized is index 2
 
     // Should have per-variable chunk regions
     const chunkIds = [...new Set(linearized.traces.map((t) => t.chunkId))];
@@ -191,12 +241,16 @@ describe('column-mode codec pipeline', () => {
       shape: [4],
       chunkShape: [4],
       variables: [
-        { id: 'a', name: 'temperature', dtype: 'float32', color: '#e06c75' },
+        {
+          id: 'a', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          typeAssignment: { storageDtype: 'float32' },
+        },
       ],
       fieldPipelines: { temperature: [{ codec: 'rle', params: {} }] },
     });
     const { stages } = computePipelineStages(state);
-    const encoded = stages[2];
+    const encoded = stages[3]; // Encoded is index 3
 
     // After RLE (entropy), variable color should be preserved because it's a per-variable chunk
     for (const t of encoded.traces) {
@@ -217,7 +271,7 @@ describe('Write stage includes all files', () => {
       },
     });
     const { stages, files } = computePipelineStages(state);
-    const writeStage = stages[stages.length - 1];
+    const writeStage = stages[5]; // Write is stage index 5
 
     // Write stage bytes should be the sum of all file bytes
     const totalFileBytes = files.reduce((acc, f) => acc + f.bytes.length, 0);
@@ -232,7 +286,7 @@ describe('Write stage includes all files', () => {
       },
     });
     const { stages, files } = computePipelineStages(state);
-    const writeStage = stages[stages.length - 1];
+    const writeStage = stages[5]; // Write is stage index 5
 
     const totalFileBytes = files.reduce((acc, f) => acc + f.bytes.length, 0);
     expect(writeStage.stats.byteCount).toBe(totalFileBytes);
@@ -245,7 +299,7 @@ describe('metadata stage', () => {
       metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'json' },
     });
     const { stages } = computePipelineStages(state);
-    const metaStage = stages[3];
+    const metaStage = stages[4]; // Metadata is index 4
     expect(metaStage.name).toBe('Metadata');
     expect(metaStage.stats.byteCount).toBeGreaterThan(0);
   });
@@ -255,8 +309,54 @@ describe('metadata stage', () => {
       metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'binary' },
     });
     const { stages } = computePipelineStages(state);
-    const metaStage = stages[3];
+    const metaStage = stages[4];
     expect(metaStage.stats.byteCount).toBeGreaterThan(0);
+  });
+});
+
+describe('Read stage', () => {
+  it('Read stage is empty (0 bytes) when metadata not included', () => {
+    const state = stateWith({
+      write: { ...DEFAULT_STATE.write, includeMetadata: false },
+    });
+    const { stages, readResult } = computePipelineStages(state);
+    const readStage = stages[6]; // Read is stage index 6
+    expect(readStage.name).toBe('Read');
+    expect(readStage.stats.byteCount).toBe(0);
+    expect(readResult.success).toBe(false);
+  });
+
+  it('Read stage has reconstructed values when metadata included', () => {
+    const state = stateWith({
+      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+    });
+    const { stages, readResult } = computePipelineStages(state);
+    const readStage = stages[6];
+    expect(readStage.name).toBe('Read');
+    expect(readStage.stats.byteCount).toBeGreaterThan(0);
+    expect(readResult.success).toBe(true);
+  });
+
+  it('Read stage traces match bytes length', () => {
+    const state = stateWith({
+      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+    });
+    const { stages } = computePipelineStages(state);
+    const readStage = stages[6];
+    expect(readStage.traces.length).toBe(readStage.bytes.length);
+  });
+
+  it('Read stage traceIds use same format as Values stage', () => {
+    const state = stateWith({
+      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+    });
+    const { stages } = computePipelineStages(state);
+    const valuesTraceIds = new Set(stages[0].traces.map((t) => t.traceId));
+    const readTraceIds = new Set(stages[6].traces.map((t) => t.traceId));
+    // All Read traceIds should match Values traceIds
+    for (const id of readTraceIds) {
+      expect(valuesTraceIds.has(id)).toBe(true);
+    }
   });
 });
 
@@ -265,6 +365,7 @@ describe('sidecar files have traces', () => {
     const state = stateWith({
       write: {
         ...DEFAULT_STATE.write,
+        includeMetadata: true,
         metadataPlacement: 'sidecar',
       },
     });
@@ -278,6 +379,7 @@ describe('sidecar files have traces', () => {
     const state = stateWith({
       write: {
         ...DEFAULT_STATE.write,
+        includeMetadata: true,
         partitioning: 'per-chunk',
       },
     });

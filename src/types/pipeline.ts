@@ -63,3 +63,26 @@ export interface VirtualFile {
   bytes: Uint8Array;
   traces: ByteTrace[];
 }
+
+export interface VariableStats {
+  min: number;
+  max: number;
+  mean: number;
+  count: number;
+  clipped: number;   // values clamped to dtype range
+  rounded: number;   // values rounded during conversion
+  isLossy: boolean;  // true if clipped > 0 || rounded > 0
+}
+
+export interface ReadSuccess {
+  success: true;
+  reconstructedValues: Map<string, number[]>;
+  lossyVariables: Set<string>;
+}
+
+export interface ReadFailure {
+  success: false;
+  errorMessage: string;
+}
+
+export type ReadFileResult = ReadSuccess | ReadFailure;

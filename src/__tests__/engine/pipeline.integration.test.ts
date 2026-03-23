@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { generateValues } from '../../engine/generate.ts';
-import { chunkData, computeChunkGrid } from '../../engine/chunk.ts';
+import { assignType } from '../../engine/typeAssign.ts';
+import { chunkData, chunkDataPerVariable, computeChunkGrid } from '../../engine/chunk.ts';
 import { linearizeChunk } from '../../engine/linearize.ts';
 import { runCodecPipeline } from '../../engine/codecs.ts';
 import { assembleFiles } from '../../engine/write.ts';
@@ -14,58 +15,58 @@ import type { DtypeKey } from '../../types/dtypes.ts';
  * Helper: run the full pipeline from state to virtual files.
  */
 function runFullPipeline(state: AppState) {
-  // 1. Generate values
+  // 1. Generate logical values
   const totalElements = state.shape.reduce((a, b) => a * b, 1);
   const variableValues = new Map<string, number[]>();
   for (const v of state.variables) {
-    variableValues.set(v.name, generateValues(v.name, v.dtype, totalElements));
+    variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }
 
-  // 2. Chunk
-  const chunks = chunkData(state.shape, state.chunkShape, state.variables, variableValues);
+  // 2. Type assignment: convert to typed values
+  const typedValues = new Map<string, number[]>();
+  for (const v of state.variables) {
+    const vals = variableValues.get(v.name)!;
+    const result = assignType(vals, v.logicalType, v.typeAssignment);
+    const dtypeInfo = getDtypeInfo(v.typeAssignment.storageDtype);
+    const arr = new dtypeInfo.TypedArray(result.bytes.buffer, result.bytes.byteOffset, vals.length);
+    typedValues.set(v.name, Array.from(arr));
+  }
 
-  // 3. Linearize + encode
+  // 3. Build chunkable variables
+  const chunkVars = state.variables.map((v) => ({
+    name: v.name,
+    color: v.color,
+    dtype: v.typeAssignment.storageDtype,
+  }));
+
+  // 4. Chunk
+  const chunks = state.interleaving === 'column'
+    ? chunkDataPerVariable(state.shape, state.chunkShape, chunkVars, typedValues)
+    : chunkData(state.shape, state.chunkShape, chunkVars, typedValues);
+
+  // 5. Linearize + encode
   const encodedChunks: EncodedChunk[] = chunks.map((chunk) => {
     const linearized = linearizeChunk(chunk, state.interleaving);
 
     if (state.interleaving === 'column') {
-      // Per-variable codec pipelines
-      let offset = 0;
-      const encodedParts: { bytes: Uint8Array; traces: import('../../types/pipeline.ts').ByteTrace[] }[] = [];
-
-      for (const cv of chunk.variables) {
-        const varByteCount = cv.values.length * getTypeSize(cv.dtype as DtypeKey);
-        const varBytes = linearized.bytes.slice(offset, offset + varByteCount);
-        const varTraces = linearized.traces.slice(offset, offset + varByteCount);
-
-        const steps = state.fieldPipelines[cv.variableName] ?? [];
-        const result = runCodecPipeline(varBytes, varTraces, steps, cv.dtype as DtypeKey);
-        encodedParts.push({ bytes: result.bytes, traces: result.traces });
-
-        offset += varByteCount;
-      }
-
-      const totalBytes = encodedParts.reduce((acc, p) => acc + p.bytes.length, 0);
-      const combinedBytes = new Uint8Array(totalBytes);
-      const combinedTraces: import('../../types/pipeline.ts').ByteTrace[] = [];
-      let writeOffset = 0;
-      for (const part of encodedParts) {
-        combinedBytes.set(part.bytes, writeOffset);
-        combinedTraces.push(...part.traces);
-        writeOffset += part.bytes.length;
-      }
-
+      const cv = chunk.variables[0];
+      const steps = state.fieldPipelines[cv.variableName] ?? [];
+      const result = runCodecPipeline(linearized.bytes, linearized.traces, steps, cv.dtype as DtypeKey);
       return {
         chunkId: linearized.chunkId,
         coords: linearized.coords,
-        bytes: combinedBytes,
-        traces: combinedTraces,
+        bytes: result.bytes,
+        traces: result.traces,
+        variableName: linearized.variableName,
       };
     } else {
-      // Single chunk pipeline for row interleaving
       const steps = state.chunkPipeline;
-      // Use the first variable's dtype as input dtype (or uint8 if mixed)
-      const inputDtype = chunk.variables.length > 0 ? chunk.variables[0].dtype as DtypeKey : 'uint8';
+      const uniqueDtypes = new Set(chunk.variables.map((cv) => cv.dtype));
+      const inputDtype: DtypeKey = chunk.variables.length === 0
+        ? 'uint8'
+        : uniqueDtypes.size > 1
+          ? 'uint8'
+          : chunk.variables[0].dtype as DtypeKey;
       const result = runCodecPipeline(linearized.bytes, linearized.traces, steps, inputDtype);
       return {
         chunkId: linearized.chunkId,
@@ -76,19 +77,29 @@ function runFullPipeline(state: AppState) {
     }
   });
 
-  // 4. Assemble files
+  // 6. Assemble files
   const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
   const files = assembleFiles(state, encodedChunks, chunkGrid);
 
-  return { variableValues, chunks, encodedChunks, files };
+  return { variableValues, typedValues, chunks, encodedChunks, files };
 }
 
-function getTypeSize(dtype: DtypeKey): number {
-  const sizes: Record<string, number> = {
-    int8: 1, uint8: 1, int16: 2, uint16: 2,
-    int32: 4, uint32: 4, float32: 4, float64: 8,
+function getDtypeInfo(dtype: string) {
+  const map: Record<string, { size: number; TypedArray: any }> = {
+    int8: { size: 1, TypedArray: Int8Array },
+    uint8: { size: 1, TypedArray: Uint8Array },
+    int16: { size: 2, TypedArray: Int16Array },
+    uint16: { size: 2, TypedArray: Uint16Array },
+    int32: { size: 4, TypedArray: Int32Array },
+    uint32: { size: 4, TypedArray: Uint32Array },
+    float32: { size: 4, TypedArray: Float32Array },
+    float64: { size: 8, TypedArray: Float64Array },
   };
-  return sizes[dtype] ?? 1;
+  return map[dtype] ?? { size: 1, TypedArray: Uint8Array };
+}
+
+function getTypeSize(dtype: string): number {
+  return getDtypeInfo(dtype).size;
 }
 
 describe('Integration: minimal passthrough (no codecs)', () => {
@@ -104,7 +115,7 @@ describe('Integration: minimal passthrough (no codecs)', () => {
     // Encoded chunks should preserve original byte count
     const totalElements = state.shape.reduce((a, b) => a * b, 1);
     const expectedBytes = state.variables.reduce(
-      (acc, v) => acc + totalElements * getTypeSize(v.dtype),
+      (acc, v) => acc + totalElements * getTypeSize(v.typeAssignment.storageDtype),
       0,
     );
     const actualChunkBytes = encodedChunks.reduce((acc, c) => acc + c.bytes.length, 0);
@@ -112,16 +123,19 @@ describe('Integration: minimal passthrough (no codecs)', () => {
   });
 });
 
-describe('Integration: full codec chain', () => {
-  it('applies scale/offset → delta → shuffle → rle', () => {
+describe('Integration: full codec chain (delta + shuffle + rle)', () => {
+  it('applies delta → shuffle → rle', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
       variables: [
-        { id: 'temp', name: 'temp', dtype: 'float32', color: '#f00' },
+        {
+          id: 'temp', name: 'temp', color: '#f00',
+          logicalType: { type: 'integer', min: 0, max: 1000 },
+          typeAssignment: { storageDtype: 'int16' },
+        },
       ],
       fieldPipelines: {
         temp: [
-          { codec: 'scale-offset', params: { scale: 100, offset: 0, outputDtype: 'int16' } },
           { codec: 'delta', params: { order: 1 } },
           { codec: 'byte-shuffle', params: { elementSize: 2 } },
           { codec: 'rle', params: {} },
@@ -148,13 +162,19 @@ describe('Integration: multi-variable column-oriented', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
       variables: [
-        { id: 'a', name: 'a', dtype: 'float32', color: '#f00' },
-        { id: 'b', name: 'b', dtype: 'uint16', color: '#0f0' },
+        {
+          id: 'a', name: 'a', color: '#f00',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+        {
+          id: 'b', name: 'b', color: '#0f0',
+          logicalType: { type: 'integer', min: 0, max: 1000 },
+          typeAssignment: { storageDtype: 'uint16' },
+        },
       ],
       fieldPipelines: {
-        a: [
-          { codec: 'scale-offset', params: { scale: 10, offset: 0, outputDtype: 'int16' } },
-        ],
+        a: [],
         b: [
           { codec: 'delta', params: { order: 1 } },
         ],
@@ -162,12 +182,14 @@ describe('Integration: multi-variable column-oriented', () => {
     };
 
     const { encodedChunks } = runFullPipeline(state);
-    expect(encodedChunks.length).toBe(1);
+    // Column mode: 1 chunk per variable * 1 spatial chunk = 2 chunks
+    expect(encodedChunks.length).toBe(2);
 
-    // 'a' was float32 (4 bytes * 32) → int16 (2 bytes * 32) = 64 bytes
-    // 'b' was uint16 (2 bytes * 32), delta preserves size = 64 bytes
-    // Total: 128 bytes
-    expect(encodedChunks[0].bytes.length).toBe(128);
+    // 'a' is float32 (4 bytes * 32) = 128 bytes
+    // 'b' is uint16 (2 bytes * 32), delta preserves size = 64 bytes
+    // Total across both chunks: 128 + 64 = 192 bytes
+    const totalBytes = encodedChunks.reduce((acc, c) => acc + c.bytes.length, 0);
+    expect(totalBytes).toBe(192);
   });
 });
 
@@ -177,8 +199,16 @@ describe('Integration: multi-variable row-oriented', () => {
       ...DEFAULT_STATE,
       interleaving: 'row',
       variables: [
-        { id: 'a', name: 'a', dtype: 'float32', color: '#f00' },
-        { id: 'b', name: 'b', dtype: 'float32', color: '#0f0' },
+        {
+          id: 'a', name: 'a', color: '#f00',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+        {
+          id: 'b', name: 'b', color: '#0f0',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          typeAssignment: { storageDtype: 'float32' },
+        },
       ],
       chunkPipeline: [
         { codec: 'delta', params: { order: 1 } },
@@ -199,11 +229,16 @@ describe('Integration: per-chunk partitioning', () => {
       shape: [8],
       chunkShape: [4],
       variables: [
-        { id: 'x', name: 'x', dtype: 'int32', color: '#f00' },
+        {
+          id: 'x', name: 'x', color: '#f00',
+          logicalType: { type: 'integer', min: -1000, max: 1000 },
+          typeAssignment: { storageDtype: 'int32' },
+        },
       ],
       fieldPipelines: { x: [] },
       write: {
         ...DEFAULT_STATE.write,
+        includeMetadata: true,
         partitioning: 'per-chunk',
       },
     };
@@ -211,8 +246,7 @@ describe('Integration: per-chunk partitioning', () => {
     const { files } = runFullPipeline(state);
     // 2 chunk files + 1 metadata sidecar
     expect(files.length).toBe(3);
-    expect(files[0].name).toBe('chunk_0');
-    expect(files[1].name).toBe('chunk_1');
+    expect(files[0].name).toContain('chunk');
     expect(files[2].name).toBe('metadata');
 
     // Each chunk file should have magic + data + magic
@@ -228,7 +262,7 @@ describe('Integration: determinism', () => {
       ...DEFAULT_STATE,
       fieldPipelines: {
         temperature: [
-          { codec: 'scale-offset', params: { scale: 100, offset: 0, outputDtype: 'int16' } },
+          { codec: 'delta', params: { order: 1 } },
         ],
         pressure: [
           { codec: 'delta', params: { order: 1 } },

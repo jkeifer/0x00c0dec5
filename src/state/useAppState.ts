@@ -23,7 +23,7 @@ export type AppAction =
   | { type: 'SET_SHAPE'; shape: number[] }
   | { type: 'ADD_VARIABLE'; variable: Variable }
   | { type: 'REMOVE_VARIABLE'; id: string }
-  | { type: 'UPDATE_VARIABLE'; id: string; changes: Partial<Pick<Variable, 'name' | 'dtype'>> }
+  | { type: 'UPDATE_VARIABLE'; id: string; changes: Partial<Pick<Variable, 'name' | 'logicalType' | 'typeAssignment'>> }
   // Chunk
   | { type: 'SET_CHUNK_SHAPE'; chunkShape: number[] }
   // Interleave
@@ -40,7 +40,10 @@ export type AppAction =
   | { type: 'SET_WRITE_MAGIC'; magicNumber: string }
   | { type: 'SET_WRITE_PARTITIONING'; partitioning: 'single' | 'per-chunk' }
   | { type: 'SET_WRITE_METADATA_PLACEMENT'; metadataPlacement: 'header' | 'footer' | 'sidecar' }
-  | { type: 'SET_WRITE_CHUNK_ORDER'; chunkOrder: 'row-major' | 'column-major' };
+  | { type: 'SET_WRITE_CHUNK_ORDER'; chunkOrder: 'row-major' | 'column-major' }
+  | { type: 'SET_WRITE_INCLUDE_METADATA'; includeMetadata: boolean }
+  // UI
+  | { type: 'SET_SHOW_DIFF'; showDiff: boolean };
 
 export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -122,7 +125,8 @@ export function reducer(state: AppState, action: AppAction): AppState {
         if (!v) return;
         const oldName = v.name;
         if (action.changes.name !== undefined) v.name = action.changes.name;
-        if (action.changes.dtype !== undefined) v.dtype = action.changes.dtype;
+        if (action.changes.logicalType !== undefined) v.logicalType = action.changes.logicalType;
+        if (action.changes.typeAssignment !== undefined) v.typeAssignment = action.changes.typeAssignment;
         // Re-key fieldPipelines if name changed
         if (action.changes.name !== undefined && action.changes.name !== oldName) {
           const pipeline = draft.fieldPipelines[oldName] ?? [];
@@ -197,6 +201,16 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case 'SET_WRITE_CHUNK_ORDER':
       return produce(state, (draft) => {
         draft.write.chunkOrder = action.chunkOrder;
+      });
+
+    case 'SET_WRITE_INCLUDE_METADATA':
+      return produce(state, (draft) => {
+        draft.write.includeMetadata = action.includeMetadata;
+      });
+
+    case 'SET_SHOW_DIFF':
+      return produce(state, (draft) => {
+        draft.ui.showDiff = action.showDiff;
       });
 
     default:

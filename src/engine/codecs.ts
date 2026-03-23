@@ -1,86 +1,9 @@
 import type { CodecDefinition, CodecStep } from '../types/codecs.ts';
 import type { ByteTrace } from '../types/pipeline.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
-import { getDtype, DTYPE_KEYS } from '../types/dtypes.ts';
+import { getDtype } from '../types/dtypes.ts';
 import { bytesToValues, valuesToBytes } from './elements.ts';
 import { propagateTracesValuePreserving, degradeTracesToChunkLevel } from './trace.ts';
-
-// ─── Scale/Offset ───────────────────────────────────────────────────────
-
-const scaleOffset: CodecDefinition = {
-  key: 'scale-offset',
-  label: 'Scale/Offset',
-  category: 'mapping',
-  description: '(value - offset) * scale, cast to output dtype',
-  params: {
-    scale: { label: 'Scale', type: 'number', default: 1, min: -1e9, max: 1e9, step: 0.1 },
-    offset: { label: 'Offset', type: 'number', default: 0, min: -1e9, max: 1e9, step: 0.1 },
-    outputDtype: {
-      label: 'Output Type',
-      type: 'select',
-      default: 'int16',
-      options: [...DTYPE_KEYS],
-    },
-  },
-  applicableTo: () => true,
-  encode(bytes, inputDtype, params) {
-    const outDtype = (params.outputDtype ?? 'int16') as DtypeKey;
-    const scale = Number(params.scale ?? 1);
-    const offset = Number(params.offset ?? 0);
-    const outInfo = getDtype(outDtype);
-
-    const values = bytesToValues(bytes, inputDtype as DtypeKey);
-    const transformed = values.map((v) => {
-      let result = (v - offset) * scale;
-      if (!outInfo.float) {
-        result = Math.round(result);
-        result = Math.max(outInfo.min, Math.min(outInfo.max, result));
-      }
-      return result;
-    });
-
-    return { bytes: valuesToBytes(transformed, outDtype), outputDtype: outDtype };
-  },
-};
-
-// ─── Bit Round ──────────────────────────────────────────────────────────
-
-const bitround: CodecDefinition = {
-  key: 'bitround',
-  label: 'Bit Round',
-  category: 'mapping',
-  description: 'Zero least-significant mantissa bits for better compressibility',
-  params: {
-    keepBits: { label: 'Keep Bits', type: 'number', default: 10, min: 1, max: 23, step: 1 },
-  },
-  applicableTo: (dtype) => dtype === 'float32' || dtype === 'float64',
-  encode(bytes, inputDtype, params) {
-    const keepBits = Number(params.keepBits ?? 10);
-    const result = new Uint8Array(bytes.length);
-    result.set(bytes);
-
-    if (inputDtype === 'float32') {
-      const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
-      const mask = 0xffffffff << (23 - keepBits);
-      for (let i = 0; i < result.length; i += 4) {
-        const bits = view.getUint32(i, true);
-        view.setUint32(i, bits & mask, true);
-      }
-    } else if (inputDtype === 'float64') {
-      const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
-      const maskHigh = 0xffffffff << Math.max(0, 20 - keepBits);
-      const maskLow = keepBits >= 20 ? 0xffffffff << (52 - keepBits) : 0;
-      for (let i = 0; i < result.length; i += 8) {
-        const low = view.getUint32(i, true);
-        const high = view.getUint32(i + 4, true);
-        view.setUint32(i, low & maskLow, true);
-        view.setUint32(i + 4, high & maskHigh, true);
-      }
-    }
-
-    return { bytes: result, outputDtype: inputDtype };
-  },
-};
 
 // ─── Delta ──────────────────────────────────────────────────────────────
 
@@ -116,6 +39,29 @@ const delta: CodecDefinition = {
     }
 
     return { bytes: valuesToBytes(values, dtype), outputDtype: inputDtype };
+  },
+  decode(bytes, encodedDtype, params) {
+    const order = Number(params.order ?? 1);
+    const dtype = encodedDtype as DtypeKey;
+    const values = bytesToValues(bytes, dtype);
+
+    // Cumulative sum (prefix sum), applied `order` times
+    for (let o = 0; o < order; o++) {
+      for (let i = 1; i < values.length; i++) {
+        values[i] = values[i] + values[i - 1];
+      }
+    }
+
+    // Clamp integer values to type range
+    const info = getDtype(dtype);
+    if (!info.float) {
+      for (let i = 0; i < values.length; i++) {
+        values[i] = Math.round(values[i]);
+        values[i] = Math.max(info.min, Math.min(info.max, values[i]));
+      }
+    }
+
+    return { bytes: valuesToBytes(values, dtype), outputDtype: encodedDtype };
   },
 };
 
@@ -154,6 +100,30 @@ const byteShuffle: CodecDefinition = {
 
     return { bytes: result, outputDtype: inputDtype };
   },
+  decode(bytes, encodedDtype, params) {
+    const elementSize = Number(params.elementSize ?? 4);
+    if (elementSize <= 1 || bytes.length === 0) {
+      return { bytes: new Uint8Array(bytes), outputDtype: encodedDtype };
+    }
+
+    const numElements = Math.floor(bytes.length / elementSize);
+    const usableBytes = numElements * elementSize;
+    const result = new Uint8Array(bytes.length);
+
+    // Inverse transpose: result[e * elementSize + b] = input[b * numElements + e]
+    for (let e = 0; e < numElements; e++) {
+      for (let b = 0; b < elementSize; b++) {
+        result[e * elementSize + b] = bytes[b * numElements + e];
+      }
+    }
+
+    // Copy remaining bytes (if any) unchanged
+    for (let i = usableBytes; i < bytes.length; i++) {
+      result[i] = bytes[i];
+    }
+
+    return { bytes: result, outputDtype: encodedDtype };
+  },
 };
 
 // ─── RLE ────────────────────────────────────────────────────────────────
@@ -180,6 +150,22 @@ const rle: CodecDefinition = {
       }
       output.push(count, value);
       i += count;
+    }
+
+    return { bytes: new Uint8Array(output), outputDtype: 'uint8' };
+  },
+  decode(bytes, _encodedDtype) {
+    if (bytes.length === 0) {
+      return { bytes: new Uint8Array(0), outputDtype: 'uint8' };
+    }
+
+    const output: number[] = [];
+    for (let i = 0; i < bytes.length; i += 2) {
+      const count = bytes[i];
+      const value = bytes[i + 1];
+      for (let j = 0; j < count; j++) {
+        output.push(value);
+      }
     }
 
     return { bytes: new Uint8Array(output), outputDtype: 'uint8' };
@@ -235,13 +221,39 @@ const lz: CodecDefinition = {
 
     return { bytes: new Uint8Array(output), outputDtype: 'uint8' };
   },
+  decode(bytes, _encodedDtype) {
+    if (bytes.length === 0) {
+      return { bytes: new Uint8Array(0), outputDtype: 'uint8' };
+    }
+
+    const output: number[] = [];
+    let i = 0;
+
+    while (i < bytes.length) {
+      const token = bytes[i];
+      if (token === 0x00) {
+        // Literal: [0x00, byte]
+        output.push(bytes[i + 1]);
+        i += 2;
+      } else {
+        // Match: [length, offset_hi, offset_lo]
+        const matchLen = token;
+        const offset = (bytes[i + 1] << 8) | bytes[i + 2];
+        const start = output.length - offset;
+        for (let j = 0; j < matchLen; j++) {
+          output.push(output[start + j]);
+        }
+        i += 3;
+      }
+    }
+
+    return { bytes: new Uint8Array(output), outputDtype: 'uint8' };
+  },
 };
 
 // ─── Registry ───────────────────────────────────────────────────────────
 
 export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
-  'scale-offset': scaleOffset,
-  'bitround': bitround,
   'delta': delta,
   'byte-shuffle': byteShuffle,
   'rle': rle,

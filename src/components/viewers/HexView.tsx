@@ -16,7 +16,7 @@ interface HexViewProps {
 const NARROW_BREAKPOINT = 500;
 const ROW_HEIGHT = 20;
 
-export function HexView({ stage, paneId, chunkTraceMap, traceChunkMap }: HexViewProps) {
+export function HexView({ stage, paneId, chunkTraceMap, traceChunkMap: _traceChunkMap }: HexViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
   const containerWidth = useContainerWidth(parentRef);

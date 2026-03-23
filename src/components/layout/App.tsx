@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { Panel, Group, Separator, useDefaultLayout } from 'react-resizable-panels';
 import { useAppState } from '../../state/useAppState.ts';
 import { usePipeline } from '../../hooks/usePipeline.ts';
@@ -7,13 +8,38 @@ import { Sidebar } from './Sidebar.tsx';
 import { PipelineStrip } from './PipelineStrip.tsx';
 import { StagePane } from '../viewers/StagePane.tsx';
 import { HoverBar } from '../shared/HoverBar.tsx';
+import { bytesToValues } from '../../engine/elements.ts';
 
 function MainLayout() {
   const { state, dispatch } = useAppState();
-  const { stages, files, chunkTraceMap, traceChunkMap } = usePipeline(state);
+  const { stages, files, chunkTraceMap, traceChunkMap, readResult, variableStats } = usePipeline(state);
 
   const mainPersist = useDefaultLayout({ id: 'main-layout' });
   const panesPersist = useDefaultLayout({ id: 'panes-layout' });
+
+  // Compute originalValues from the Values stage (stage 0) for diff overlay
+  // Values stage now uses float64 (8 bytes per value per variable)
+  const originalValues = useMemo(() => {
+    const valuesStage = stages[0];
+    if (!valuesStage || valuesStage.bytes.length === 0) return undefined;
+
+    const result = new Map<string, number[]>();
+    let offset = 0;
+    const totalBytesPerElement = state.variables.length * 8; // float64
+    const totalElements = totalBytesPerElement > 0
+      ? Math.floor(valuesStage.bytes.length / totalBytesPerElement)
+      : 0;
+
+    for (const v of state.variables) {
+      const byteLen = totalElements * 8; // float64
+      const varBytes = valuesStage.bytes.slice(offset, offset + byteLen);
+      const values = bytesToValues(varBytes, 'float64');
+      result.set(v.name, values);
+      offset += byteLen;
+    }
+
+    return result;
+  }, [stages, state.variables]);
 
   return (
     <Group
@@ -22,7 +48,7 @@ function MainLayout() {
       onLayoutChanged={mainPersist.onLayoutChanged}
     >
       <Panel id="sidebar" defaultSize="25%" minSize="15%" maxSize="35%">
-        <Sidebar files={files} />
+        <Sidebar files={files} readResult={readResult} variableStats={variableStats} />
       </Panel>
       <Separator className="resize-handle" />
       <Panel id="main" minSize="30%">
@@ -34,7 +60,7 @@ function MainLayout() {
             overflow: 'hidden',
           }}
         >
-          <PipelineStrip stages={stages} />
+          <PipelineStrip stages={stages} readResult={readResult} variableStats={variableStats} />
           <HoverBar stages={stages} />
           <Group
             orientation="horizontal"
@@ -60,6 +86,9 @@ function MainLayout() {
                 files={files}
                 chunkTraceMap={chunkTraceMap}
                 traceChunkMap={traceChunkMap}
+                readResult={readResult}
+                showDiff={state.ui.showDiff}
+                originalValues={originalValues}
               />
             </Panel>
             <Separator className="resize-handle" />
@@ -81,6 +110,9 @@ function MainLayout() {
                 files={files}
                 chunkTraceMap={chunkTraceMap}
                 traceChunkMap={traceChunkMap}
+                readResult={readResult}
+                showDiff={state.ui.showDiff}
+                originalValues={originalValues}
               />
             </Panel>
           </Group>

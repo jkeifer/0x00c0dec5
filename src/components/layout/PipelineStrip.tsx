@@ -1,5 +1,5 @@
 import { colors, fontSizes, spacing, radii } from '../../theme.ts';
-import type { PipelineStage } from '../../types/pipeline.ts';
+import type { PipelineStage, ReadFileResult, VariableStats } from '../../types/pipeline.ts';
 
 function formatByteCount(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -12,9 +12,14 @@ function formatEntropy(entropy: number): string {
 
 interface PipelineStripProps {
   stages: PipelineStage[];
+  readResult: ReadFileResult;
+  variableStats: Map<string, VariableStats>;
 }
 
-export function PipelineStrip({ stages }: PipelineStripProps) {
+export function PipelineStrip({ stages, readResult, variableStats }: PipelineStripProps) {
+  // Check if any variable has lossy type assignment
+  const hasLossyTyping = Array.from(variableStats.values()).some((s) => s.isLossy);
+
   return (
     <div
       style={{
@@ -32,6 +37,7 @@ export function PipelineStrip({ stages }: PipelineStripProps) {
       {stages.map((stage, i) => {
         const prevStage = i > 0 ? stages[i - 1] : null;
         const sizeIncreased = prevStage !== null && stage.stats.byteCount > prevStage.stats.byteCount;
+        const isTypedStage = stage.name === 'Typed';
 
         return (
           <div key={stage.name} style={{ display: 'flex', alignItems: 'center', gap: spacing.sm }}>
@@ -60,9 +66,33 @@ export function PipelineStrip({ stages }: PipelineStripProps) {
                   fontSize: fontSizes.md,
                   color: colors.textPrimary,
                   marginBottom: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
                 }}
               >
                 {stage.name}
+                {stage.name === 'Read' && (
+                  <span style={{
+                    color: readResult.success ? '#98c379' : '#e06c75',
+                    fontWeight: 700,
+                    fontSize: fontSizes.md,
+                  }}>
+                    {readResult.success ? '\u2713' : '\u2717'}
+                  </span>
+                )}
+                {isTypedStage && hasLossyTyping && (
+                  <span
+                    style={{
+                      color: colors.warning,
+                      fontWeight: 700,
+                      fontSize: fontSizes.sm,
+                    }}
+                    title="Some variables lose precision during type assignment"
+                  >
+                    !
+                  </span>
+                )}
               </div>
               <div
                 style={{

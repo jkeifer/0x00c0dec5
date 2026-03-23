@@ -18,61 +18,15 @@ function makeSimpleTraces(byteCount: number, chunkId: string = 'chunk:0'): ByteT
   }));
 }
 
-describe('scale-offset codec', () => {
-  const codec = CODEC_REGISTRY['scale-offset'];
-
-  it('applies scale and offset correctly', () => {
-    const input = valuesToBytes([10, 20, 30], 'float32');
-    const result = codec.encode(input, 'float32', { scale: 10, offset: 5, outputDtype: 'int16' });
-
-    const values = bytesToValues(result.bytes, 'int16');
-    expect(values).toEqual([50, 150, 250]);
-    expect(result.outputDtype).toBe('int16');
+describe('codec registry', () => {
+  it('contains only delta, byte-shuffle, rle, lz', () => {
+    const keys = Object.keys(CODEC_REGISTRY).sort();
+    expect(keys).toEqual(['byte-shuffle', 'delta', 'lz', 'rle']);
   });
 
-  it('clamps to output type range', () => {
-    const input = valuesToBytes([1000], 'float32');
-    const result = codec.encode(input, 'float32', { scale: 100, offset: 0, outputDtype: 'int16' });
-
-    const values = bytesToValues(result.bytes, 'int16');
-    expect(values[0]).toBe(32767); // clamped to int16 max
-  });
-
-  it('identity transform with scale=1 offset=0', () => {
-    const input = valuesToBytes([1, 2, 3], 'int32');
-    const result = codec.encode(input, 'int32', { scale: 1, offset: 0, outputDtype: 'int32' });
-    const values = bytesToValues(result.bytes, 'int32');
-    expect(values).toEqual([1, 2, 3]);
-  });
-});
-
-describe('bitround codec', () => {
-  const codec = CODEC_REGISTRY['bitround'];
-
-  it('reduces precision of float32 values', () => {
-    const input = valuesToBytes([3.14159265], 'float32');
-    const result = codec.encode(input, 'float32', { keepBits: 5 });
-
-    const originalValues = bytesToValues(input, 'float32');
-    const roundedValues = bytesToValues(result.bytes, 'float32');
-
-    expect(result.outputDtype).toBe('float32');
-    // Rounded value should be close but not identical (unless the bits happen to be zero)
-    expect(roundedValues[0]).toBeCloseTo(originalValues[0], 0);
-  });
-
-  it('preserves output dtype', () => {
-    const input = valuesToBytes([1.0], 'float32');
-    const result = codec.encode(input, 'float32', { keepBits: 10 });
-    expect(result.outputDtype).toBe('float32');
-    expect(result.bytes.length).toBe(4);
-  });
-
-  it('applicable only to float types', () => {
-    expect(codec.applicableTo('float32')).toBe(true);
-    expect(codec.applicableTo('float64')).toBe(true);
-    expect(codec.applicableTo('int32')).toBe(false);
-    expect(codec.applicableTo('uint8')).toBe(false);
+  it('does not contain scale-offset or bitround', () => {
+    expect(CODEC_REGISTRY['scale-offset']).toBeUndefined();
+    expect(CODEC_REGISTRY['bitround']).toBeUndefined();
   });
 });
 
@@ -224,18 +178,17 @@ describe('runCodecPipeline', () => {
   });
 
   it('chains codecs sequentially', () => {
-    const bytes = valuesToBytes([100, 200, 300], 'float32');
+    const bytes = valuesToBytes([100, 200, 300], 'int32');
     const traces = makeSimpleTraces(bytes.length);
     const steps: import('../../types/codecs.ts').CodecStep[] = [
-      { codec: 'scale-offset', params: { scale: 1, offset: 0, outputDtype: 'int16' } },
       { codec: 'delta', params: { order: 1 } },
     ];
 
-    const result = runCodecPipeline(bytes, traces, steps, 'float32');
-    expect(result.stages).toHaveLength(2);
-    expect(result.outputDtype).toBe('int16');
+    const result = runCodecPipeline(bytes, traces, steps, 'int32');
+    expect(result.stages).toHaveLength(1);
+    expect(result.outputDtype).toBe('int32');
 
-    const finalValues = bytesToValues(result.bytes, 'int16');
+    const finalValues = bytesToValues(result.bytes, 'int32');
     expect(finalValues).toEqual([100, 100, 100]);
   });
 
@@ -276,6 +229,128 @@ describe('runCodecPipeline', () => {
 
     const result = runCodecPipeline(bytes, traces, steps, 'int32');
     expect(result.bytes).toEqual(bytes);
+  });
+});
+
+// ─── Decode roundtrip tests ──────────────────────────────────────────
+
+describe('delta decode', () => {
+  const codec = CODEC_REGISTRY['delta'];
+
+  it('roundtrips exactly (order 1)', () => {
+    const originalValues = [10, 20, 30, 40];
+    const input = valuesToBytes(originalValues, 'int32');
+    const encoded = codec.encode(input, 'int32', { order: 1 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
+    const values = bytesToValues(decoded.bytes, 'int32');
+    expect(values).toEqual(originalValues);
+  });
+
+  it('roundtrips exactly (order 2)', () => {
+    const originalValues = [0, 1, 4, 9];
+    const input = valuesToBytes(originalValues, 'int32');
+    const encoded = codec.encode(input, 'int32', { order: 2 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { order: 2 });
+    const values = bytesToValues(decoded.bytes, 'int32');
+    expect(values).toEqual(originalValues);
+  });
+
+  it('roundtrips float values', () => {
+    const originalValues = [1.5, 2.5, 3.5, 4.5];
+    const input = valuesToBytes(originalValues, 'float32');
+    const encoded = codec.encode(input, 'float32', { order: 1 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
+    const values = bytesToValues(decoded.bytes, 'float32');
+    for (let i = 0; i < originalValues.length; i++) {
+      expect(values[i]).toBeCloseTo(originalValues[i], 5);
+    }
+  });
+});
+
+describe('byte-shuffle decode', () => {
+  const codec = CODEC_REGISTRY['byte-shuffle'];
+
+  it('roundtrips exactly', () => {
+    const input = new Uint8Array([0xa0, 0xa1, 0xa2, 0xa3, 0xb0, 0xb1, 0xb2, 0xb3]);
+    const encoded = codec.encode(input, 'float32', { elementSize: 4 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { elementSize: 4 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
+  });
+
+  it('handles elementSize=1 (identity)', () => {
+    const input = new Uint8Array([1, 2, 3, 4]);
+    const encoded = codec.encode(input, 'uint8', { elementSize: 1 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { elementSize: 1 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
+  });
+
+  it('handles empty input', () => {
+    const encoded = codec.encode(new Uint8Array(0), 'float32', { elementSize: 4 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { elementSize: 4 });
+    expect(decoded.bytes.length).toBe(0);
+  });
+});
+
+describe('rle decode', () => {
+  const codec = CODEC_REGISTRY['rle'];
+
+  it('roundtrips exactly', () => {
+    const input = new Uint8Array([1, 1, 1, 2, 2, 3]);
+    const encoded = codec.encode(input, 'uint8', {});
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, {});
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
+  });
+
+  it('roundtrips all-different values', () => {
+    const input = new Uint8Array([1, 2, 3, 4, 5]);
+    const encoded = codec.encode(input, 'uint8', {});
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, {});
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
+  });
+
+  it('roundtrips long run (>255)', () => {
+    const input = new Uint8Array(300).fill(0x42);
+    const encoded = codec.encode(input, 'uint8', {});
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, {});
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
+  });
+
+  it('handles empty input', () => {
+    const encoded = codec.encode(new Uint8Array(0), 'uint8', {});
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, {});
+    expect(decoded.bytes.length).toBe(0);
+  });
+});
+
+describe('lz decode', () => {
+  const codec = CODEC_REGISTRY['lz'];
+
+  it('roundtrips repeated pattern', () => {
+    const input = new Uint8Array([65, 66, 67, 65, 66, 67]);
+    const encoded = codec.encode(input, 'uint8', { windowSize: 256 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
+  });
+
+  it('roundtrips all unique bytes', () => {
+    const input = new Uint8Array([1, 2, 3, 4, 5]);
+    const encoded = codec.encode(input, 'uint8', { windowSize: 256 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
+  });
+
+  it('handles empty input', () => {
+    const encoded = codec.encode(new Uint8Array(0), 'uint8', { windowSize: 256 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
+    expect(decoded.bytes.length).toBe(0);
+  });
+
+  it('roundtrips longer data with multiple matches', () => {
+    const pattern = [10, 20, 30, 40, 50];
+    const input = new Uint8Array([...pattern, ...pattern, ...pattern, 99, 98, 97]);
+    const encoded = codec.encode(input, 'uint8', { windowSize: 256 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
   });
 });
 

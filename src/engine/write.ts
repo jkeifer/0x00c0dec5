@@ -1,5 +1,5 @@
 import type { AppState } from '../types/state.ts';
-import type { EncodedChunk, VirtualFile, ByteTrace } from '../types/pipeline.ts';
+import type { EncodedChunk, VirtualFile, ByteTrace, VariableStats } from '../types/pipeline.ts';
 import { collectMetadata, serializeMetadata } from './metadata.ts';
 
 /** Parse a hex string (e.g., "00C0DEC5") into bytes. */
@@ -62,6 +62,7 @@ export function assembleFiles(
   state: AppState,
   encodedChunks: EncodedChunk[],
   chunkGrid: number[],
+  variableStats?: Map<string, VariableStats>,
 ): VirtualFile[] {
   const magic = state.write.magicNumber ? hexToBytes(state.write.magicNumber) : new Uint8Array(0);
   const variableOrder = state.interleaving === 'column'
@@ -70,10 +71,20 @@ export function assembleFiles(
   const orderedChunks = orderChunks(encodedChunks, chunkGrid, state.write.chunkOrder, variableOrder);
 
   if (state.write.partitioning === 'per-chunk') {
-    return assemblePerChunkFiles(state, orderedChunks, magic);
+    return assemblePerChunkFiles(state, orderedChunks, magic, variableStats);
   }
 
-  return assembleSingleFile(state, orderedChunks, magic, chunkGrid);
+  return assembleSingleFile(state, orderedChunks, magic, chunkGrid, variableStats);
+}
+
+/**
+ * Build a file with no metadata at all — only magic + chunk data + magic.
+ */
+function buildNoMetadataFile(
+  magic: Uint8Array,
+  orderedChunks: EncodedChunk[],
+): VirtualFile[] {
+  return buildSingleFile(magic, new Uint8Array(0), orderedChunks, 'none');
 }
 
 function assembleSingleFile(
@@ -81,7 +92,13 @@ function assembleSingleFile(
   orderedChunks: EncodedChunk[],
   magic: Uint8Array,
   _chunkGrid: number[],
+  variableStats?: Map<string, VariableStats>,
 ): VirtualFile[] {
+  // If metadata is not included, produce file with only magic + chunks + magic
+  if (state.write.includeMetadata === false) {
+    return buildNoMetadataFile(magic, orderedChunks);
+  }
+
   const placement = state.write.metadataPlacement;
 
   // Pass 1: compute chunk offsets
@@ -89,7 +106,7 @@ function assembleSingleFile(
   if (placement === 'header') {
     // We need to estimate metadata size, then add it to get chunk offsets.
     // First, collect metadata without chunk offsets to measure base size.
-    const baseMeta = collectMetadata(state, orderedChunks);
+    const baseMeta = collectMetadata(state, orderedChunks, variableStats);
     const baseMetaBytes = serializeMetadata(baseMeta, state.metadata.serialization);
 
     // Now compute with chunk offsets (iterate to convergence since
@@ -98,21 +115,21 @@ function assembleSingleFile(
     const chunkOffsets = computeChunkOffsets(orderedChunks, dataStartOffset);
 
     // Re-serialize with the correct chunk offsets
-    const metaWithIndex = collectMetadata(state, orderedChunks, chunkOffsets);
+    const metaWithIndex = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
     const metaBytes = serializeMetadata(metaWithIndex, state.metadata.serialization);
 
     // If the size changed, recompute offsets
     if (metaBytes.length !== baseMetaBytes.length) {
       const adjustedStart = magic.length + metaBytes.length;
       const adjustedOffsets = computeChunkOffsets(orderedChunks, adjustedStart);
-      const finalMeta = collectMetadata(state, orderedChunks, adjustedOffsets);
+      const finalMeta = collectMetadata(state, orderedChunks, variableStats, adjustedOffsets);
       const finalMetaBytes = serializeMetadata(finalMeta, state.metadata.serialization);
 
       // Third pass if still not converged (rare)
       if (finalMetaBytes.length !== metaBytes.length) {
         const thirdStart = magic.length + finalMetaBytes.length;
         const thirdOffsets = computeChunkOffsets(orderedChunks, thirdStart);
-        const thirdMeta = collectMetadata(state, orderedChunks, thirdOffsets);
+        const thirdMeta = collectMetadata(state, orderedChunks, variableStats, thirdOffsets);
         const thirdMetaBytes = serializeMetadata(thirdMeta, state.metadata.serialization);
         return buildSingleFile(magic, thirdMetaBytes, orderedChunks, 'header');
       }
@@ -126,7 +143,7 @@ function assembleSingleFile(
   if (placement === 'footer') {
     dataStartOffset = magic.length;
     const chunkOffsets = computeChunkOffsets(orderedChunks, dataStartOffset);
-    const meta = collectMetadata(state, orderedChunks, chunkOffsets);
+    const meta = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
     const metaBytes = serializeMetadata(meta, state.metadata.serialization);
     return buildSingleFile(magic, metaBytes, orderedChunks, 'footer');
   }
@@ -134,7 +151,7 @@ function assembleSingleFile(
   // Sidecar
   dataStartOffset = magic.length;
   const chunkOffsets = computeChunkOffsets(orderedChunks, dataStartOffset);
-  const meta = collectMetadata(state, orderedChunks, chunkOffsets);
+  const meta = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
   const metaBytes = serializeMetadata(meta, state.metadata.serialization);
 
   const dataFile = buildSingleFile(magic, new Uint8Array(0), orderedChunks, 'none');
@@ -200,6 +217,7 @@ function assemblePerChunkFiles(
   state: AppState,
   orderedChunks: EncodedChunk[],
   magic: Uint8Array,
+  variableStats?: Map<string, VariableStats>,
 ): VirtualFile[] {
   const files: VirtualFile[] = [];
 
@@ -227,15 +245,17 @@ function assemblePerChunkFiles(
     files.push({ name, bytes, traces });
   }
 
-  // Metadata sidecar for per-chunk
-  const chunkOffsets = orderedChunks.map((c) => ({
-    coords: c.coords,
-    offset: magic.length,
-    size: c.bytes.length,
-  }));
-  const meta = collectMetadata(state, orderedChunks, chunkOffsets);
-  const metaBytes = serializeMetadata(meta, state.metadata.serialization);
-  files.push({ name: 'metadata', bytes: metaBytes, traces: makeMetadataTraces(metaBytes.length) });
+  // Only include metadata sidecar when includeMetadata is true
+  if (state.write.includeMetadata !== false) {
+    const chunkOffsets = orderedChunks.map((c) => ({
+      coords: c.coords,
+      offset: magic.length,
+      size: c.bytes.length,
+    }));
+    const meta = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
+    const metaBytes = serializeMetadata(meta, state.metadata.serialization);
+    files.push({ name: 'metadata', bytes: metaBytes, traces: makeMetadataTraces(metaBytes.length) });
+  }
 
   return files;
 }

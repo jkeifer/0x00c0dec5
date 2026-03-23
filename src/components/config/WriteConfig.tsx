@@ -8,6 +8,7 @@ interface WriteConfigProps {
   onPartitioningChange: (partitioning: 'single' | 'per-chunk') => void;
   onMetadataPlacementChange: (placement: 'header' | 'footer' | 'sidecar') => void;
   onChunkOrderChange: (order: 'row-major' | 'column-major') => void;
+  onIncludeMetadataChange: (includeMetadata: boolean) => void;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -31,11 +32,26 @@ export function WriteConfig({
   onPartitioningChange,
   onMetadataPlacementChange,
   onChunkOrderChange,
+  onIncludeMetadataChange,
 }: WriteConfigProps) {
   const hexValid = isValidHex(write.magicNumber);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
+      {/* Include metadata — first control, most consequential */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+        <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Include Metadata</span>
+        <Radio
+          options={[
+            { value: 'yes', label: 'Yes' },
+            { value: 'no', label: 'No' },
+          ]}
+          value={write.includeMetadata ? 'yes' : 'no'}
+          onChange={(v) => onIncludeMetadataChange(v === 'yes')}
+          size="sm"
+        />
+      </div>
+
       {/* Magic number */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
         <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Magic Number</span>

@@ -43,6 +43,15 @@ export function formatValue(value: number, dtype: DtypeKey): string {
   return String(value);
 }
 
+/** Format a logical value for display (exact, no binary dtype artifacts). */
+export function formatLogicalValue(value: number): string {
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+  // Show exact decimal representation
+  return String(value);
+}
+
 function getDataViewSetter(view: DataView, dtype: DtypeKey): DataViewSetter {
   switch (dtype) {
     case 'int8':

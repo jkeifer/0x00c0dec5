@@ -1,5 +1,4 @@
-import { getDtype } from '../types/dtypes.ts';
-import type { DtypeKey } from '../types/dtypes.ts';
+import type { LogicalTypeConfig } from '../types/state.ts';
 
 const DEFAULT_GLOBAL_SEED = 0xc0dec5;
 
@@ -25,29 +24,51 @@ export function createPRNG(seed: number): () => number {
 }
 
 /**
- * Generate deterministic values for a variable.
- * Integer types: uniform across full type range.
- * Float types: uniform in [-1000, 1000].
+ * Generate deterministic logical values for a variable.
+ * Returns JS numbers with exact logical precision (no binary dtype artifacts).
+ *
+ * - integer: random integers in [min, max]
+ * - decimal: numbers with exactly `decimalPlaces` fractional digits in [min, max]
+ * - continuous: float64 numbers in [min, max] with up to `significantFigures` digits
  */
 export function generateValues(
   variableName: string,
-  dtype: DtypeKey,
+  logicalType: LogicalTypeConfig,
   count: number,
   globalSeed: number = DEFAULT_GLOBAL_SEED,
 ): number[] {
   const seed = hashSeed(variableName + ':' + globalSeed);
   const rng = createPRNG(seed);
-  const info = getDtype(dtype);
   const values: number[] = new Array(count);
 
-  if (info.float) {
-    for (let i = 0; i < count; i++) {
-      values[i] = rng() * 2000 - 1000;
+  switch (logicalType.type) {
+    case 'integer': {
+      const range = logicalType.max - logicalType.min + 1;
+      for (let i = 0; i < count; i++) {
+        values[i] = Math.floor(rng() * range) + logicalType.min;
+      }
+      break;
     }
-  } else {
-    const range = info.max - info.min + 1;
-    for (let i = 0; i < count; i++) {
-      values[i] = Math.floor(rng() * range) + info.min;
+    case 'decimal': {
+      const places = logicalType.decimalPlaces ?? 1;
+      const factor = Math.pow(10, places);
+      const minScaled = Math.round(logicalType.min * factor);
+      const maxScaled = Math.round(logicalType.max * factor);
+      const range = maxScaled - minScaled + 1;
+      for (let i = 0; i < count; i++) {
+        const scaled = Math.floor(rng() * range) + minScaled;
+        values[i] = scaled / factor;
+      }
+      break;
+    }
+    case 'continuous': {
+      const sigFigs = logicalType.significantFigures ?? 6;
+      const range = logicalType.max - logicalType.min;
+      for (let i = 0; i < count; i++) {
+        const raw = rng() * range + logicalType.min;
+        values[i] = Number(raw.toPrecision(sigFigs));
+      }
+      break;
     }
   }
 
