@@ -4,6 +4,9 @@ An interactive web tool for learning how data file formats are constructed.
 
 Every file format -- Parquet, GeoTIFF, Zarr, HDF5 -- solves the same fundamental problems: how to structure data, encode it efficiently, and provide enough metadata to read it back. This tool lets you discover those problems firsthand by building a format from scratch.
 
+> [!NOTE]
+> This tool is vibecoded. YMMV.
+
 ## How it works
 
 Define a dataset, then watch it transform step-by-step from human-readable values into raw bytes on disk. The transformation pipeline covers:
