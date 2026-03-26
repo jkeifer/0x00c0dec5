@@ -1,7 +1,7 @@
 import type { Chunk, ChunkVariable } from '../types/pipeline.ts';
 
 /** Minimal variable interface needed by chunking — decoupled from state.Variable. */
-interface ChunkableVariable {
+export interface ChunkableVariable {
   name: string;
   color: string;
   dtype: string;

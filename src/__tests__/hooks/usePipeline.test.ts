@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computePipelineStages } from '../../hooks/usePipeline.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
-import type { AppState, Variable } from '../../types/state.ts';
+import type { AppState } from '../../types/state.ts';
 
 function stateWith(overrides: Partial<AppState>): AppState {
   return { ...DEFAULT_STATE, ...overrides };

@@ -1,5 +1,6 @@
-import type { PipelineStage, ByteTrace, ChunkRegion } from '../../types/pipeline.ts';
+import type { PipelineStage, ByteTrace, ChunkRegion, VirtualFile } from '../../types/pipeline.ts';
 import { isChunkLevelTrace } from '../../engine/trace.ts';
+import { shannonEntropy } from '../../engine/codecs.ts';
 
 export interface TraceGroup {
   traceId: string;
@@ -159,4 +160,25 @@ export function buildChunkIndex(traces: ByteTrace[]): Map<string, number> {
     }
   }
   return index;
+}
+
+/** Format a byte count as a human-readable file size. */
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Convert a VirtualFile to a PipelineStage for use with HexView. */
+export function fileToStage(file: VirtualFile): PipelineStage {
+  return {
+    name: file.name,
+    bytes: file.bytes,
+    traces: file.traces,
+    chunkRegions: buildChunkRegions(file.traces),
+    stats: {
+      byteCount: file.bytes.length,
+      entropy: shannonEntropy(file.bytes),
+    },
+  };
 }

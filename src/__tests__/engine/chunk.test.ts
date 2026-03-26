@@ -8,7 +8,7 @@ import {
   coordsToFlatIndex,
   flatIndexToCoords,
 } from '../../engine/chunk.ts';
-import type { Variable } from '../../types/state.ts';
+import type { ChunkableVariable } from '../../engine/chunk.ts';
 
 describe('computeChunkGrid', () => {
   it('computes grid for evenly divisible shape', () => {
@@ -88,9 +88,9 @@ describe('coordsToFlatIndex / flatIndexToCoords roundtrip', () => {
 });
 
 describe('chunkData', () => {
-  const variables: Variable[] = [
-    { id: 'a', name: 'a', dtype: 'float32', color: '#f00' },
-    { id: 'b', name: 'b', dtype: 'uint8', color: '#0f0' },
+  const variables: ChunkableVariable[] = [
+    { name: 'a', dtype: 'float32', color: '#f00' },
+    { name: 'b', dtype: 'uint8', color: '#0f0' },
   ];
 
   it('produces a single chunk when chunkShape equals shape', () => {
@@ -110,7 +110,7 @@ describe('chunkData', () => {
     values.set('a', allValues);
     values.set('b', allValues.map((v) => v * 10));
 
-    const singleVar: Variable[] = [variables[0]];
+    const singleVar: ChunkableVariable[] = [variables[0]];
     const chunks = chunkData([10], [3], singleVar, values);
 
     const collected = chunks.flatMap((c) => c.variables[0].values);
@@ -135,7 +135,7 @@ describe('chunkData', () => {
     const chunkShape = [2, 2];
     const data = Array.from({ length: 16 }, (_, i) => i);
 
-    const singleVar: Variable[] = [{ id: 'x', name: 'x', dtype: 'int32', color: '#f00' }];
+    const singleVar: ChunkableVariable[] = [{ name: 'x', dtype: 'int32', color: '#f00' }];
     const values = new Map<string, number[]>();
     values.set('x', data);
 
@@ -174,9 +174,9 @@ describe('chunkData', () => {
 });
 
 describe('chunkDataPerVariable', () => {
-  const variables: Variable[] = [
-    { id: 'a', name: 'a', dtype: 'float32', color: '#f00' },
-    { id: 'b', name: 'b', dtype: 'uint8', color: '#0f0' },
+  const variables: ChunkableVariable[] = [
+    { name: 'a', dtype: 'float32', color: '#f00' },
+    { name: 'b', dtype: 'uint8', color: '#0f0' },
   ];
 
   it('produces one chunk per variable per spatial region', () => {
@@ -249,9 +249,9 @@ describe('chunkDataPerVariable', () => {
   it('handles 2-d shape', () => {
     const shape = [4, 4];
     const chunkShape = [2, 2];
-    const singleVar: Variable[] = [
-      { id: 'x', name: 'x', dtype: 'float32', color: '#f00' },
-      { id: 'y', name: 'y', dtype: 'uint8', color: '#0f0' },
+    const singleVar: ChunkableVariable[] = [
+      { name: 'x', dtype: 'float32', color: '#f00' },
+      { name: 'y', dtype: 'uint8', color: '#0f0' },
     ];
     const values = new Map<string, number[]>();
     values.set('x', Array.from({ length: 16 }, (_, i) => i));

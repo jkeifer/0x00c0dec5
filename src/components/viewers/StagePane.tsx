@@ -4,10 +4,10 @@ import type { PipelineStage, ReadFileResult } from '../../types/pipeline.ts';
 import type { VirtualFile } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
 import { HexView } from './HexView.tsx';
+import { WriteHexView } from './WriteHexView.tsx';
 import { FlatView } from './FlatView.tsx';
 import { TableView } from './TableView.tsx';
 import { GridView } from './GridView.tsx';
-import { WriteView } from './WriteView.tsx';
 
 const VALUES_VIEW_MODES = [
   { value: 'table', label: 'Table' },
@@ -144,7 +144,7 @@ export function StagePane({
     switch (effectiveView) {
       case 'hex':
         if (isWriteStage && files && files.length >= 1) {
-          return <WriteView files={files} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
+          return <WriteHexView files={files} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
         }
         return <HexView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
       case 'flat':

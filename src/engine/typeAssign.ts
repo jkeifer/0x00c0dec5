@@ -21,7 +21,7 @@ export interface TypeAssignResult {
  */
 export function assignType(
   values: number[],
-  logicalType: LogicalTypeConfig,
+  _logicalType: LogicalTypeConfig,
   assignment: TypeAssignment,
 ): TypeAssignResult {
   const outDtype = assignment.storageDtype;

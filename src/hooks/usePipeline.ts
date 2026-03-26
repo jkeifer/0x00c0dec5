@@ -105,7 +105,7 @@ export function computePipelineStages(state: AppState): PipelineResult {
 
     // Read back the typed values for use in chunking
     const typedVals = Array.from(
-      new (dtypeInfo.TypedArray)(result.bytes.buffer, result.bytes.byteOffset, vals.length)
+      new (dtypeInfo.TypedArray)(result.bytes.buffer as ArrayBuffer, result.bytes.byteOffset, vals.length)
     );
     typedVariableValues.set(v.name, typedVals);
 

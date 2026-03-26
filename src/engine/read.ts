@@ -6,7 +6,6 @@ import { getDtype } from '../types/dtypes.ts';
 import { bytesToValues } from './elements.ts';
 import { deserializeMetadata, type MetadataEntry } from './metadata.ts';
 import { reverseCodecPipeline } from './decode.ts';
-import { reverseTypeAssignment } from './typeAssign.ts';
 
 /**
  * Read a set of virtual files produced by the Write step and attempt
