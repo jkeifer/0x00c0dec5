@@ -6,6 +6,7 @@ import { getDtype } from '../types/dtypes.ts';
 import { bytesToValues } from './elements.ts';
 import { deserializeMetadata, type MetadataEntry } from './metadata.ts';
 import { reverseCodecPipeline } from './decode.ts';
+import { hexToBytes } from './bytes.ts';
 
 /**
  * Read a set of virtual files produced by the Write step and attempt
@@ -204,16 +205,6 @@ function makeFailure(totalBytes: number): ReadFileResult {
       `and interleaved, and what codecs were applied — in order to reverse the encoding and reconstruct values.\n\n` +
       `Enable "Include metadata" in the Write step to make this file self-describing.`,
   };
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const cleaned = hex.replace(/\s/g, '');
-  if (cleaned.length % 2 !== 0 || cleaned.length === 0) return new Uint8Array(0);
-  const bytes = new Uint8Array(cleaned.length / 2);
-  for (let i = 0; i < cleaned.length; i += 2) {
-    bytes[i / 2] = parseInt(cleaned.substring(i, i + 2), 16);
-  }
-  return bytes;
 }
 
 function stripMagic(fileBytes: Uint8Array, magic: Uint8Array): Uint8Array {

@@ -136,10 +136,19 @@ export function reducer(state: AppState, action: AppAction): AppState {
       });
 
     // ─── Chunk ───────────────────────────────────────────────────────
-    case 'SET_CHUNK_SHAPE':
+    case 'SET_CHUNK_SHAPE': {
+      const newChunkShape = action.chunkShape;
+      if (
+        newChunkShape.length === 0 ||
+        newChunkShape.length !== state.shape.length ||
+        newChunkShape.some((d) => d <= 0 || !Number.isInteger(d))
+      ) {
+        return state;
+      }
       return produce(state, (draft) => {
-        draft.chunkShape = action.chunkShape;
+        draft.chunkShape = newChunkShape.map((d, i) => Math.min(d, draft.shape[i]));
       });
+    }
 
     // ─── Interleave ──────────────────────────────────────────────────
     case 'SET_INTERLEAVING':

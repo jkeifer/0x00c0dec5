@@ -26,6 +26,11 @@ function isValidHex(v: string): boolean {
   return /^[0-9a-fA-F]*$/.test(v) && v.length % 2 === 0;
 }
 
+const warningTextStyle: React.CSSProperties = {
+  fontSize: fontSizes.xs,
+  color: colors.warning,
+};
+
 export function WriteConfig({
   write,
   onMagicChange,
@@ -62,9 +67,14 @@ export function WriteConfig({
           style={{
             ...inputStyle,
             fontFamily: fonts.mono,
-            borderColor: hexValid ? colors.border : colors.paneAccentRight,
+            borderColor: hexValid ? colors.border : colors.warning,
           }}
         />
+        {!hexValid && (
+          <span style={warningTextStyle}>
+            Invalid hex — non-hex characters are ignored
+          </span>
+        )}
       </div>
 
       {/* Partitioning */}

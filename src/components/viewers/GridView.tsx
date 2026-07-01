@@ -63,22 +63,19 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
   const [selectedVarIdx, setSelectedVarIdx] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
 
-  const selectedVar = variables[selectedVarIdx] ?? variables[0];
-  if (!selectedVar) {
-    return (
-      <div style={{ padding: spacing.md, color: colors.textTertiary }}>
-        No variables defined
-      </div>
-    );
-  }
+  // Clamp to the valid range so the active tab and displayed data always agree,
+  // even after a variable is removed and selectedVarIdx is now out of range.
+  const effectiveVarIdx = Math.min(Math.max(selectedVarIdx, 0), variables.length - 1);
+  const selectedVar = variables[effectiveVarIdx];
 
   // Compute diff data for the selected variable
-  const origVarVals = showDiff && diffValues ? diffValues.get(selectedVar.name) : undefined;
+  const origVarVals = showDiff && diffValues && selectedVar ? diffValues.get(selectedVar.name) : undefined;
 
   // Reconstruct values for selected variable
   const { values, min, max } = useMemo(() => {
+    if (!selectedVar) return { values: [] as number[], min: Infinity, max: -Infinity };
     let offset = 0;
-    for (let i = 0; i < selectedVarIdx && i < variables.length; i++) {
+    for (let i = 0; i < effectiveVarIdx && i < variables.length; i++) {
       const dtype: DtypeKey = isLogicalValues ? 'float64' : variables[i].typeAssignment.storageDtype;
       const info = getDtype(dtype);
       const totalElements = computeTotalElements(stage, variables, isLogicalValues);
@@ -99,7 +96,7 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
     }
 
     return { values: vals, min: mn, max: mx };
-  }, [stage, variables, selectedVarIdx, selectedVar, isLogicalValues]);
+  }, [stage, variables, effectiveVarIdx, selectedVar, isLogicalValues]);
 
   // Determine grid dimensions from shape
   const rows = shape.length >= 2 ? shape[0] : 1;
@@ -109,7 +106,7 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
 
   // Cross-pane auto-scroll
   useEffect(() => {
-    if (!hoveredTraceId || hoverSource === paneId || !gridRef.current) return;
+    if (!hoveredTraceId || hoverSource === paneId || !gridRef.current || !selectedVar) return;
     const colonIdx = hoveredTraceId.indexOf(':');
     if (colonIdx < 0) return;
     const varName = hoveredTraceId.slice(0, colonIdx);
@@ -125,7 +122,15 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
     if (cell) {
       cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }
-  }, [hoveredTraceId, hoverSource, paneId, selectedVar.name, shape]);
+  }, [hoveredTraceId, hoverSource, paneId, selectedVar, shape]);
+
+  if (!selectedVar) {
+    return (
+      <div style={{ padding: spacing.md, color: colors.textTertiary }}>
+        No variables defined
+      </div>
+    );
+  }
 
   return (
     <div
@@ -152,9 +157,9 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
             key={v.id}
             onClick={() => setSelectedVarIdx(idx)}
             style={{
-              background: idx === selectedVarIdx ? v.color + '33' : 'transparent',
-              color: idx === selectedVarIdx ? v.color : colors.textSecondary,
-              border: `1px solid ${idx === selectedVarIdx ? v.color + '66' : colors.borderSubtle}`,
+              background: idx === effectiveVarIdx ? v.color + '33' : 'transparent',
+              color: idx === effectiveVarIdx ? v.color : colors.textSecondary,
+              border: `1px solid ${idx === effectiveVarIdx ? v.color + '66' : colors.borderSubtle}`,
               borderRadius: 3,
               padding: `2px ${spacing.sm}px`,
               fontSize: fontSizes.sm,

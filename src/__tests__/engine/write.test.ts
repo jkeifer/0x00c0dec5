@@ -43,8 +43,9 @@ describe('hexToBytes', () => {
     expect(Array.from(bytes)).toEqual([0x00, 0xc0, 0xde, 0xc5]);
   });
 
-  it('throws on odd-length hex', () => {
-    expect(() => hexToBytes('ABC')).toThrow();
+  it('tolerates odd-length hex by dropping the trailing nibble', () => {
+    const bytes = hexToBytes('ABC');
+    expect(Array.from(bytes)).toEqual([0xab]);
   });
 });
 

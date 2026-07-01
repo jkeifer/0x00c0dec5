@@ -1,19 +1,9 @@
 import type { AppState } from '../types/state.ts';
 import type { EncodedChunk, VirtualFile, ByteTrace, VariableStats } from '../types/pipeline.ts';
 import { collectMetadata, serializeMetadata } from './metadata.ts';
+import { hexToBytes } from './bytes.ts';
 
-/** Parse a hex string (e.g., "00C0DEC5") into bytes. */
-export function hexToBytes(hex: string): Uint8Array {
-  const cleaned = hex.replace(/\s/g, '');
-  if (cleaned.length % 2 !== 0) {
-    throw new Error('Hex string must have even length');
-  }
-  const bytes = new Uint8Array(cleaned.length / 2);
-  for (let i = 0; i < cleaned.length; i += 2) {
-    bytes[i / 2] = parseInt(cleaned.substring(i, i + 2), 16);
-  }
-  return bytes;
-}
+export { hexToBytes };
 
 /**
  * Order chunks according to the specified ordering.

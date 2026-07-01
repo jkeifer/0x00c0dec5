@@ -8,6 +8,7 @@ import { Sidebar } from './Sidebar.tsx';
 import { PipelineStrip } from './PipelineStrip.tsx';
 import { StagePane } from '../viewers/StagePane.tsx';
 import { HoverBar } from '../shared/HoverBar.tsx';
+import { ErrorBoundary } from '../shared/ErrorBoundary.tsx';
 import { bytesToValues } from '../../engine/elements.ts';
 
 function MainLayout() {
@@ -127,7 +128,9 @@ export function App() {
     <>
       <Header />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <MainLayout />
+        <ErrorBoundary>
+          <MainLayout />
+        </ErrorBoundary>
       </div>
     </>
   );

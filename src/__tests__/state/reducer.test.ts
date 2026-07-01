@@ -165,9 +165,51 @@ describe('UPDATE_VARIABLE', () => {
 
 describe('SET_CHUNK_SHAPE', () => {
   it('sets chunk shape', () => {
-    const state = makeState({ chunkShape: [32] });
+    const state = makeState({ shape: [32], chunkShape: [32] });
     const result = reducer(state, { type: 'SET_CHUNK_SHAPE', chunkShape: [8] });
     expect(result.chunkShape).toEqual([8]);
+  });
+
+  it('clamps a chunk dim larger than the shape dim', () => {
+    const state = makeState({ shape: [32], chunkShape: [32] });
+    const result = reducer(state, { type: 'SET_CHUNK_SHAPE', chunkShape: [999] });
+    expect(result.chunkShape).toEqual([32]);
+  });
+
+  it('clamps per-dimension in a multi-dim shape', () => {
+    const state = makeState({ shape: [10, 8], chunkShape: [10, 8] });
+    const result = reducer(state, { type: 'SET_CHUNK_SHAPE', chunkShape: [999, 3] });
+    expect(result.chunkShape).toEqual([10, 3]);
+  });
+
+  it('rejects an empty chunk shape', () => {
+    const state = makeState({ shape: [32], chunkShape: [16] });
+    const result = reducer(state, { type: 'SET_CHUNK_SHAPE', chunkShape: [] });
+    expect(result).toBe(state);
+  });
+
+  it('rejects a zero chunk dim', () => {
+    const state = makeState({ shape: [32], chunkShape: [16] });
+    const result = reducer(state, { type: 'SET_CHUNK_SHAPE', chunkShape: [0] });
+    expect(result).toBe(state);
+  });
+
+  it('rejects a negative chunk dim', () => {
+    const state = makeState({ shape: [32], chunkShape: [16] });
+    const result = reducer(state, { type: 'SET_CHUNK_SHAPE', chunkShape: [-4] });
+    expect(result).toBe(state);
+  });
+
+  it('rejects a non-integer chunk dim', () => {
+    const state = makeState({ shape: [32], chunkShape: [16] });
+    const result = reducer(state, { type: 'SET_CHUNK_SHAPE', chunkShape: [4.5] });
+    expect(result).toBe(state);
+  });
+
+  it('rejects a chunk shape whose length differs from shape length', () => {
+    const state = makeState({ shape: [10, 8], chunkShape: [10, 8] });
+    const result = reducer(state, { type: 'SET_CHUNK_SHAPE', chunkShape: [4] });
+    expect(result).toBe(state);
   });
 });
 
