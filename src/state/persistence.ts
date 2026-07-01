@@ -135,14 +135,14 @@ function isValidVariable(v: unknown): v is Variable {
 function validateState(state: AppState): AppState {
   // variables: drop invalid entries
   if (!Array.isArray(state.variables)) {
-    state.variables = DEFAULT_STATE.variables;
+    state.variables = structuredClone(DEFAULT_STATE.variables);
   } else {
     state.variables = state.variables.filter(isValidVariable);
   }
 
   // shape: must be an array of positive integers, else fall back to defaults entirely
   if (!isPositiveIntArray(state.shape)) {
-    return { ...DEFAULT_STATE, dataModel: state.dataModel };
+    return { ...structuredClone(DEFAULT_STATE), dataModel: state.dataModel };
   }
 
   // chunkShape: clamp/pad to shape's length and per-dimension max, mirroring SET_SHAPE
@@ -218,7 +218,9 @@ export function loadState(model: AppState['dataModel']): AppState | null {
     if (migrated === null) return null;
     if (!isPlainObject(migrated)) return null;
 
-    const merged = deepMergeDefaults(DEFAULT_STATE, migrated, TOP_LEVEL_DICT_KEYS);
+    // Clone the defaults so nothing default-derived in the returned state aliases
+    // DEFAULT_STATE's own arrays/objects — callers may mutate the loaded state.
+    const merged = deepMergeDefaults(structuredClone(DEFAULT_STATE), migrated, TOP_LEVEL_DICT_KEYS);
     const validated = validateState(merged);
 
     // The requested model always wins, regardless of what was persisted.

@@ -11,7 +11,7 @@ interface ReadStatusProps {
 export function ReadStatus({ readResult, showDiff, onShowDiffChange }: ReadStatusProps) {
   if (!readResult.success) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
+      <div data-testid="read-status" style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
           <span style={{ color: '#e06c75', fontSize: fontSizes.md, fontWeight: 700 }}>&#x2717;</span>
           <span style={{ color: '#e06c75', fontSize: fontSizes.sm, fontWeight: 600 }}>Read failed</span>
@@ -38,7 +38,7 @@ export function ReadStatus({ readResult, showDiff, onShowDiffChange }: ReadStatu
   const lossyCount = readResult.lossyVariables.size;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
+    <div data-testid="read-status" style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
         <span style={{ color: '#98c379', fontSize: fontSizes.md, fontWeight: 700 }}>&#x2713;</span>
         <span style={{ color: '#98c379', fontSize: fontSizes.sm, fontWeight: 600 }}>

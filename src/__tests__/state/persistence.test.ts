@@ -327,3 +327,58 @@ describe('loadState — per-model storage keys', () => {
     expect(loaded!.shape).toEqual([2, 2]);
   });
 });
+
+// ─── Round trip from the current DEFAULT_STATE ────────────────────────
+
+describe('loadState — round trip from DEFAULT_STATE', () => {
+  it('a save of DEFAULT_STATE loads back deep-equal', () => {
+    saveState(DEFAULT_STATE);
+    const loaded = loadState('tabular');
+    expect(loaded).not.toBeNull();
+    expect(loaded).toEqual(DEFAULT_STATE);
+  });
+});
+
+// ─── Shared mutable references with DEFAULT_STATE ─────────────────────
+//
+// loadState should always return data structures independent of DEFAULT_STATE,
+// so that a caller mutating the loaded state (as the app does via immer-free
+// direct mutation in some places, or simply by accident) can never corrupt the
+// shared defaults object for the rest of the session.
+
+describe('loadState — must not share mutable references with DEFAULT_STATE', () => {
+  it('mutating the variables array of a normal round-trip load leaves DEFAULT_STATE untouched', () => {
+    saveState(DEFAULT_STATE);
+    const loaded = loadState('tabular');
+    expect(loaded).not.toBeNull();
+    const defaultLengthBefore = DEFAULT_STATE.variables.length;
+    loaded!.variables.push(makeVariable({ id: 'zzz', name: 'zzz' }));
+    expect(DEFAULT_STATE.variables.length).toBe(defaultLengthBefore);
+  });
+
+  // Regression for finding NF-1 (fixed in Phase 1): loadState fallback paths must
+  // never return arrays/objects aliased with DEFAULT_STATE itself — mutation of a
+  // loaded state would otherwise corrupt the app's defaults for the session.
+  it('invalid-shape fallback does not alias DEFAULT_STATE.variables', () => {
+    const bad = { ...DEFAULT_STATE, shape: [0] };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(bad));
+    const loaded = loadState('tabular');
+    expect(loaded).not.toBeNull();
+    const defaultLengthBefore = DEFAULT_STATE.variables.length;
+    loaded!.variables.push(makeVariable({ id: 'zzz', name: 'zzz' }));
+    expect(DEFAULT_STATE.variables.length).toBe(defaultLengthBefore);
+  });
+
+  // Regression for finding NF-1 (fixed in Phase 1): merge fallbacks must clone
+  // default-derived values, including open-ended dict entries like fieldPipelines.
+  it('missing-fieldPipelines merge does not alias DEFAULT_STATE.fieldPipelines arrays', () => {
+    const partial: Record<string, unknown> = { ...DEFAULT_STATE };
+    delete partial.fieldPipelines;
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(partial));
+    const loaded = loadState('tabular');
+    expect(loaded).not.toBeNull();
+    const before = [...DEFAULT_STATE.fieldPipelines.temperature];
+    loaded!.fieldPipelines.temperature.push({ codec: 'delta', params: { order: 1 } });
+    expect(DEFAULT_STATE.fieldPipelines.temperature).toEqual(before);
+  });
+});

@@ -119,6 +119,7 @@ export function TableView({ stage, variables, shape, paneId, chunkTraceMap, trac
     <div
       ref={parentRef}
       onMouseLeave={clearHover}
+      data-testid="table-view"
       style={{
         height: '100%',
         overflow: 'auto',
@@ -238,6 +239,7 @@ export function TableView({ stage, variables, shape, paneId, chunkTraceMap, trac
                     key={col.variable.id}
                     onMouseEnter={() => setHover(traceId, chunkId, paneId)}
                     title={diffTitle}
+                    data-testid={`table-cell-${col.variable.name}-${rowIdx}`}
                     style={{
                       width: colWidth,
                       flexShrink: 0,

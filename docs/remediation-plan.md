@@ -181,6 +181,15 @@ Estimated removable duplication: **500–700 lines**.
 - Codec add/reorder/remove with correct dtype-flow annotations; multi-file per-chunk write view.
 - Diff view flags lossy float32 type assignments.
 
+### 1.11 Post-review findings (discovered during phase execution)
+
+| ID | Severity | Finding | Status |
+|----|----------|---------|--------|
+| NF-1 | MAJOR | **Phase 0's persistence fallbacks aliased `DEFAULT_STATE`.** `validateState`'s invalid-shape fallback shallow-spread `DEFAULT_STATE`, and `deepMergeDefaults`' dict-key/missing-field branches returned default values by reference — mutating a loaded state could permanently corrupt the compiled-in defaults for the session (verified: pushing to a loaded `variables` array grew `DEFAULT_STATE.variables`). | **Fixed in Phase 1** (`structuredClone` at all three fallback sites; regression tests in `persistence.test.ts`). |
+| NF-2 | MINOR | **NaN poisons `assignType` min/max tracking silently.** Comparisons with NaN are always false, so `min`/`max` stay at their ±Infinity sentinels while `mean` goes NaN — `variable_statistics` metadata is corrupt for any NaN-bearing dataset. `src/engine/typeAssign.ts` stats loop. | `it.fails` in `typeassign-edges.test.ts`; fix in task 2.14. |
+| NF-3 | MINOR | **NaN spuriously flagged as "rounded" for float dtypes.** `readBack[i] !== expected` is always true for NaN↔NaN, so losslessly-stored NaN marks the variable lossy. | `it.fails` in `typeassign-edges.test.ts`; fix in task 2.14. |
+| NF-4 | MINOR | **NaN silently becomes 0 for integer storage dtypes.** `DataView.setInt32(NaN)` stores 0 without error — indistinguishable from a real zero, with no signal of what happened. | `it.fails` in `typeassign-edges.test.ts`; fix in task 2.14. |
+
 ---
 
 ## Part 2: Pinned Design Decisions & Interface Contracts
@@ -417,7 +426,7 @@ Write the missing tests **before** fixing engine bugs, so DC-1, DC-2, DC-3, RP-1
 captured as failing tests (mark with `.fails` or `todo` until Phase 2 lands, so CI stays
 meaningful). This inverts the current situation where 314 green tests certify a broken app.
 
-- [ ] **1.1 End-to-end round-trip matrix** (new `src/__tests__/engine/roundtrip.matrix.test.ts`):
+- [x] **1.1 End-to-end round-trip matrix** (new `src/__tests__/engine/roundtrip.matrix.test.ts`):
       programmatically run generate → typeAssign → chunk → linearize → encode → metadata →
       write → read → compare across the matrix:
       - shapes: `[7]`, `[4,4]`, `[3,5]` (non-square, non-power-of-2)
@@ -436,17 +445,17 @@ meaningful). This inverts the current situation where 314 green tests certify a 
       Don't run the full cross-product (~thousands); cover each axis against a base config
       plus ~10 hand-picked nasty combinations. Assert exact equality for lossless configs,
       bounded error for lossy ones, and that `lossyVariables` is truthful.
-- [ ] **1.2 Targeted engine gap tests**: delta unsigned/decreasing/near-range/order-3/empty;
+- [x] **1.2 Targeted engine gap tests**: delta unsigned/decreasing/near-range/order-3/empty;
       float64 keepBits 19/20/21; LZ offset > 255 and incompressible input; shuffle with
       mismatched elementSize round-trip; NaN through `assignType`; custom metadata with
       braces-in-values, auto-key shadowing, unicode keys through **read** (not just the
       serializer); magic number odd/non-hex/empty through the pipeline.
-- [ ] **1.3 Reducer/persistence gap tests**: `SET_DATA_MODEL` (with mocked storage),
+- [x] **1.3 Reducer/persistence gap tests**: `SET_DATA_MODEL` (with mocked storage),
       duplicate variable names, rename-to-collision (captures SW-1 as failing).
-- [ ] **1.4 Add `data-testid` attributes** per CLAUDE.md conventions to: viewer containers,
+- [x] **1.4 Add `data-testid` attributes** per CLAUDE.md conventions to: viewer containers,
       table cells, hex bytes, hover bar, pipeline stage nodes, pane containers + dropdowns,
       view-mode radios, sidebar sections, codec steps + warning icons. (UI-13)
-- [ ] **1.5 Promote the smoke test to a regression harness.** The review left scripts in
+- [x] **1.5 Promote the smoke test to a regression harness.** The review left scripts in
       `tests/ui/smoke*.mjs` and screenshots in `tests/ui/screenshots/`. Rework them onto the
       new testids as named scenario files — `tests/ui/scenario-crash-inputs.mjs`,
       `scenario-placement-matrix.mjs`, `scenario-hover-linking.mjs`,
@@ -505,6 +514,11 @@ The theme: `read.ts` gets *smaller* and correct at the same time. Target ≤ ~35
 - [ ] **2.12 Delete dead code**: `reverseTypeAssignment` inline copy (call the export from
       `read.ts` or delete the export), the unreachable size-changing trace propagation in
       `trace.ts` if still unreachable.
+- [ ] **2.14 NaN handling in `assignType` (NF-2/3/4).** Track min/max with NaN-aware
+      comparisons (skip NaN, count it separately); use `Number.isNaN`-aware comparison for
+      rounded-detection so float-stored NaN isn't flagged lossy; count NaN→0 integer-storage
+      conversions explicitly in `VariableStats` (`nanCount`) so the UI can surface it. Flip
+      the three `it.fails` in `typeassign-edges.test.ts`.
 - [ ] **2.13 Chunk index toggle (D3).** Add `metadata.includeChunkIndex` to state (+ reducer
       patch action, default via the 0.4 loader) and the Metadata-sidebar control; omit
       `chunk_index` from collected metadata when off; implement the computed-offsets fallback
@@ -513,7 +527,7 @@ The theme: `read.ts` gets *smaller* and correct at the same time. Target ≤ ~35
       why-indexes-exist message.
 
 **Execution**: serial chain on `read.ts`/`write.ts`: 2.1 → 2.2 → 2.13 → 2.3 → 2.4 → 2.9 →
-2.10. Parallel-safe alongside that chain: {2.5+2.6} (codecs + lossy flag), {2.7} (typeAssign),
+2.10. Parallel-safe alongside that chain: {2.5+2.6} (codecs + lossy flag), {2.7+2.14} (typeAssign),
 {2.8} (write convergence — coordinate with the chain owner), {2.11} (metadata editor), {2.12}.
 
 **Acceptance gate**: the Phase 1 matrix passes fully, including the D1/D3 axes — every

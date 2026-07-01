@@ -1,7 +1,33 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { reducer } from '../../state/useAppState.ts';
 import { DEFAULT_STATE, type AppState, type Variable } from '../../types/state.ts';
 import type { CodecStep } from '../../types/codecs.ts';
+
+/** Minimal Map-backed localStorage mock — the vitest node environment has no localStorage.
+ * (Mirrors the mock in persistence.test.ts — SET_DATA_MODEL calls saveState/loadState
+ * directly inside the reducer, see finding SW-4.) */
+class MockStorage {
+  private store = new Map<string, string>();
+  getItem(key: string): string | null {
+    return this.store.has(key) ? this.store.get(key)! : null;
+  }
+  setItem(key: string, value: string): void {
+    this.store.set(key, value);
+  }
+  removeItem(key: string): void {
+    this.store.delete(key);
+  }
+  clear(): void {
+    this.store.clear();
+  }
+}
+
+const TABULAR_KEY = '0x00c0dec5-state-tabular';
+const ARRAY_KEY = '0x00c0dec5-state-array';
+
+beforeEach(() => {
+  globalThis.localStorage = new MockStorage() as unknown as Storage;
+});
 
 function makeState(overrides: Partial<AppState> = {}): AppState {
   return { ...DEFAULT_STATE, ...overrides };
@@ -79,6 +105,23 @@ describe('ADD_VARIABLE', () => {
     const result = reducer(state, { type: 'ADD_VARIABLE', variable: v2 });
     expect(result.variables).toHaveLength(2);
     expect(result.fieldPipelines['pressure']).toEqual([]);
+  });
+
+  // KNOWN BUG SW-1 — flip when Phase 3.1 lands (id-keyed pipelines)
+  it.fails('adding a variable whose name collides with an existing one preserves the existing pipeline', () => {
+    const existingSteps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    const v1 = makeVariable({ id: 'v1', name: 'temp' });
+    const state = makeState({
+      variables: [v1],
+      fieldPipelines: { temp: existingSteps },
+    });
+    // A second variable with a different id but the SAME name.
+    const v2 = makeVariable({ id: 'v2', name: 'temp', color: '#61afef' });
+    const result = reducer(state, { type: 'ADD_VARIABLE', variable: v2 });
+    expect(result.variables).toHaveLength(2);
+    // fieldPipelines is keyed by name, so the new variable's empty pipeline
+    // clobbers the existing one under the shared 'temp' key.
+    expect(result.fieldPipelines['temp']).toEqual(existingSteps);
   });
 });
 
@@ -158,6 +201,52 @@ describe('UPDATE_VARIABLE', () => {
       changes: { name: 'x' },
     });
     expect(result).toBe(state);
+  });
+
+  // KNOWN BUG SW-1 — flip when Phase 3.1 lands (id-keyed pipelines)
+  it.fails('renaming a variable to another variable\'s name preserves the target\'s pipeline', () => {
+    const a = makeVariable({ id: 'a', name: 'alpha' });
+    const b = makeVariable({ id: 'b', name: 'beta', color: '#61afef' });
+    const bSteps: CodecStep[] = [{ codec: 'rle', params: {} }];
+    const state = makeState({
+      variables: [a, b],
+      fieldPipelines: { alpha: [], beta: bSteps },
+    });
+    const result = reducer(state, {
+      type: 'UPDATE_VARIABLE',
+      id: 'a',
+      changes: { name: 'beta' },
+    });
+    expect(result.variables.find((v) => v.id === 'a')!.name).toBe('beta');
+    // Renaming 'alpha' -> 'beta' re-keys fieldPipelines['alpha'] into
+    // fieldPipelines['beta'], clobbering b's existing rle pipeline.
+    expect(result.fieldPipelines['beta']).toEqual(bSteps);
+  });
+
+  // KNOWN BUG SW-1 — flip when Phase 3.1 lands (id-keyed pipelines)
+  it.fails('renaming away after a collision does not resurrect or lose the collided-with pipeline', () => {
+    const a = makeVariable({ id: 'a', name: 'alpha' });
+    const b = makeVariable({ id: 'b', name: 'beta', color: '#61afef' });
+    const bSteps: CodecStep[] = [{ codec: 'rle', params: {} }];
+    const state = makeState({
+      variables: [a, b],
+      fieldPipelines: { alpha: [], beta: bSteps },
+    });
+    // First, collide: rename a -> 'beta' (clobbers b's pipeline under the shared key).
+    const collided = reducer(state, {
+      type: 'UPDATE_VARIABLE',
+      id: 'a',
+      changes: { name: 'beta' },
+    });
+    // Then rename a away again to something else entirely.
+    const result = reducer(collided, {
+      type: 'UPDATE_VARIABLE',
+      id: 'a',
+      changes: { name: 'gamma' },
+    });
+    expect(result.variables.find((v) => v.id === 'a')!.name).toBe('gamma');
+    // b's pipeline should have survived the whole collide/uncollide sequence.
+    expect(result.fieldPipelines['beta']).toEqual(bSteps);
   });
 });
 
@@ -433,5 +522,57 @@ describe('SET_SHOW_DIFF', () => {
     });
     const result = reducer(state, { type: 'SET_SHOW_DIFF', showDiff: false });
     expect(result.ui.showDiff).toBe(false);
+  });
+});
+
+// ─── SET_DATA_MODEL ────────────────────────────────────────────────
+//
+// SET_DATA_MODEL performs localStorage I/O (saveState/loadState) directly
+// inside the reducer body — finding SW-4, a known design smell (reducers
+// should be pure). These tests document/verify the CURRENT behavior, not
+// endorse the pattern; localStorage is stubbed the same way persistence.test.ts
+// does it.
+
+describe('SET_DATA_MODEL', () => {
+  it('is a no-op when switching to the already-active model', () => {
+    const state = makeState({ dataModel: 'tabular' });
+    const result = reducer(state, { type: 'SET_DATA_MODEL', model: 'tabular' });
+    expect(result).toBe(state);
+    // No save should have happened for a no-op switch.
+    expect(localStorage.getItem(TABULAR_KEY)).toBeNull();
+  });
+
+  it('saves the current state under the OLD model key when switching', () => {
+    const state = makeState({ dataModel: 'tabular', shape: [99] });
+    reducer(state, { type: 'SET_DATA_MODEL', model: 'array' });
+    const saved = localStorage.getItem(TABULAR_KEY);
+    expect(saved).not.toBeNull();
+    expect(JSON.parse(saved!).shape).toEqual([99]);
+    // Nothing should have been written to the array key by this switch.
+    expect(localStorage.getItem(ARRAY_KEY)).toBeNull();
+  });
+
+  it('switching to a model with no saved state yields defaults with the new dataModel', () => {
+    const state = makeState({ dataModel: 'tabular' });
+    const result = reducer(state, { type: 'SET_DATA_MODEL', model: 'array' });
+    expect(result).toEqual({ ...DEFAULT_STATE, dataModel: 'array' });
+  });
+
+  it('switching back to a model restores its previously saved state', () => {
+    const tabularState = makeState({ dataModel: 'tabular', shape: [77] });
+    // Switch away: tabular gets saved, array has no saved state -> defaults.
+    const arrayState = reducer(tabularState, { type: 'SET_DATA_MODEL', model: 'array' });
+    expect(arrayState.dataModel).toBe('array');
+
+    // Modify the array-side state, then switch back to tabular.
+    const modifiedArrayState = { ...arrayState, shape: [4, 4] };
+    const backToTabular = reducer(modifiedArrayState, { type: 'SET_DATA_MODEL', model: 'tabular' });
+    expect(backToTabular.dataModel).toBe('tabular');
+    expect(backToTabular.shape).toEqual([77]);
+
+    // And switching to array again should restore the modified array state.
+    const backToArray = reducer(backToTabular, { type: 'SET_DATA_MODEL', model: 'array' });
+    expect(backToArray.dataModel).toBe('array');
+    expect(backToArray.shape).toEqual([4, 4]);
   });
 });

@@ -13,6 +13,21 @@ import type { VirtualFile, ReadFileResult, VariableStats } from '../../types/pip
 
 const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Type Assignment', 'Codecs', 'Metadata', 'Write', 'Read'] as const;
 
+// CLAUDE.md's "Data-testid conventions" enumerates: schema, chunk, interleave, codecs,
+// metadata, write, read. "Type Assignment" is a section that postdates that list (see
+// docs/remediation-plan.md §1.9 spec/docs divergence); it is given its own non-colliding
+// slug ("typing") rather than reusing "codecs", since reusing an id would break uniqueness.
+const SECTION_TESTIDS: Record<(typeof SECTIONS)[number], string> = {
+  Schema: 'schema',
+  Chunk: 'chunk',
+  Interleave: 'interleave',
+  'Type Assignment': 'typing',
+  Codecs: 'codecs',
+  Metadata: 'metadata',
+  Write: 'write',
+  Read: 'read',
+};
+
 const sectionLabelStyle: React.CSSProperties = {
   fontSize: fontSizes.sm,
   color: colors.textSecondary,
@@ -180,7 +195,7 @@ export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
       }}
     >
       {SECTIONS.map((section, i) => (
-        <div key={section}>
+        <div key={section} data-testid={`sidebar-section-${SECTION_TESTIDS[section]}`}>
           {i > 0 && <div style={dividerStyle} />}
           <div style={sectionLabelStyle}>{section}</div>
           {renderSection(section)}

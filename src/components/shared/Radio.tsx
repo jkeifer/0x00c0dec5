@@ -10,9 +10,10 @@ interface RadioProps {
   value: string;
   onChange: (value: string) => void;
   size?: 'sm' | 'md';
+  testIdPrefix?: string;
 }
 
-export function Radio({ options, value, onChange, size = 'md' }: RadioProps) {
+export function Radio({ options, value, onChange, size = 'md', testIdPrefix }: RadioProps) {
   const fontSize = size === 'sm' ? fontSizes.xs : fontSizes.sm;
   const pad = size === 'sm' ? `${spacing.xs - 1}px ${spacing.sm - 2}px` : `${spacing.xs}px ${spacing.sm}px`;
 
@@ -31,6 +32,7 @@ export function Radio({ options, value, onChange, size = 'md' }: RadioProps) {
           <button
             key={opt.value}
             onClick={() => onChange(opt.value)}
+            data-testid={testIdPrefix ? `${testIdPrefix}-${opt.value}` : undefined}
             style={{
               border: 'none',
               outline: 'none',

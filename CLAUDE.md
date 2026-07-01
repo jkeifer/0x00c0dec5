@@ -116,6 +116,44 @@ testHoverLinking().catch(console.error);
 - **After implementing resizable panels**: verify drag handles work and don't break layout
 - **When a bug is reported or suspected**: write a Playwright script that reproduces the scenario, screenshot the result, inspect the DOM
 
+#### Regression scenarios
+
+`tests/ui/scenario-*.mjs` are the standing regression harness (see
+`docs/remediation-plan.md` Phase 1 task 1.5). Each is a standalone, dependency-free
+script (beyond `playwright`, already installed) run against a dev server you start
+yourself:
+
+```bash
+npm run dev &                                   # serves at http://localhost:5173/0x00c0dec5/
+node tests/ui/scenario-crash-inputs.mjs
+node tests/ui/scenario-placement-matrix.mjs
+node tests/ui/scenario-hover-linking.mjs
+node tests/ui/scenario-pane-defaults.mjs
+kill %1                                          # stop the dev server when done
+```
+
+Shared setup (server URL, fresh-context launch, console/pageerror capture, and the
+results harness) lives in `tests/ui/scenario-helpers.mjs` — new scenarios should
+build on it rather than re-implementing page setup.
+
+Each check prints `PASS`, `FAIL`, or `KNOWN-FAIL`:
+
+- **PASS** — behaves as expected.
+- **FAIL** — behaves unexpectedly; a scenario run with any `FAIL` exits nonzero.
+- **KNOWN-FAIL** — the check intentionally documents a defect already tracked in
+  `docs/remediation-plan.md` Part 1 (e.g. `RP-1`, `UI-2`, `SW-2`) that a later
+  remediation phase fixes. These are asserted as *currently failing*, printed
+  loudly with the finding ID and the phase that's expected to fix them, and do
+  **not** affect the exit code — a scenario file with only `PASS`/`KNOWN-FAIL`
+  results exits 0. If a `KNOWN-FAIL` check ever starts passing (the underlying fix
+  landed), the harness reports it as `UNEXPECTED` and fails the run — that's the
+  signal to flip the scenario's expectation to a normal `check` and close the
+  finding.
+
+Old exploratory scripts (`smoke1-8.mjs`, `verify-phase0.mjs`, `helper.mjs`) remain
+in `tests/ui/` for reference; prefer the `scenario-*.mjs` files and
+`scenario-helpers.mjs` for anything new.
+
 #### Data-testid conventions
 
 Add `data-testid` attributes to key interactive elements:

@@ -83,6 +83,7 @@ export function FlatView({ stage, paneId, chunkTraceMap }: FlatViewProps) {
     <div
       ref={parentRef}
       onMouseLeave={clearHover}
+      data-testid="flat-view"
       style={{
         height: '100%',
         overflow: 'auto',

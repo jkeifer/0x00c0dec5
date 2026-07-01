@@ -103,7 +103,7 @@ export function HoverBar({ stages }: HoverBarProps) {
   };
 
   if (!hoveredTraceId || !traceInfo) {
-    return <div style={barStyle}>Hover a value to trace it</div>;
+    return <div data-testid="hover-bar" style={barStyle}>Hover a value to trace it</div>;
   }
 
   const isChunk = isChunkLevelTrace(hoveredTraceId);
@@ -113,7 +113,7 @@ export function HoverBar({ stages }: HoverBarProps) {
   const dotColor = traceInfo.variableColor || colors.textTertiary;
 
   return (
-    <div style={barStyle}>
+    <div data-testid="hover-bar" style={barStyle}>
       {/* Color dot + label */}
       <span
         style={{

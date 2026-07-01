@@ -15,7 +15,7 @@ export function FileExplorer({ files }: FileExplorerProps) {
   if (files.length === 0) return null;
 
   return (
-    <div style={{
+    <div data-testid="file-explorer" style={{
       display: 'flex',
       flexDirection: 'column',
       gap: spacing.xs,
@@ -33,6 +33,7 @@ export function FileExplorer({ files }: FileExplorerProps) {
       {files.map((file, i) => (
         <div
           key={i}
+          data-testid={`file-entry-${i}`}
           style={{
             display: 'flex',
             justifyContent: 'space-between',

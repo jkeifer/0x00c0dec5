@@ -135,6 +135,7 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
   return (
     <div
       onMouseLeave={clearHover}
+      data-testid="grid-view"
       style={{
         height: '100%',
         display: 'flex',

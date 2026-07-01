@@ -8,6 +8,8 @@ interface CodecPipelineEditorProps {
   steps: CodecStep[];
   inputDtype: DtypeKey;
   onChange: (steps: CodecStep[]) => void;
+  /** Identifies the pipeline owner for test ids: a variable name in column mode, or 'chunk' in row mode. */
+  variableSlot?: string;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -51,7 +53,7 @@ const categories: Array<{ label: string; key: string }> = [
   { label: 'Entropy', key: 'entropy' },
 ];
 
-export function CodecPipelineEditor({ steps, inputDtype, onChange }: CodecPipelineEditorProps) {
+export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot = 'chunk' }: CodecPipelineEditorProps) {
   function moveStep(index: number, direction: -1 | 1) {
     const newSteps = [...steps];
     const target = index + direction;
@@ -105,6 +107,7 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange }: CodecPipeli
         return (
           <div
             key={i}
+            data-testid={`codec-step-${variableSlot}-${i}`}
             style={{
               background: colors.surfaceInput,
               border: `1px solid ${colors.border}`,
@@ -120,6 +123,7 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange }: CodecPipeli
               {!applicable && (
                 <span
                   title={`${codec.label} is not applicable to ${DTYPE_REGISTRY[prevDtype]?.label ?? prevDtype} input — results may be garbled or meaningless`}
+                  data-testid={`codec-warning-${variableSlot}-${i}`}
                   style={{
                     color: colors.warning,
                     fontWeight: 700,

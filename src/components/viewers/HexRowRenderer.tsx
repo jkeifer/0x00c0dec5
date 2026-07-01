@@ -84,6 +84,7 @@ export function HexRowRenderer({
             <span
               key={col}
               onMouseEnter={trace ? () => onHover(trace.traceId, trace.chunkId) : undefined}
+              data-testid={`hex-byte-${byteIdx}`}
               style={{
                 color: textColor,
                 backgroundColor: isValueHovered ? 'rgba(255,255,255,0.18)' : isChunkHovered ? 'rgba(255,255,255,0.08)' : regionTint,

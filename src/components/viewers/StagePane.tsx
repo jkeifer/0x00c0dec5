@@ -160,6 +160,7 @@ export function StagePane({
 
   return (
     <div
+      data-testid={`pane-${paneId}`}
       style={{
         display: 'flex',
         flexDirection: 'column',
@@ -181,6 +182,7 @@ export function StagePane({
         <select
           value={selectedStage}
           onChange={(e) => onStageChange(Number(e.target.value))}
+          data-testid={`pane-dropdown-${paneId}`}
           style={{
             background: colors.surfaceInput,
             color: colors.textPrimary,
@@ -204,6 +206,7 @@ export function StagePane({
           value={effectiveView}
           onChange={(v) => onViewChange(v)}
           size="sm"
+          testIdPrefix="view-mode"
         />
         <span
           style={{

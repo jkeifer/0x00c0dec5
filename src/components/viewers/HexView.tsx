@@ -84,6 +84,7 @@ export function HexView({ stage, paneId, chunkTraceMap, traceChunkMap: _traceChu
     <div
       ref={parentRef}
       onMouseLeave={clearHover}
+      data-testid="hex-view"
       style={{
         height: '100%',
         overflow: 'auto',

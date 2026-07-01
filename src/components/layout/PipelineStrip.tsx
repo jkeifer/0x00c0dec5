@@ -53,6 +53,7 @@ export function PipelineStrip({ stages, readResult, variableStats }: PipelineStr
               </span>
             )}
             <div
+              data-testid={`pipeline-stage-${i}`}
               style={{
                 background: colors.surfaceInput,
                 border: `1px solid ${colors.borderSubtle}`,

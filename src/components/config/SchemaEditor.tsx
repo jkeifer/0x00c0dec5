@@ -66,6 +66,7 @@ export function SchemaEditor({
                 const val = Math.max(1, parseInt(e.target.value) || 1);
                 onShapeChange([val]);
               }}
+              data-testid="shape-input"
               style={{ ...inputStyle, width: 60 }}
             />
           </div>
@@ -88,6 +89,7 @@ export function SchemaEditor({
                     newShape[d] = val;
                     onShapeChange(newShape);
                   }}
+                  data-testid={`shape-input-${d}`}
                   style={{ ...inputStyle, width: 60 }}
                 />
               </div>
@@ -152,11 +154,12 @@ export function SchemaEditor({
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
-          {variables.map((v) => {
+          {variables.map((v, varIdx) => {
             const hasWarning = !v.name || duplicateNames.has(v.name);
             return (
               <div
                 key={v.id}
+                data-testid={`variable-row-${varIdx}`}
                 style={{
                   display: 'flex',
                   flexDirection: 'column',
@@ -183,6 +186,7 @@ export function SchemaEditor({
                     value={v.name}
                     placeholder="name"
                     onChange={(e) => onUpdateVariable(v.id, { name: e.target.value })}
+                    data-testid={`variable-name-${varIdx}`}
                     style={{
                       ...inputStyle,
                       flex: 1,
@@ -276,6 +280,7 @@ export function SchemaEditor({
       {/* Add variable button */}
       <button
         onClick={onAddVariable}
+        data-testid="add-variable"
         style={{
           ...inputStyle,
           cursor: 'pointer',

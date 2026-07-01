@@ -44,7 +44,7 @@ export function WriteConfig({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
       {/* Include metadata — first control, most consequential */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+      <div data-testid="include-metadata-toggle" style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
         <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Include Metadata</span>
         <Radio
           options={[
@@ -64,6 +64,7 @@ export function WriteConfig({
           type="text"
           value={write.magicNumber}
           onChange={(e) => onMagicChange(e.target.value)}
+          data-testid="magic-input"
           style={{
             ...inputStyle,
             fontFamily: fonts.mono,

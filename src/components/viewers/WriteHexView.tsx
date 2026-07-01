@@ -249,6 +249,7 @@ export function WriteHexView({ files, paneId, chunkTraceMap, traceChunkMap: _tra
     <div
       ref={parentRef}
       onMouseLeave={clearHover}
+      data-testid="write-hex-view"
       style={{
         height: '100%',
         overflow: 'auto',

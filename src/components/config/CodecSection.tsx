@@ -63,6 +63,7 @@ export function CodecSection({
               steps={fieldPipelines[v.name] ?? []}
               inputDtype={v.typeAssignment.storageDtype}
               onChange={(steps) => onFieldPipelineChange(v.name, steps)}
+              variableSlot={v.name}
             />
           </div>
         ))}
@@ -101,6 +102,7 @@ export function CodecSection({
         steps={chunkPipeline}
         inputDtype={inputDtype}
         onChange={onChunkPipelineChange}
+        variableSlot="chunk"
       />
     </div>
   );
