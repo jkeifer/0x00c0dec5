@@ -1,8 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { CODEC_REGISTRY, runCodecPipeline, shannonEntropy } from '../../engine/codecs.ts';
+import {
+  CODEC_REGISTRY,
+  runCodecPipeline,
+  shannonEntropy,
+  outputDtypeFor,
+  stepWarnings,
+} from '../../engine/codecs.ts';
 import { valuesToBytes, bytesToValues } from '../../engine/elements.ts';
 import { isChunkLevelTrace } from '../../engine/trace.ts';
 import type { ByteTrace } from '../../types/pipeline.ts';
+import type { CodecStep } from '../../types/codecs.ts';
 
 function makeSimpleTraces(byteCount: number, chunkId: string = 'chunk:0'): ByteTrace[] {
   return Array.from({ length: byteCount }, (_, i) => ({
@@ -402,6 +409,150 @@ describe('lz decode', () => {
     const encoded = codec.encode(input, 'uint8', { windowSize: 256 });
     const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
     expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
+  });
+});
+
+// ─── applicableTo predicates (task 4.3, UI-4/SW-7) ─────────────────────
+//
+// Before this task every codec's `applicableTo` was `() => true`, so the
+// spec'd ⚠ warning system (docs/design.md "Codec Applicability and
+// Warnings") could never fire. These predicates are advisory only — per the
+// design doc they never block encode/decode, they only drive UI warnings.
+
+describe('delta codec — applicableTo', () => {
+  const codec = CODEC_REGISTRY['delta'];
+
+  it('is applicable to every integer dtype, including uint8', () => {
+    for (const dtype of ['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32'] as const) {
+      expect(codec.applicableTo(dtype)).toBe(true);
+    }
+  });
+
+  it('warns (not applicable) on float dtypes', () => {
+    for (const dtype of ['float32', 'float64'] as const) {
+      expect(codec.applicableTo(dtype)).toBe(false);
+    }
+  });
+});
+
+describe('byte-shuffle codec — applicableTo', () => {
+  const codec = CODEC_REGISTRY['byte-shuffle'];
+
+  it('warns (not applicable) on 1-byte dtypes — shuffling is a no-op', () => {
+    for (const dtype of ['int8', 'uint8'] as const) {
+      expect(codec.applicableTo(dtype)).toBe(false);
+    }
+  });
+
+  it('is applicable to every multi-byte dtype', () => {
+    for (const dtype of ['int16', 'uint16', 'int32', 'uint32', 'float32', 'float64'] as const) {
+      expect(codec.applicableTo(dtype)).toBe(true);
+    }
+  });
+});
+
+describe('rle codec — applicableTo', () => {
+  it('is always applicable (byte-wise, no dtype assumptions)', () => {
+    const codec = CODEC_REGISTRY['rle'];
+    for (const dtype of ['int8', 'uint8', 'int16', 'uint32', 'float32', 'float64'] as const) {
+      expect(codec.applicableTo(dtype)).toBe(true);
+    }
+  });
+});
+
+describe('lz codec — applicableTo', () => {
+  it('is always applicable (byte-wise, no dtype assumptions)', () => {
+    const codec = CODEC_REGISTRY['lz'];
+    for (const dtype of ['int8', 'uint8', 'int16', 'uint32', 'float32', 'float64'] as const) {
+      expect(codec.applicableTo(dtype)).toBe(true);
+    }
+  });
+});
+
+// ─── outputDtypeFor (UI-15) ──────────────────────────────────────────────
+
+describe('outputDtypeFor', () => {
+  it('preserves dtype for reordering codecs (delta, byte-shuffle)', () => {
+    expect(outputDtypeFor(CODEC_REGISTRY['delta'], 'int16')).toBe('int16');
+    expect(outputDtypeFor(CODEC_REGISTRY['byte-shuffle'], 'float32')).toBe('float32');
+  });
+
+  it('collapses to uint8 for entropy codecs (rle, lz)', () => {
+    expect(outputDtypeFor(CODEC_REGISTRY['rle'], 'int32')).toBe('uint8');
+    expect(outputDtypeFor(CODEC_REGISTRY['lz'], 'float64')).toBe('uint8');
+  });
+});
+
+// ─── stepWarnings (task 4.3, UI-4/SW-7) ──────────────────────────────────
+//
+// Single source of truth shared by CodecPipelineEditor (per-step ⚠) and
+// PipelineStrip (Encoded-stage ⚠) — see engine/codecs.ts.
+
+describe('stepWarnings', () => {
+  it('returns no warnings for an empty pipeline', () => {
+    expect(stepWarnings([], 'float32')).toEqual([]);
+  });
+
+  it('returns no warnings for integer delta (humidity-style uint dtype)', () => {
+    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    expect(stepWarnings(steps, 'uint16')).toEqual([]);
+  });
+
+  it('warns for delta on a float dtype (temperature-style)', () => {
+    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    const warnings = stepWarnings(steps, 'float32');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/lossy/i);
+  });
+
+  it('warns for byte-shuffle on a 1-byte dtype', () => {
+    const steps: CodecStep[] = [{ codec: 'byte-shuffle', params: { elementSize: 1 } }];
+    const warnings = stepWarnings(steps, 'uint8');
+    expect(warnings.some((w) => /not applicable/i.test(w))).toBe(true);
+  });
+
+  it('warns when byte-shuffle elementSize does not match the input dtype size', () => {
+    const steps: CodecStep[] = [{ codec: 'byte-shuffle', params: { elementSize: 3 } }];
+    const warnings = stepWarnings(steps, 'float32'); // float32 is 4 bytes
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("Element size 3 doesn't match dtype size 4");
+  });
+
+  it('does not warn when byte-shuffle elementSize matches the input dtype size', () => {
+    const steps: CodecStep[] = [{ codec: 'byte-shuffle', params: { elementSize: 4 } }];
+    expect(stepWarnings(steps, 'float32')).toEqual([]);
+  });
+
+  it('can raise both an applicability warning and a param-mismatch warning at once', () => {
+    // 1-byte dtype (not applicable to shuffle at all) AND elementSize != 1.
+    const steps: CodecStep[] = [{ codec: 'byte-shuffle', params: { elementSize: 4 } }];
+    const warnings = stepWarnings(steps, 'uint8');
+    expect(warnings).toHaveLength(2);
+  });
+
+  it('tracks dtype flow through the pipeline when checking later steps', () => {
+    // delta (uint16 -> uint16) then rle (-> uint8): rle has no dtype-specific
+    // applicability, so no warning should appear regardless of the dtype it
+    // receives.
+    const steps: CodecStep[] = [
+      { codec: 'delta', params: { order: 1 } },
+      { codec: 'rle', params: {} },
+    ];
+    expect(stepWarnings(steps, 'uint16')).toEqual([]);
+  });
+
+  it('warns per-step, not just for the first offending step', () => {
+    const steps: CodecStep[] = [
+      { codec: 'delta', params: { order: 1 } }, // float32 -> warns (lossy)
+      { codec: 'byte-shuffle', params: { elementSize: 4 } }, // still float32 (delta preserves dtype) -> no warning
+    ];
+    const warnings = stepWarnings(steps, 'float32');
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('ignores unknown codec keys', () => {
+    const steps: CodecStep[] = [{ codec: 'nonexistent', params: {} }];
+    expect(stepWarnings(steps, 'float32')).toEqual([]);
   });
 });
 

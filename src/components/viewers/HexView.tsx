@@ -13,6 +13,7 @@ interface HexViewProps {
   sections: HexSection[];
   paneId: 'left' | 'right';
   chunkTraceMap?: Map<string, Set<string>>;
+  traceChunkMap?: Map<string, string>;
 }
 
 const NARROW_BREAKPOINT = 500;
@@ -168,7 +169,7 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
  * both cases — its padding/alignment logic (UI-1) is untouched here; Phase 4
  * fixes that separately.
  */
-export function HexView({ sections, paneId, chunkTraceMap }: HexViewProps) {
+export function HexView({ sections, paneId, chunkTraceMap, traceChunkMap }: HexViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
   const containerWidth = useContainerWidth(parentRef);
@@ -180,9 +181,18 @@ export function HexView({ sections, paneId, chunkTraceMap }: HexViewProps) {
 
   const isCrossPane = hoverSource !== null && hoverSource !== paneId;
 
+  // UI-2 fix (remediation-plan.md task 4.2): Values/Typed/Read stage traces
+  // carry chunkId '' (they precede chunking). Fall back to traceChunkMap's
+  // global traceId -> chunkId lookup — the same fallback TableView already
+  // uses at hover time (TableView.tsx's `traceChunkMap?.get(traceId) ?? null`)
+  // — so hovering these stages' hex bytes still resolves a real chunkId and
+  // cross-highlights post-entropy (chunk-level) panes.
   const handleHover = useCallback(
-    (traceId: string, chunkId: string) => setHover(traceId, chunkId, paneId),
-    [setHover, paneId],
+    (traceId: string, chunkId: string) => {
+      const resolvedChunkId = chunkId || traceChunkMap?.get(traceId) || '';
+      setHover(traceId, resolvedChunkId, paneId);
+    },
+    [setHover, paneId, traceChunkMap],
   );
 
   // Compute each section's scrollMargin (its rowOffset already accounts for

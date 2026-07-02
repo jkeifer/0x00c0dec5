@@ -156,19 +156,31 @@ in `tests/ui/` for reference; prefer the `scenario-*.mjs` files and
 
 #### Data-testid conventions
 
-Add `data-testid` attributes to key interactive elements:
+`data-testid` attributes exist throughout `src/` today (verified by grep — this list is no longer aspirational). Key ones:
 
-- `table-view`, `hex-view`, `grid-view`, `flat-view` — viewer containers
+- `table-view`, `hex-view`, `write-hex-view`, `grid-view`, `flat-view` — viewer containers (`hex-view`/`write-hex-view` are the same `HexView` component; the testid reflects whether it's rendering with multi-file section headers)
 - `table-cell-{variable}-{index}` — individual table cells
 - `hex-byte-{offset}` — individual hex bytes
 - `hover-bar` — the cross-stage hover info bar
 - `pipeline-stage-{index}` — pipeline strip nodes
-- `pane-left`, `pane-right` — comparison pane containers
-- `pane-dropdown-left`, `pane-dropdown-right` — stage selector dropdowns
+- `pipeline-stage-encoded-warning` — the Encoded-stage pipeline-strip warning icon (codec applicability/size-increase issues)
+- `pane-left`, `pane-right` — comparison pane containers (rendered as `pane-{paneId}`)
+- `pane-dropdown-left`, `pane-dropdown-right` — stage selector dropdowns (rendered as `pane-dropdown-{paneId}`)
 - `view-mode-{mode}` — view mode radio buttons
 - `sidebar-section-{name}` — sidebar config sections
 - `codec-step-{variable}-{index}` — individual codec pipeline steps
 - `codec-warning-{variable}-{index}` — codec applicability warning icons
+- `footer-locator-toggle` — D1 footer locator radio (trailer/none), shown only when metadata placement is footer
+- `include-chunk-index-toggle` — D3 chunk index toggle in the Metadata section
+- `include-metadata-toggle` — the read-extension's "Include metadata" toggle in Write
+- `magic-input` — the Write section's magic-number hex input
+- `read-status` — the sidebar's Read section status display
+- `file-explorer` — the output file list container; `file-entry-{i}` — individual file rows
+- `shape-input` (tabular) / `shape-input-{d}` (array) — dataset shape inputs
+- `add-variable` — the Schema section's "add variable" button
+- `variable-row-{index}`, `variable-name-{index}` — per-variable Schema editor rows and name inputs
+
+New UI work should keep adding testids per these conventions rather than relying on text/structure selectors.
 
 ## Code Conventions
 
@@ -197,16 +209,18 @@ Do not crash on invalid user input. Degenerate states (zero variables, empty cod
 
 ## Common Pitfalls
 
-Based on earlier prototyping, these are the things most likely to go wrong:
+Based on earlier prototyping (and a full remediation pass — see `docs/remediation-plan.md`), these are the things most likely to go wrong:
 
-1. **Byte tracing through size-changing codecs.** RLE and LZ change the byte count, breaking 1:1 trace mapping. After these codecs, traces must degrade to chunk-level. Do not try to maintain per-value tracing through entropy codecs.
+1. **Byte tracing through size-changing codecs.** RLE and LZ change the byte count, breaking 1:1 trace mapping (`degradeTracesToChunkLevel` in `src/engine/trace.ts`). After these codecs, traces must degrade to chunk-level. Do not try to maintain per-value tracing through entropy codecs. Every other stage — including the Typed stage, where a variable's dtype actually changes (e.g. float64 logical values → int16 storage bytes) — keeps perfect per-value tracing (`propagateTracesValuePreserving`), because a dtype change alone doesn't change whether the mapping from source value to its bytes is one-to-one. Only entropy codecs (the only size-changing steps left in the codec registry) force the degradation.
 
-2. **Virtual scrolling + hover state interaction.** Virtual scrolling unmounts rows that scroll out of view. Hover state must not depend on mounted elements — use data indices, not DOM refs. The `@tanstack/react-virtual` library handles this correctly if you key rows by data index.
+2. **Virtual scrolling + hover state interaction.** Virtual scrolling unmounts rows that scroll out of view. Hover state must not depend on mounted elements — use data indices, not DOM refs. The `@tanstack/react-virtual` library handles this correctly if you key rows by data index. (GridView's hover currently uses `querySelector` as a DOM-ref-shaped exception — see `docs/remediation-plan.md` UI-19 — because it isn't virtualized; don't copy that pattern into a view that is.)
 
-3. **Codec dtype flow.** Each codec step has an input dtype and output dtype. Scale/offset changes the dtype (e.g., float32 → int16). The next codec in the pipeline receives the output dtype as its input. If this chain is broken, codecs will misinterpret bytes. Test the dtype flow explicitly.
+3. **Type-assignment and codec dtype flow are two separate mechanisms — don't conflate them.** Scale/offset and bit-rounding are **not codecs**; they live on `Variable.typeAssignment` and are applied once, in the Typed stage (`src/engine/typeAssign.ts`'s `assignType`), converting a variable's logical values directly to its `storageDtype`. The **codec pipeline** (Delta, Byte Shuffle, RLE, LZ — `src/engine/codecs.ts`) runs afterward, entirely within that fixed storage dtype (or `uint8` after an entropy codec): each step's `encode()` input dtype is the previous step's `outputDtype`, and `outputDtypeFor(codec, inputDtype)` is the single source of truth for that flow (entropy codecs → `uint8`, everything else preserves dtype) — call it rather than re-deriving the rule locally. If you need to reverse either direction, `reverseCodecPipeline` (`src/engine/decode.ts`) walks the codec pipeline backward first, and only then does `reverseTypeAssignment` (`src/engine/typeAssign.ts`) undo the type assignment — they are sequential phases, not interleaved steps of one pipeline. Test the dtype flow explicitly at both boundaries: within the codec pipeline itself, and at the handoff where the fully-reversed codec pipeline's output dtype must equal the variable's `typeAssignment.storageDtype` before `reverseTypeAssignment` runs.
 
-4. **Interleaving mode switches.** When switching from column to row interleaving, per-field codec pipelines become inactive (but should be preserved in state). When switching back, they reactivate. The codec section UI must reflect this correctly.
+4. **Interleaving mode switches.** When switching from column to row interleaving, per-field codec pipelines (`fieldPipelines`, keyed by `Variable.id`) become inactive (but are preserved in state — `SET_INTERLEAVING` never touches them). When switching back, they reactivate unchanged. The codec section UI (`CodecSection.tsx`) must reflect this correctly.
 
 5. **Resizable panels breaking layout.** The app is `height: 100vh` with no page scroll. Resizable panels must respect min/max constraints and not cause overflow. Test at various viewport sizes.
 
-6. **Hex view alignment.** Each row must show exactly 16 bytes (or fewer for the last row). The offset column, hex bytes, gap at byte 8, and ASCII column must align across all rows regardless of content. Use monospace font and fixed-width spans.
+6. **Hex view alignment.** Each row must show exactly 16 bytes (or fewer for the last row). The offset column, hex bytes, gap at byte 8, and ASCII column must align across all rows regardless of content — including the last, short row, where padding columns must not receive their own separators (an earlier bug shifted the ASCII column on any byte count not a multiple of 16). Use monospace font and fixed-width spans.
+
+7. **Seeding localStorage for agents/tests: use `seedStateAndReload`, not a bare `evaluate` + `reload`.** The app's normal 500ms debounced save is also flushed synchronously on `pagehide` (see `docs/design.md`'s State Management section) so last-second edits aren't lost when a tab closes or navigates away. That flush fires on the *outgoing* document during navigation and will silently clobber anything written via `page.evaluate(() => localStorage.setItem(...))` immediately before `page.reload()` — the seed appears to "not take" for no visible reason. `tests/ui/scenario-helpers.mjs`'s `seedStateAndReload(page, entries)` avoids this by using `page.context().addInitScript(...)` to set the values on the *incoming* document before any app code runs, guaranteeing the seed always wins regardless of the outgoing page's flush timing. Any new Playwright scenario (or agent-driven UI test) that needs to pre-seed `localStorage` before a fresh load should use this helper rather than reimplementing evaluate-then-reload.

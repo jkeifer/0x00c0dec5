@@ -166,3 +166,22 @@ export async function countHighlighted(page, rootSelector, substring) {
     { rootSelector, substring },
   );
 }
+
+/**
+ * Seed localStorage entries so they survive navigation. The app flushes its
+ * in-memory state to localStorage on pagehide (SW-9), which clobbers anything
+ * written via page.evaluate() immediately before a reload. addInitScript runs
+ * on the *incoming* document before any app code — after the outgoing
+ * document's flush — so seeds set here always win. Values may be strings
+ * (stored verbatim) or objects (JSON-stringified).
+ */
+export async function seedStateAndReload(page, entries) {
+  const kv = {};
+  for (const [k, v] of Object.entries(entries)) {
+    kv[k] = typeof v === 'string' ? v : JSON.stringify(v);
+  }
+  await page.context().addInitScript((seed) => {
+    for (const [k, v] of Object.entries(seed)) localStorage.setItem(k, v);
+  }, kv);
+  await safeReload(page);
+}

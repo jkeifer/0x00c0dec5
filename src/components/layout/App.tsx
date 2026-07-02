@@ -1,4 +1,6 @@
 import { Panel, Group, Separator, useDefaultLayout } from 'react-resizable-panels';
+import type { Variable } from '../../types/state.ts';
+import type { CodecStep } from '../../types/codecs.ts';
 import { useAppState } from '../../state/useAppState.ts';
 import { usePipeline } from '../../hooks/usePipeline.ts';
 import { PipelineProvider, usePipelineContext } from '../../state/PipelineContext.tsx';
@@ -24,7 +26,14 @@ function MainLayout() {
         defaultLayout={mainPersist.defaultLayout}
         onLayoutChanged={mainPersist.onLayoutChanged}
       >
-        <Panel id="sidebar" defaultSize="25%" minSize="15%" maxSize="35%">
+        {/* minSize is a pixel string, not a percentage (UI-17): 15% of a
+            900px window is only 135px, well below the ~200px the sidebar's
+            config rows need before they wrap badly. react-resizable-panels
+            v4's Panel accepts a "px"-suffixed string directly (see
+            node_modules/react-resizable-panels/dist/react-resizable-panels.d.ts,
+            PanelProps.minSize: number | string, "Pixels may also be
+            specified as strings ending with the unit 'px'"). */}
+        <Panel id="sidebar" defaultSize="25%" minSize="200px" maxSize="35%">
           <Sidebar />
         </Panel>
         <Separator className="resize-handle" />
@@ -37,7 +46,12 @@ function MainLayout() {
               overflow: 'hidden',
             }}
           >
-            <PipelineStripConnected />
+            <PipelineStripConnected
+              variables={state.variables}
+              fieldPipelines={state.fieldPipelines}
+              chunkPipeline={state.chunkPipeline}
+              interleaving={state.interleaving}
+            />
             <HoverBarConnected />
             <Group
               orientation="horizontal"
@@ -88,10 +102,36 @@ function MainLayout() {
 
 /** Thin context-consuming wrappers (task 3.9) so `PipelineStrip`/`HoverBar`
  * keep taking plain props (easy to test in isolation) while `MainLayout`
- * no longer drills pipeline fields into them by hand. */
-function PipelineStripConnected() {
+ * no longer drills pipeline fields into them by hand.
+ *
+ * `PipelineStripConnected` additionally forwards the codec config (task 4.3,
+ * UI-4) from `state` — `PipelineContext` only carries the *computed*
+ * pipeline output, not the raw `fieldPipelines`/`chunkPipeline`/`interleaving`
+ * config `stepWarnings` needs, so those four are passed as plain props
+ * instead of being drilled through the context. */
+function PipelineStripConnected({
+  variables,
+  fieldPipelines,
+  chunkPipeline,
+  interleaving,
+}: {
+  variables: Variable[];
+  fieldPipelines: Record<string, CodecStep[]>;
+  chunkPipeline: CodecStep[];
+  interleaving: 'row' | 'column';
+}) {
   const { stages, readResult, variableStats } = usePipelineContext();
-  return <PipelineStrip stages={stages} readResult={readResult} variableStats={variableStats} />;
+  return (
+    <PipelineStrip
+      stages={stages}
+      readResult={readResult}
+      variableStats={variableStats}
+      variables={variables}
+      fieldPipelines={fieldPipelines}
+      chunkPipeline={chunkPipeline}
+      interleaving={interleaving}
+    />
+  );
 }
 
 function HoverBarConnected() {

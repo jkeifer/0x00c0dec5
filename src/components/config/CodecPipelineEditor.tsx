@@ -1,7 +1,7 @@
 import type { CodecStep } from '../../types/codecs.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
-import { CODEC_REGISTRY } from '../../engine/codecs.ts';
-import { DTYPE_REGISTRY } from '../../types/dtypes.ts';
+import { CODEC_REGISTRY, outputDtypeFor, stepWarnings } from '../../engine/codecs.ts';
+import { DTYPE_REGISTRY, getDtype } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
 
@@ -23,18 +23,39 @@ const btnStyle: React.CSSProperties = {
   lineHeight: 1,
 };
 
-function computeRunningDtype(steps: CodecStep[], inputDtype: DtypeKey, upTo: number): DtypeKey {
+/**
+ * UI-15: dtype flow derived from the registry via `outputDtypeFor`, instead
+ * of a local re-implementation of "entropy codecs collapse to uint8, other
+ * codecs preserve dtype" that would go silently stale the day a
+ * dtype-changing codec is added. `runningDtypes[i]` is the *input* dtype
+ * `steps[i]` receives; one past the end is the pipeline's overall output.
+ */
+function computeRunningDtypes(steps: CodecStep[], inputDtype: DtypeKey): DtypeKey[] {
+  const dtypes: DtypeKey[] = [inputDtype];
   let dtype = inputDtype;
-  for (let i = 0; i <= upTo; i++) {
-    const step = steps[i];
+  for (const step of steps) {
     const codec = CODEC_REGISTRY[step.codec];
-    if (!codec) continue;
-    if (codec.category === 'entropy') {
-      dtype = 'uint8';
+    if (codec) {
+      dtype = outputDtypeFor(codec, dtype);
     }
-    // Reordering codecs preserve dtype
+    dtypes.push(dtype);
   }
-  return dtype;
+  return dtypes;
+}
+
+/**
+ * UI-15: number param inputs used `parseFloat(v) || 0`, so clearing the
+ * field (or typing something non-numeric mid-edit) set the param to 0 even
+ * when the param's `min` is 1 (e.g. delta's `order`) — an out-of-range value
+ * silently reached the pipeline. Clamp into [min, max] instead, falling back
+ * to `min` (if set) or the param's own default when the input doesn't parse.
+ */
+function clampParamValue(raw: string, min: number | undefined, max: number | undefined, fallback: number): number {
+  const parsed = parseFloat(raw);
+  let value = Number.isNaN(parsed) ? fallback : parsed;
+  if (min !== undefined && value < min) value = min;
+  if (max !== undefined && value > max) value = max;
+  return value;
 }
 
 const codecEntries = Object.values(CODEC_REGISTRY);
@@ -70,6 +91,13 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
     for (const [k, def] of Object.entries(codec.params)) {
       defaultParams[k] = def.default;
     }
+    // SW-7: auto-default Byte Shuffle's elementSize to the *input* dtype's
+    // size at add time, rather than the codec's static default (4) — a step
+    // added after, say, an int16 variable should start out matching the
+    // element boundary instead of immediately showing a mismatch warning.
+    if (codecKey === 'byte-shuffle') {
+      defaultParams.elementSize = getDtype(inputDtype).size;
+    }
     onChange([...steps, { codec: codecKey, params: defaultParams }]);
   }
 
@@ -84,15 +112,23 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
     );
   }
 
+  const runningDtypes = computeRunningDtypes(steps, inputDtype);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
       {steps.map((step, i) => {
         const codec = CODEC_REGISTRY[step.codec];
         if (!codec) return null;
 
-        const prevDtype = i === 0 ? inputDtype : computeRunningDtype(steps, inputDtype, i - 1);
-        const currentDtype = computeRunningDtype(steps, inputDtype, i);
-        const applicable = codec.applicableTo(prevDtype);
+        const prevDtype = runningDtypes[i];
+        const currentDtype = runningDtypes[i + 1];
+        // Task 4.3 (UI-4, SW-7): `stepWarnings` is the single source of truth
+        // shared with `PipelineStrip` — it covers both dtype-level
+        // applicability (codec.applicableTo) and Byte Shuffle's
+        // param-vs-dtype elementSize mismatch, which `applicableTo` alone
+        // can't express (it never sees step params).
+        const warnings = stepWarnings([step], prevDtype);
+        const applicable = warnings.length === 0;
 
         return (
           <div
@@ -112,7 +148,7 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
             <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
               {!applicable && (
                 <span
-                  title={`${codec.label} is not applicable to ${DTYPE_REGISTRY[prevDtype]?.label ?? prevDtype} input — results may be garbled or meaningless`}
+                  title={warnings.join('\n')}
                   data-testid={`codec-warning-${variableSlot}-${i}`}
                   style={{
                     color: colors.warning,
@@ -171,7 +207,13 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
                     max={paramDef.max}
                     step={paramDef.step}
                     value={Number(step.params[paramKey] ?? paramDef.default)}
-                    onChange={(e) => updateParam(i, paramKey, parseFloat(e.target.value) || 0)}
+                    onChange={(e) =>
+                      updateParam(
+                        i,
+                        paramKey,
+                        clampParamValue(e.target.value, paramDef.min, paramDef.max, Number(paramDef.default)),
+                      )
+                    }
                     style={{ ...inputStyle(), width: 70 }}
                   />
                 ) : (

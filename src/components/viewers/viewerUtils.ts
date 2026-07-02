@@ -1,13 +1,8 @@
-import type { PipelineStage, ByteTrace, ChunkRegion, VirtualFile } from '../../types/pipeline.ts';
+import type { PipelineStage, ByteTrace, ChunkRegion } from '../../types/pipeline.ts';
 import { isChunkLevelTrace } from '../../engine/trace.ts';
-import { shannonEntropy } from '../../engine/codecs.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
 
 export { formatByteCount };
-// `formatFileSize` is kept as an alias of the shared `formatByteCount` (D7)
-// for other call sites (e.g. FileExplorer.tsx) that still import it under
-// this name; HexView.tsx (task 3.5) imports `formatByteCount` directly.
-export { formatByteCount as formatFileSize };
 
 export interface TraceGroup {
   traceId: string;
@@ -169,16 +164,118 @@ export function buildChunkIndex(traces: ByteTrace[]): Map<string, number> {
   return index;
 }
 
-/** Convert a VirtualFile to a PipelineStage for use with HexView. */
-export function fileToStage(file: VirtualFile): PipelineStage {
-  return {
-    name: file.name,
-    bytes: file.bytes,
-    traces: file.traces,
-    chunkRegions: buildChunkRegions(file.traces),
-    stats: {
-      byteCount: file.bytes.length,
-      entropy: shannonEntropy(file.bytes),
-    },
-  };
+/**
+ * NaN-aware, display-oriented value equality for diff detection (task 4.5,
+ * fixes UI-14). Plain `!==` flags NaN vs NaN as a diff (NaN !== NaN in JS),
+ * which is wrong for the pedagogical diff view: a losslessly round-tripped
+ * NaN should not be highlighted as an error. `-0` vs `0` is also not a
+ * meaningful diff for display, so plain `===` (which already treats them as
+ * equal) covers that case without needing `Object.is`.
+ */
+export function isDiffValue(val: number, origVal: number): boolean {
+  return !(val === origVal || (Number.isNaN(val) && Number.isNaN(origVal)));
+}
+
+export interface DiffSummary {
+  count: number;      // number of differing values
+  maxAbsError: number; // max |val - orig| across differing values
+  meanAbsError: number; // mean |val - orig| across differing values (0 when count is 0)
+}
+
+const EMPTY_DIFF_SUMMARY: DiffSummary = { count: 0, maxAbsError: 0, meanAbsError: 0 };
+
+/**
+ * Per-variable diff summary stats (task 4.5 / extension-read-step.md's Diff
+ * View spec): differing count, max absolute error, mean absolute error.
+ * Guards length mismatches (a reconstructed array shorter/longer than the
+ * original) by only comparing indices present in both arrays — no NaN
+ * reaches the result from an out-of-range read. Skips NaN-vs-NaN pairs per
+ * `isDiffValue` so lossless NaN round-trips don't inflate the error stats.
+ */
+export function computeDiffSummary(values: number[], origValues: number[]): DiffSummary {
+  const n = Math.min(values.length, origValues.length);
+  let count = 0;
+  let sumAbsError = 0;
+  let maxAbsError = 0;
+  for (let i = 0; i < n; i++) {
+    const val = values[i];
+    const orig = origValues[i];
+    if (!isDiffValue(val, orig)) continue;
+    const absError = Math.abs(val - orig);
+    count++;
+    sumAbsError += absError;
+    if (absError > maxAbsError) maxAbsError = absError;
+  }
+  if (count === 0) return EMPTY_DIFF_SUMMARY;
+  return { count, maxAbsError, meanAbsError: sumAbsError / count };
+}
+
+/**
+ * Max absolute difference across two same-variable value arrays, for
+ * GridView's diverging color scale. Guards length mismatches the same way
+ * as `computeDiffSummary` — indices without a matching original are simply
+ * excluded rather than producing NaN, which previously reached `rgb(NaN,
+ * NaN, NaN)` in the cell color (UI-5). NaN-vs-NaN pairs are excluded too
+ * (they are not diffs) so a NaN-heavy variable doesn't poison the scale.
+ */
+export function computeMaxAbsDiff(values: number[], origValues: number[]): number {
+  const n = Math.min(values.length, origValues.length);
+  let maxAbsDiff = 0;
+  for (let i = 0; i < n; i++) {
+    const val = values[i];
+    const orig = origValues[i];
+    if (!isDiffValue(val, orig)) continue;
+    const absDiff = Math.abs(val - orig);
+    if (absDiff > maxAbsDiff) maxAbsDiff = absDiff;
+  }
+  return maxAbsDiff;
+}
+
+/**
+ * Row/column for a flat cell index in GridView's fixed-size CSS grid, and
+ * the scroll offset needed to bring that cell into view within a viewport
+ * of the given size. Used to replace the `querySelector('[data-cell-idx]')`
+ * DOM-ref pattern (UI-19, CLAUDE.md pitfall 2) with pure arithmetic: cells
+ * are fixed-size (`cellSize` including the grid gap) in a CSS grid, so the
+ * scroll position is derivable directly from the index without touching the
+ * DOM at all.
+ */
+export function cellIndexToRowCol(index: number, cols: number): { row: number; col: number } {
+  if (cols <= 0) return { row: 0, col: 0 };
+  return { row: Math.floor(index / cols), col: index % cols };
+}
+
+/**
+ * Compute the scroll offset (top/left) that brings the cell at `index` into
+ * view, mimicking `Element.scrollIntoView({ block: 'nearest', inline:
+ * 'nearest' })` without needing a DOM node for the cell itself — only the
+ * viewport's current scroll position and size are needed.
+ */
+export function scrollOffsetForCell(
+  index: number,
+  cols: number,
+  cellSize: number,
+  viewport: { scrollTop: number; scrollLeft: number; clientWidth: number; clientHeight: number },
+): { scrollTop: number; scrollLeft: number } {
+  const { row, col } = cellIndexToRowCol(index, cols);
+  const cellTop = row * cellSize;
+  const cellBottom = cellTop + cellSize;
+  const cellLeft = col * cellSize;
+  const cellRight = cellLeft + cellSize;
+
+  let scrollTop = viewport.scrollTop;
+  if (cellTop < viewport.scrollTop) {
+    scrollTop = cellTop;
+  } else if (cellBottom > viewport.scrollTop + viewport.clientHeight) {
+    scrollTop = cellBottom - viewport.clientHeight;
+  }
+
+  let scrollLeft = viewport.scrollLeft;
+  if (cellLeft < viewport.scrollLeft) {
+    scrollLeft = cellLeft;
+  } else if (cellRight > viewport.scrollLeft + viewport.clientWidth) {
+    scrollLeft = cellRight - viewport.clientWidth;
+  }
+
+  return { scrollTop, scrollLeft };
 }

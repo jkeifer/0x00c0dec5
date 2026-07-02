@@ -2,8 +2,10 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import type { Variable } from '../../types/state.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
+import { formatLogicalValue } from '../../engine/elements.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
+import { computeMaxAbsDiff, computeDiffSummary, scrollOffsetForCell } from './viewerUtils.ts';
 
 interface GridViewProps {
   variables: Variable[];
@@ -90,6 +92,27 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
     return { values: vals, min: mn, max: mx };
   }, [valuesByName, selectedVar]);
 
+  // Task 4.5 (remediation-plan.md, fixes UI-5): maxAbsDiff was previously
+  // recomputed with a full reduce PER CELL (an O(n^2) per-render cost) and
+  // produced NaN whenever `values` and `origVarVals` had different lengths
+  // (out-of-range reads returned `undefined`, and `val - undefined` is NaN,
+  // which reaches `rgb(NaN,NaN,NaN)`). `computeMaxAbsDiff` is hoisted into
+  // this memo (keyed on the two value arrays) and guards length mismatches
+  // by only comparing indices present in both arrays.
+  const maxAbsDiff = useMemo(() => {
+    if (!showDiff || !origVarVals) return 0;
+    return computeMaxAbsDiff(values, origVarVals);
+  }, [showDiff, values, origVarVals]);
+
+  // Per-variable diff summary (differing count / max / mean abs error) per
+  // the extension doc's Diff View spec ("A summary shows max/mean absolute
+  // error for the selected variable"). Memoized alongside maxAbsDiff so
+  // hover-driven re-renders don't recompute it.
+  const diffSummary = useMemo(() => {
+    if (!showDiff || !origVarVals) return null;
+    return computeDiffSummary(values, origVarVals);
+  }, [showDiff, values, origVarVals]);
+
   // Determine grid dimensions from shape
   const rows = shape.length >= 2 ? shape[0] : 1;
   const cols = shape.length >= 2 ? shape[1] : shape[0] ?? 0;
@@ -99,6 +122,15 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
   // Cross-pane auto-scroll. Must check parseTraceId's `kind` before treating
   // the remainder as coordinates — a chunk-level id like 'chunk:0,1'
   // otherwise "parses" as variable name 'chunk' with bogus coords (UI-3).
+  //
+  // Task 4.5 (remediation-plan.md, fixes UI-19): previously used
+  // `gridRef.current.querySelector('[data-cell-idx=...]')` — the DOM-ref
+  // pattern CLAUDE.md pitfall 2 forbids (hover/scroll state should be derived
+  // from data indices, not by reaching into the DOM). GridView renders every
+  // cell (it isn't virtualized) in a fixed-size CSS grid, so the scroll
+  // offset for a given cell index is computable directly from `cols` and
+  // `CELL_SIZE` — no element lookup needed. `scrollOffsetForCell` reproduces
+  // `scrollIntoView({ block: 'nearest', inline: 'nearest' })` semantics.
   useEffect(() => {
     if (!hoveredTraceId || hoverSource === paneId || !gridRef.current || !selectedVar) return;
     const parsed = parseTraceId(hoveredTraceId);
@@ -110,10 +142,16 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
     for (let d = 0; d < parts.length; d++) {
       idx = idx * (shape[d] ?? 1) + parts[d];
     }
-    const cell = gridRef.current.querySelector(`[data-cell-idx="${idx}"]`);
-    if (cell) {
-      cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    }
+    const viewport = gridRef.current;
+    const cols = shape.length >= 2 ? shape[1] : shape[0] ?? 1;
+    const { scrollTop, scrollLeft } = scrollOffsetForCell(idx, cols, CELL_SIZE + 1, {
+      scrollTop: viewport.scrollTop,
+      scrollLeft: viewport.scrollLeft,
+      clientWidth: viewport.clientWidth,
+      clientHeight: viewport.clientHeight,
+    });
+    if (scrollTop !== viewport.scrollTop) viewport.scrollTop = scrollTop;
+    if (scrollLeft !== viewport.scrollLeft) viewport.scrollLeft = scrollLeft;
   }, [hoveredTraceId, hoverSource, paneId, selectedVar, shape]);
 
   if (!selectedVar) {
@@ -178,6 +216,28 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
         </div>
       )}
 
+      {/* Task 4.5 / extension-read-step.md Diff View spec: per-variable diff
+          summary (differing count / max / mean abs error) for the selected
+          variable, kept visually lightweight — small text, warning color
+          only when there are actual differences to flag. */}
+      {diffSummary && (
+        <div
+          data-testid={`grid-diff-summary-${selectedVar.name}`}
+          style={{
+            padding: `${spacing.xs}px ${spacing.sm}px`,
+            fontSize: fontSizes.xs,
+            color: diffSummary.count > 0 ? colors.warning : colors.textTertiary,
+            borderBottom: `1px solid ${colors.borderSubtle}`,
+            flexShrink: 0,
+            fontFamily: fonts.mono,
+          }}
+        >
+          {diffSummary.count === 0
+            ? 'No differences from original'
+            : `${diffSummary.count} differing / max Δ ${diffSummary.maxAbsError.toPrecision(4)} / mean Δ ${diffSummary.meanAbsError.toPrecision(4)}`}
+        </div>
+      )}
+
       {/* Grid */}
       <div
         ref={gridRef}
@@ -207,19 +267,19 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
             const isChunkHovered = !isValueHovered && gridChunkTraceIds != null && gridChunkTraceIds.has(traceId);
             const chunkId = traceChunkMap?.get(traceId) ?? null;
 
-            // Diff mode
+            // Diff mode. `maxAbsDiff` is hoisted above into a useMemo keyed on
+            // values/origVarVals (fixes UI-5's per-cell O(n) reduce); the
+            // tooltip is formatted via the shared value-formatting helper
+            // (formatLogicalValue) instead of showing raw unformatted numbers.
             const origVal = origVarVals && i < origVarVals.length ? origVarVals[i] : undefined;
             const diffActive = showDiff && origVal !== undefined;
             const diff = diffActive ? val - origVal : 0;
-            const maxAbsDiff = diffActive
-              ? origVarVals!.reduce((mx, ov, j) => Math.max(mx, Math.abs(values[j] - ov)), 0)
-              : 0;
             const cellColor = diffActive
               ? diffToColor(diff, maxAbsDiff)
               : valueToColor(val, min, max, selectedVar.color);
             const cellTitle = diffActive
-              ? `Original: ${origVal}, Reconstructed: ${val}, Δ = ${(diff >= 0 ? '+' : '') + diff.toPrecision(4)}`
-              : `${selectedVar.name}[${is1D ? i : `${row},${col}`}] = ${val}`;
+              ? `Original: ${formatLogicalValue(origVal)}, Reconstructed: ${formatLogicalValue(val)}, Δ = ${(diff >= 0 ? '+' : '') + diff.toPrecision(4)}`
+              : `${selectedVar.name}[${is1D ? i : `${row},${col}`}] = ${formatLogicalValue(val)}`;
 
             return (
               <div

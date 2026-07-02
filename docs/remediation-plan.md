@@ -611,32 +611,32 @@ fits in one head — is met; the number was its proxy.)*
 
 ### Phase 4 — Correctness polish + docs
 
-- [ ] **4.1 Fix the default right pane.** Replace `-1` sentinel: default `rightPaneStage` to
+- [x] **4.1 Fix the default right pane.** Replace `-1` sentinel: default `rightPaneStage` to
       `'write'` (per design) and bind the `<select>` to the resolved value. Fixes SW-2.
-- [ ] **4.2 Wire `traceChunkMap` into HexView/WriteHexView/FlatView** so hovering
+- [x] **4.2 Wire `traceChunkMap` into HexView/WriteHexView/FlatView** so hovering
       Values/Typed/Read hex bytes cross-highlights post-entropy panes and the HoverBar shows
       the full chain. Fixes UI-2.
-- [ ] **4.3 Real `applicableTo` predicates** (`engine/codecs.ts`): delta → numeric dtypes
+- [x] **4.3 Real `applicableTo` predicates** (`engine/codecs.ts`): delta → numeric dtypes
       (warn on uint? no — wrap is now exact; warn on float), shuffle → warn when elementSize
       ≠ dtype size, bitround-equivalents live in typeAssign now, RLE/LZ → always applicable.
       Surface the ⚠ icon in `CodecPipelineEditor` (already built) and add it to the pipeline
       strip node per spec. Auto-default shuffle `elementSize` to the input dtype size on add
       (`CodecPipelineEditor.tsx:74-82` already receives `inputDtype`). Fixes UI-4, SW-7.
-- [ ] **4.4 View-mode lists per spec** (`StagePane.tsx:12-37`): Hex+Flat for all non-Values
+- [x] **4.4 View-mode lists per spec** (`StagePane.tsx:12-37`): Hex+Flat for all non-Values
       stages; Values gains Hex; Read gains Hex+Flat (diff applies only to Table/Grid). Fixes UI-6.
-- [ ] **4.5 GridView diff performance + correctness**: hoist `maxAbsDiff` into a `useMemo`
+- [x] **4.5 GridView diff performance + correctness**: hoist `maxAbsDiff` into a `useMemo`
       keyed on values/originals; guard length mismatch (no NaN colors); `Object.is` for NaN
       diff equality in TableView; add the spec'd per-variable diff summary (count/max/mean
       abs error) to TableView header and GridView. Fixes UI-5, UI-14.
-- [ ] **4.6 MetadataEditor truthfulness**: stop double-appending custom entries; include
+- [x] **4.6 MetadataEditor truthfulness**: stop double-appending custom entries; include
       `chunk_index` in the preview size (pass chunk offsets or show "≈ N B + chunk index");
       memoize the serialization. Fixes UI-7.
-- [ ] **4.7 Small fixes batch**: HoverBar labels for `magic`/`metadata` traces (UI-16);
+- [x] **4.7 Small fixes batch**: HoverBar labels for `magic`/`metadata` traces (UI-16);
       sidebar min-width in px via panel constraints (UI-17); `computeRunningDtype` derived
       from the registry, param inputs clamp to min instead of `|| 0` (UI-15); delete dead
       code (UI-10); GridView hover without querySelector (UI-19); debounce flush on
       `beforeunload` (SW-9); reader magic handling comment (RP-4 residue if any).
-- [ ] **4.8 Rewrite the docs to match reality.** `docs/design.md`: replace the codec-registry
+- [x] **4.8 Rewrite the docs to match reality.** `docs/design.md`: replace the codec-registry
       section (scale/offset + bitround → Type Assignment concept, logical types, the Typed
       stage, 7-stage list); update the AppState shape; update the Edge Cases table; document
       the new user-facing format choices and their read consequences (footer locator D1,

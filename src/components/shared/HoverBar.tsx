@@ -103,9 +103,19 @@ export function HoverBar({ stages }: HoverBarProps) {
   }
 
   const isChunk = isChunkLevelTrace(hoveredTraceId);
-  const label = isChunk
-    ? traceInfo.chunkId
-    : `${traceInfo.variableName}${traceInfo.coords.length > 0 ? `[${traceInfo.coords.join(',')}]` : ''}`;
+  // Structural traces (write-stage magic bytes and the metadata block) carry
+  // no variable identity — `variableName`/`variableColor` are both `''`
+  // (see makeMagicTraces/makeMetadataTraces in src/engine/write.ts, traceIds
+  // 'magic:start' / 'magic:end' / 'metadata'). Render a meaningful label and
+  // a neutral dot instead of the blank/colorless default (UI-16).
+  const isStructural = traceInfo.traceId === 'magic:start'
+    || traceInfo.traceId === 'magic:end'
+    || traceInfo.traceId === 'metadata';
+  const label = isStructural
+    ? (traceInfo.traceId === 'metadata' ? 'metadata' : 'magic number')
+    : isChunk
+      ? traceInfo.chunkId
+      : `${traceInfo.variableName}${traceInfo.coords.length > 0 ? `[${traceInfo.coords.join(',')}]` : ''}`;
   const dotColor = traceInfo.variableColor || colors.textTertiary;
 
   return (
@@ -120,12 +130,14 @@ export function HoverBar({ stages }: HoverBarProps) {
           flexShrink: 0,
         }}
       />
-      <span style={{ color: traceInfo.variableColor || colors.textSecondary }}>
+      <span style={{ color: isStructural ? colors.textTertiary : (traceInfo.variableColor || colors.textSecondary) }}>
         {label}
       </span>
 
-      {/* Decoded value */}
-      {!isChunk && traceInfo.displayValue && (
+      {/* Decoded value — suppressed for structural traces (their
+          displayValue, e.g. "magic (start)"/"metadata", just repeats the
+          label above; nothing to decode for these byte ranges). */}
+      {!isChunk && !isStructural && traceInfo.displayValue && (
         <span style={{ color: colors.textPrimary }}>
           = {traceInfo.displayValue}
         </span>

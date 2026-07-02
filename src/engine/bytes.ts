@@ -51,7 +51,8 @@ export function concatBytes(arrays: Uint8Array[]): Uint8Array {
  * authority (D7).
  *
  * The 4 pre-consolidation implementations did not all agree:
- *   - viewerUtils.formatFileSize / FileExplorer.tsx (2 call sites): "N B" /
+ *   - viewerUtils.formatFileSize (removed, UI-10 dead-code cleanup) /
+ *     FileExplorer.tsx (now imports formatByteCount directly): "N B" /
  *     "N.N KB" / "N.N MB" (three tiers, space before unit).
  *   - PipelineStrip.tsx (1 call site): "N B" / "N.N KB" (two tiers, space).
  *   - HoverBar.tsx (1 call site): "NB" / "N.NKB" (two tiers, NO space).

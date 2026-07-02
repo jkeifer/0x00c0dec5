@@ -8,6 +8,7 @@ import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
+import { isDiffValue, computeDiffSummary, type DiffSummary } from './viewerUtils.ts';
 
 interface TableViewProps {
   variables: Variable[];
@@ -30,6 +31,10 @@ interface TableViewProps {
 
 const ROW_HEIGHT = 24;
 const HEADER_HEIGHT = 28;
+// When diff mode adds a summary line under each variable name, the sticky
+// header needs extra height for it — both the header's own CSS height and
+// the virtualizer's `paddingStart` (so rows don't render underneath it).
+const HEADER_HEIGHT_WITH_DIFF = 42;
 
 interface ColumnData {
   variable: Variable;
@@ -52,12 +57,30 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
 
   const rowCount = columns.length > 0 ? columns[0].values.length : 0;
 
+  // Task 4.5 / extension-read-step.md Diff View spec: per-variable summary
+  // stats (differing count / max / mean abs error), shown as a header
+  // annotation when diff mode is on. Memoized so a hover-driven re-render
+  // (which doesn't change values/diffValues) doesn't recompute it.
+  const diffSummaries = useMemo((): Map<string, DiffSummary> => {
+    const result = new Map<string, DiffSummary>();
+    if (!showDiff || !diffValues) return result;
+    for (const col of columns) {
+      const origVals = diffValues.get(col.variable.name);
+      if (!origVals) continue;
+      result.set(col.variable.name, computeDiffSummary(col.values, origVals));
+    }
+    return result;
+  }, [showDiff, diffValues, columns]);
+
+  const hasDiffSummaries = diffSummaries.size > 0;
+  const headerHeight = hasDiffSummaries ? HEADER_HEIGHT_WITH_DIFF : HEADER_HEIGHT;
+
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
-    paddingStart: HEADER_HEIGHT,
+    paddingStart: headerHeight,
   });
 
   const virtualizerRef = useRef(virtualizer);
@@ -134,7 +157,7 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
           display: 'flex',
           background: colors.surface,
           borderBottom: `1px solid ${colors.border}`,
-          height: HEADER_HEIGHT,
+          height: headerHeight,
           alignItems: 'center',
           fontWeight: 600,
           fontSize: fontSizes.sm,
@@ -152,21 +175,42 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
         >
           #
         </div>
-        {columns.map((col) => (
-          <div
-            key={col.variable.id}
-            style={{
-              width: colWidth,
-              flexShrink: 0,
-              padding: `0 ${spacing.xs}px`,
-              color: col.variable.color,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            {col.variable.name}
-          </div>
-        ))}
+        {columns.map((col) => {
+          const summary = diffSummaries.get(col.variable.name);
+          return (
+            <div
+              key={col.variable.id}
+              data-testid={summary ? `table-diff-summary-${col.variable.name}` : undefined}
+              style={{
+                width: colWidth,
+                flexShrink: 0,
+                padding: `0 ${spacing.xs}px`,
+                color: col.variable.color,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col.variable.name}</div>
+              {summary && (
+                <div
+                  style={{
+                    fontSize: fontSizes.xs,
+                    fontWeight: 400,
+                    fontFamily: fonts.mono,
+                    color: summary.count > 0 ? colors.warning : colors.textTertiary,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {summary.count === 0
+                    ? 'no diffs'
+                    : `${summary.count} diff / max Δ ${summary.maxAbsError.toPrecision(4)} / mean Δ ${summary.meanAbsError.toPrecision(4)}`}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Virtual body */}
@@ -220,7 +264,10 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
                 // Diff detection
                 const origVals = showDiff && diffValues ? diffValues.get(col.variable.name) : undefined;
                 const origVal = origVals && rowIdx < origVals.length ? origVals[rowIdx] : undefined;
-                const hasDiff = showDiff && val !== undefined && origVal !== undefined && val !== origVal;
+                // Task 4.5 (fixes UI-14): NaN-aware equality — plain `!==`
+                // flagged a losslessly round-tripped NaN as a diff (NaN !==
+                // NaN in JS). `isDiffValue` treats NaN-vs-NaN as equal.
+                const hasDiff = showDiff && val !== undefined && origVal !== undefined && isDiffValue(val, origVal);
                 const diffDelta = hasDiff ? val - origVal! : 0;
                 const diffBg = hasDiff ? colors.warningDim : undefined;
                 const diffTitle = hasDiff

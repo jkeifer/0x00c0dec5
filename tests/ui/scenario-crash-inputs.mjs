@@ -8,7 +8,7 @@
 // Run: node tests/ui/scenario-crash-inputs.mjs   (dev server must be running)
 
 import { chromium } from 'playwright';
-import { newContext, shot, bodyRendered, boundaryShown, createHarness, safeReload } from './scenario-helpers.mjs';
+import { newContext, shot, bodyRendered, boundaryShown, createHarness, safeReload, seedStateAndReload } from './scenario-helpers.mjs';
 
 const h = createHarness('scenario-crash-inputs');
 
@@ -94,10 +94,7 @@ async function main() {
         chunkOrder: 'row-major',
       },
     };
-    await page.evaluate((s) => {
-      localStorage.setItem('0x00c0dec5-state-tabular', JSON.stringify(s));
-    }, v1State);
-    await safeReload(page);
+    await seedStateAndReload(page, { '0x00c0dec5-state-tabular': v1State });
     await page.waitForTimeout(1200);
     await shot(page, 'crash-inputs-legacy-v1');
 
@@ -129,13 +126,9 @@ async function main() {
   // ── Corrupt state seeds: garbage fields, then invalid JSON ──────────────
   {
     const { page, issues } = await newContext(browser, { fresh: true });
-    await page.evaluate(() => {
-      localStorage.setItem(
-        '0x00c0dec5-state-tabular',
-        JSON.stringify({ variables: 'garbage', shape: [0, -1] }),
-      );
+    await seedStateAndReload(page, {
+      '0x00c0dec5-state-tabular': { variables: 'garbage', shape: [0, -1] },
     });
-    await safeReload(page);
     await page.waitForTimeout(1200);
     await shot(page, 'crash-inputs-garbage-fields');
     const rendered1 = await bodyRendered(page);
@@ -151,10 +144,9 @@ async function main() {
 
     issues.console.length = 0;
     issues.pageerror.length = 0;
-    await page.evaluate(() => {
-      localStorage.setItem('0x00c0dec5-state-tabular', 'not json at all{{{');
+    await seedStateAndReload(page, {
+      '0x00c0dec5-state-tabular': 'not json at all{{{',
     });
-    await safeReload(page);
     await page.waitForTimeout(1200);
     await shot(page, 'crash-inputs-not-json');
     const rendered2 = await bodyRendered(page);
@@ -199,7 +191,7 @@ async function main() {
       },
       ui: {},
     };
-    await page.evaluate((s) => {
+    await page.context().addInitScript((s) => {
       localStorage.setItem('0x00c0dec5-state-tabular', JSON.stringify(s));
     }, zeroChunkState);
 

@@ -10,31 +10,34 @@ import { FlatView } from './FlatView.tsx';
 import { TableView } from './TableView.tsx';
 import { GridView } from './GridView.tsx';
 
+// Task 4.4 (remediation-plan.md, Phase 4; fixes UI-6): per spec, every
+// non-Values stage offers Hex AND Flat; Values/Typed/Read additionally offer
+// Table/Grid (the value-shaped views). Write and Metadata etc. are Hex+Flat
+// only — there is no value-shaped view of raw bytes/metadata.
 const VALUES_VIEW_MODES = [
   { value: 'table', label: 'Table' },
   { value: 'grid', label: 'Grid' },
+  { value: 'hex', label: 'Hex' },
   { value: 'flat', label: 'Flat' },
 ];
 
 const TYPED_VIEW_MODES = [
   { value: 'table', label: 'Table' },
   { value: 'grid', label: 'Grid' },
-  { value: 'flat', label: 'Flat' },
   { value: 'hex', label: 'Hex' },
+  { value: 'flat', label: 'Flat' },
 ];
 
 const READ_VIEW_MODES = [
   { value: 'table', label: 'Table' },
   { value: 'grid', label: 'Grid' },
+  { value: 'hex', label: 'Hex' },
   { value: 'flat', label: 'Flat' },
 ];
 
 const DEFAULT_VIEW_MODES = [
   { value: 'hex', label: 'Hex' },
-];
-
-const WRITE_VIEW_MODES = [
-  { value: 'hex', label: 'Hex' },
+  { value: 'flat', label: 'Flat' },
 ];
 
 /** Display label per stage name, in `STAGE_ORDER`'s fixed order — used to
@@ -100,7 +103,7 @@ export function StagePane({
   const isReadStage = selectedStage === 'read';
   const isWriteStage = selectedStage === 'write';
   // Table/Grid views only ever render Values/Typed/Read stages (see
-  // viewModes below — every other stage is hex-only), so exactly one of
+  // viewModes below — every other stage is Hex/Flat-only), so exactly one of
   // these is relevant whenever 'table'/'grid' is reachable (D6, fixes UI-9).
   const tableGridValues = isValuesStage
     ? logicalValues
@@ -109,15 +112,15 @@ export function StagePane({
       : isReadStage && readResult.success
         ? readResult.reconstructedValues
         : new Map<string, number[]>();
+  // Task 4.4 (fixes UI-6): all non-Values/Typed/Read stages (Linearized,
+  // Encoded, Metadata, Write) get the same Hex+Flat mode set.
   const viewModes = isValuesStage
     ? VALUES_VIEW_MODES
     : isTypedStage
       ? TYPED_VIEW_MODES
       : isReadStage
         ? READ_VIEW_MODES
-        : isWriteStage
-          ? WRITE_VIEW_MODES
-          : DEFAULT_VIEW_MODES;
+        : DEFAULT_VIEW_MODES;
 
   // Auto-fallback: if current view mode isn't available for this stage, use first available
   const effectiveView = viewModes.some((m) => m.value === viewMode)
@@ -192,7 +195,7 @@ export function StagePane({
 
     switch (effectiveView) {
       case 'hex':
-        return <HexView sections={hexSections} paneId={paneId} chunkTraceMap={chunkTraceMap} />;
+        return <HexView sections={hexSections} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
       case 'flat':
         return <FlatView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
       case 'table':
@@ -200,7 +203,7 @@ export function StagePane({
       case 'grid':
         return <GridView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} diffValues={diffValues} showDiff={!!diffValues} />;
       default:
-        return <HexView sections={hexSections} paneId={paneId} chunkTraceMap={chunkTraceMap} />;
+        return <HexView sections={hexSections} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
     }
   }
 

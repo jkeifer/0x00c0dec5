@@ -5,13 +5,12 @@
 // 'write', 'read'. Phase 3.8 changed the pane dropdown's <option> values from
 // numeric indices to these names, so setPaneStage below selects by name.
 //
-// KNOWN-FAIL UI-2 (docs/remediation-plan.md Part 1, "UI components"): hovering a
-// hex byte in the Values/Typed/Read stages' HexView does not cross-highlight a
-// post-entropy pane (e.g. Encoded after RLE) because traceChunkMap is plumbed into
-// HexView/WriteHexView/FlatView but never consulted (ESLint-confirmed unused prop).
-// Fixed by Phase 4 task 4.2. This scenario asserts 0 cross-highlighted bytes today;
-// if it ever highlights bytes, that's reported loudly as UNEXPECTED (Phase 4 landed
-// — flip the expectation).
+// UI-2 (docs/remediation-plan.md Part 1, "UI components") FIXED by Phase 4 task 4.2:
+// hovering a hex byte in the Values/Typed/Read stages' HexView now cross-highlights a
+// post-entropy pane (e.g. Encoded after RLE) because HexView/FlatView fall back to
+// traceChunkMap (traceId -> chunkId) when a trace's own chunkId is empty, the same
+// fallback TableView already used. This scenario asserts the cross-highlight actually
+// happens (chunk-level highlighting in the post-RLE Encoded pane).
 //
 // Run: node tests/ui/scenario-hover-linking.mjs   (dev server must be running)
 
@@ -114,9 +113,9 @@ async function main() {
     `valueLevel=${rleHighlights.valueLevel} chunkLevel=${rleHighlights.chunkLevel}`,
   );
 
-  // ── KNOWN-FAIL UI-2: hover a hex byte in the Typed stage's HexView; expect no ──
-  // cross-highlight in the (post-RLE) Encoded pane, because traceChunkMap is
-  // plumbed into HexView but never consulted.
+  // ── UI-2 fixed: hover a hex byte in the Typed stage's HexView; expect a ──
+  // cross-highlight in the (post-RLE) Encoded pane, since Typed-stage traces'
+  // empty chunkId now falls back to traceChunkMap's traceId -> chunkId entry.
   await page.mouse.move(10, 10);
   await setPaneStage(page, 'left', 'typed');
   await setPaneViewMode(page, 'left', 'Hex');
@@ -125,15 +124,22 @@ async function main() {
   const typedHexByte = page.locator('[data-testid="pane-left"] [data-testid^="hex-byte-"]').nth(2);
   await typedHexByte.hover();
   await page.waitForTimeout(400);
-  await shot(page, 'hover-linking-typed-hex-to-encoded-known-fail');
+  await shot(page, 'hover-linking-typed-hex-to-encoded');
 
   const encodedHighlightsFromTypedHex = await highlightCounts(page, '[data-testid="pane-right"]');
   const crossHighlightWorked = encodedHighlightsFromTypedHex.valueLevel > 0 || encodedHighlightsFromTypedHex.chunkLevel > 0;
-  h.knownFail(
+  h.check(
     'hovering a Typed-stage hex byte cross-highlights the (post-RLE) Encoded pane',
     crossHighlightWorked,
     `valueLevel=${encodedHighlightsFromTypedHex.valueLevel} chunkLevel=${encodedHighlightsFromTypedHex.chunkLevel}`,
-    'UI-2 (fix: Phase 4)',
+  );
+
+  // ── HoverBar shows the full stage chain (byte counts) for this hover too. ──
+  const barTextTypedHex = await page.locator('[data-testid="hover-bar"]').innerText();
+  h.check(
+    'hover-bar shows the Encoded stage in the chain when hovering a Typed-stage hex byte',
+    /Encoded:/.test(barTextTypedHex),
+    barTextTypedHex.replace(/\n/g, ' | ').slice(0, 200),
   );
 
   await browser.close();

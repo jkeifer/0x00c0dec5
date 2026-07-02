@@ -237,6 +237,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     };
   }, [state]);
 
+  // SW-9: the 500ms debounce above loses edits made in the final 500ms
+  // before the tab closes (the timer is still pending when the page goes
+  // away). Flush synchronously on `pagehide` — preferred over `beforeunload`
+  // because it also reliably fires for bfcache navigations/backgrounding on
+  // mobile Safari, where `beforeunload` is unreliable — and cancel the
+  // pending debounce timer so we don't do a redundant/stale save afterward.
+  // `stateRef` (already kept current for `switchDataModel`, above) gives the
+  // listener the latest state without needing to be re-attached on every
+  // state change.
+  useEffect(() => {
+    const flush = () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      saveState(stateRef.current);
+    };
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+    };
+  }, []);
+
   const switchDataModel = useCallback(
     (model: AppState['dataModel']) => {
       const currentState = stateRef.current;

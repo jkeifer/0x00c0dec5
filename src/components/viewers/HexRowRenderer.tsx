@@ -63,12 +63,10 @@ export function HexRowRenderer({
         {Array.from({ length: bytesPerRow }, (_, col) => {
           const byteIdx = byteStart + col;
           if (byteIdx >= byteEnd) {
-            return (
-              <span key={col}>
-                {'   '}
-                {col === Math.floor(bytesPerRow / 2) - 1 ? ' ' : ''}
-              </span>
-            );
+            // Two spaces = same width as two hex digits; the reduce separator
+            // below supplies the inter-column gap uniformly for all columns,
+            // so the ASCII column stays aligned on partial final rows (UI-1).
+            return <span key={col}>{'  '}</span>;
           }
           const trace = traces[byteIdx] as typeof traces[0] | undefined;
           const isValueHovered = trace != null && hoveredTraceId !== null && trace.traceId === hoveredTraceId;

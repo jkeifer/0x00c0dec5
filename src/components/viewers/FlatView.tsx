@@ -30,7 +30,7 @@ function hexSummary(bytes: Uint8Array): string {
   return s;
 }
 
-export function FlatView({ stage, paneId, chunkTraceMap }: FlatViewProps) {
+export function FlatView({ stage, paneId, chunkTraceMap, traceChunkMap }: FlatViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -110,17 +110,30 @@ export function FlatView({ stage, paneId, chunkTraceMap }: FlatViewProps) {
             (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && group.chunkId === hoveredChunkId)
             || (flatChunkTraceIds != null && flatChunkTraceIds.has(group.traceId))
           );
-          void (isValueHovered || isChunkHovered);
 
+          // Structural traces (magic/metadata) carry no variableName/coords \u2014
+          // fall back to displayValue (e.g. "magic (start)", "metadata") so
+          // these groups render a real label instead of a blank row.
+          const isStructural = !group.isChunkLevel && group.variableName === '';
           const label = group.isChunkLevel
             ? `${group.chunkId} [${group.byteOffset}\u2013${group.byteOffset + group.byteCount - 1}]`
-            : `${group.variableName}${formatCoords(group.coords)}`;
-          const value = group.isChunkLevel ? '' : group.displayValue;
+            : isStructural
+              ? `${group.displayValue} [${group.byteOffset}\u2013${group.byteOffset + group.byteCount - 1}]`
+              : `${group.variableName}${formatCoords(group.coords)}`;
+          const value = group.isChunkLevel || isStructural ? '' : group.displayValue;
+
+          // UI-2 fix (remediation-plan.md task 4.2): Values/Typed/Read stage
+          // groups carry chunkId '' (they precede chunking). Fall back to
+          // traceChunkMap's global traceId -> chunkId lookup — the same
+          // fallback TableView already uses at hover time — so hovering these
+          // rows still resolves a real chunkId and cross-highlights
+          // post-entropy (chunk-level) panes.
+          const resolvedChunkId = group.chunkId || traceChunkMap?.get(group.traceId) || '';
 
           return (
             <div
               key={virtualRow.key}
-              onMouseEnter={() => setHover(group.traceId, group.chunkId, paneId)}
+              onMouseEnter={() => setHover(group.traceId, resolvedChunkId, paneId)}
               style={{
                 position: 'absolute',
                 top: virtualRow.start,

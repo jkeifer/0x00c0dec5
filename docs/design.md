@@ -117,13 +117,35 @@ The user sees their data as human-readable values on the left and the output fil
 
 ## Pipeline Stage Data Model
 
-Each pipeline stage produces an output that the viewer can display. Stages are identified by index and carry:
+The pipeline is a fixed, ordered list of **7 stages** — `StageName` (`src/types/pipeline.ts`) is the single source of truth for stage identity, both for computation order and for what a persisted pane selection means:
+
+```typescript
+type StageName = 'values' | 'typed' | 'linearized' | 'encoded'
+               | 'metadata' | 'write' | 'read';
+
+const STAGE_ORDER: StageName[] = [
+  'values', 'typed', 'linearized', 'encoded', 'metadata', 'write', 'read',
+];
+```
+
+| Stage | Produces |
+|-------|----------|
+| **Values** | Human-readable logical values per variable (from `logicalType`), as float64 bytes for display purposes. |
+| **Typed** | Each variable's logical values converted to its `typeAssignment.storageDtype` (see "Logical Types and Type Assignment" above). |
+| **Linearized** | Typed values chunked (per `chunkShape`) and interleaved (row/column) into byte order. |
+| **Encoded** | Each chunk's (or each variable's, in column mode) codec pipeline applied. |
+| **Metadata** | The serialized metadata bytes (JSON or binary) — see Metadata Assembly below. |
+| **Write** | The final assembled virtual file(s) — magic, metadata placement, chunk ordering, partitioning. |
+| **Read** | The result of reading the Write stage's file(s) back — reconstructed values on success, or a failure state (see the Read Step extension). |
+
+Stages are identified **by name**, not by index — a persisted pane selection stores a `StageName` string so it survives the stage list growing (it already has, twice: Typed was added when scale/offset moved out of the codec pipeline, then Read was added by the read extension). Each stage carries:
 
 ```typescript
 interface PipelineStage {
-  name: string;                  // Display name (e.g., "Values", "Linearized", "1. Delta")
+  name: string;                  // Display name (e.g., "Values", "Typed", "Read")
   bytes: Uint8Array;             // The byte content at this stage
   traces: ByteTrace[];           // Per-byte provenance, one entry per byte
+  chunkRegions: ChunkRegion[];   // Byte ranges labeled by chunk/structural region, for hex-view sectioning
   stats: {
     byteCount: number;
     entropy: number;             // Shannon entropy (bits/byte)
@@ -151,11 +173,11 @@ interface ByteTrace {
 
 **Tracing fidelity degrades through the pipeline**, and this is intentional:
 
-- **Before structural steps (Values stage)**: perfect per-value tracing
-- **After chunking/interleaving (Linearized stage)**: perfect per-value tracing, bytes are just reordered
-- **After non-size-changing codecs (delta, shuffle, bitround)**: per-value tracing preserved (byte count stable, one-to-one mapping)
-- **After dtype-changing codecs (scale/offset)**: per-value tracing preserved but byte count per value changes (e.g., 4 bytes → 2 bytes)
-- **After size-changing entropy codecs (RLE, LZ)**: tracing drops to chunk-level. Individual bytes can no longer be mapped to specific source values. Hovering highlights all values from the source chunk.
+- **Values stage**: perfect per-value tracing.
+- **Typed stage**: perfect per-value tracing — the dtype conversion (and any scale/offset/keepBits from Type Assignment) is a byte-count change per value at most (e.g. float64 display bytes → int16 storage bytes), still a clean one-to-one mapping from source value to its typed bytes.
+- **Linearized stage**: perfect per-value tracing, bytes are just chunked and reordered.
+- **After reordering codecs (Delta, Byte Shuffle)**: per-value tracing preserved (`propagateTracesValuePreserving` in `src/engine/trace.ts`) — these codecs never change the byte count, so the mapping stays one-to-one.
+- **After entropy codecs (RLE, LZ)**: tracing drops to chunk-level (`degradeTracesToChunkLevel`). These are the only size-changing steps left in the codec registry (scale/offset, the other historical size-changer, is no longer a codec — see Logical Types and Type Assignment above). Individual bytes can no longer be mapped to specific source values; hovering highlights all values from the source chunk instead.
 
 This degradation is pedagogically valuable: it shows that entropy coding makes data opaque and that you need metadata to reverse the process.
 
@@ -176,19 +198,67 @@ The type registry includes:
 
 All multi-byte types use little-endian encoding (matching most modern hardware and formats like Zarr, Parquet, GeoTIFF).
 
+This is the **storage** type registry — the dtype bytes are actually written as. It is a separate concept from the **logical type** a variable is defined with (see "Logical Types and Type Assignment" below): a user picks a logical type ("a decimal between -50 and 50 with 1 decimal place") and separately chooses which of these eight storage dtypes to encode it into. That choice — not a codec — is where precision/size tradeoffs like float→int quantization and mantissa bit-rounding now live.
+
+## Logical Types and Type Assignment
+
+Earlier drafts of this tool modeled float→int quantization and mantissa-bit-rounding as codecs ("Scale/Offset" and "Bit Round"). The shipped design instead splits data generation and storage into two explicit concepts, with a dedicated pipeline stage between them:
+
+- **Logical type** (`Variable.logicalType`): describes what a human-meaningful value looks like, independent of how it's stored. There are three kinds:
+
+  ```typescript
+  type LogicalType = 'integer' | 'decimal' | 'continuous';
+
+  interface LogicalTypeConfig {
+    type: LogicalType;
+    min: number;
+    max: number;
+    decimalPlaces?: number;       // decimal only — e.g. 1 → values like 23.4
+    significantFigures?: number;  // continuous only
+  }
+  ```
+
+  `integer` generates whole numbers in `[min, max]`. `decimal` generates values with a fixed number of decimal places (a stand-in for "realistic sensor precision," e.g. temperature to 1 decimal place). `continuous` generates full-precision floating point values within the range. This is the Values stage's data source — the numbers a spreadsheet-literate user would recognize.
+
+- **Type assignment** (`Variable.typeAssignment`): the pedagogical "choose a dtype" step — how those logical values get converted into storage bytes.
+
+  ```typescript
+  interface TypeAssignment {
+    storageDtype: DtypeKey;
+    scale?: number;    // for integer storage of decimal/continuous values
+    offset?: number;   // for integer storage of decimal/continuous values
+    keepBits?: number; // for float precision reduction (mantissa bits kept)
+  }
+  ```
+
+  If `scale`/`offset` are set, the Typed stage computes `(value - offset) × scale` before casting into `storageDtype` — the same transform the old "Scale/Offset" codec performed, now framed as "you're storing a decimal value in an integer dtype, so you need a scale factor to preserve precision" rather than as a pipeline step. If `keepBits` is set on a float `storageDtype`, mantissa bits beyond `keepBits` are zeroed after conversion — the same transform the old "Bit Round" codec performed. Both are still genuinely lossy in exactly the ways the old codecs were (integer clamping/rounding, irrecoverable mantissa truncation); only where they live in the pipeline changed.
+
+This distinction is pedagogically sharper than the old model: it separates "what does this value mean" (logical type) from "how many bytes do I spend representing it, and what do I give up by doing so" (type assignment) — the same question every real format's schema answers (Parquet's logical vs. physical types, GeoTIFF's sample format, Zarr's dtype + filters).
+
+### The Typed Pipeline Stage
+
+Converting logical values to storage bytes is its own pipeline stage, **Typed**, sitting immediately after **Values** and before **Linearized** (see Pipeline Stages below). The Typed stage's byte content is exactly what `assignType()` produces per variable, concatenated; its traces carry the storage dtype and the human-readable (pre-conversion) display value, so hovering a Typed-stage byte still shows the original logical value even though the bytes are now, say, int16.
+
+`assignType()` also tracks per-variable statistics (`VariableStats`): count, min/max/mean (NaN-aware — NaN inputs are counted separately in `nanCount` and excluded from min/max/mean rather than poisoning them), `clipped` (values clamped to the storage dtype's range), `rounded` (values that lost precision), and `isLossy` (`clipped > 0 || rounded > 0`). These stats feed both the Metadata stage (as `variable_statistics`) and the diff view's lossy-variable flagging.
+
 ## Codec Registry
 
-Codecs are zarr-inspired but use friendlier naming. Each codec declares:
+Codecs are zarr-inspired but use friendlier naming. With scale/offset and bit-round moved into Type Assignment (above), there are two remaining codec categories — **reordering** and **entropy**; the **mapping** category from earlier drafts no longer exists. Each codec declares:
 
 ```typescript
 interface CodecDefinition {
   key: string;                    // Unique identifier
   label: string;                  // Display name
-  category: "mapping" | "reordering" | "entropy";
+  category: "reordering" | "entropy";
   description: string;            // Tooltip/help text
   params: Record<string, ParamDef>;
   applicableTo: (dtype: string) => boolean;  // Which input dtypes are meaningful
+  isLossy: (inputDtype: DtypeKey) => boolean; // Whether encode->decode loses information for this input dtype
   encode: (bytes: Uint8Array, inputDtype: string, params: Record<string, any>) => {
+    bytes: Uint8Array;
+    outputDtype: string;
+  };
+  decode: (bytes: Uint8Array, encodedDtype: string, params: Record<string, any>) => {
     bytes: Uint8Array;
     outputDtype: string;
   };
@@ -205,44 +275,54 @@ interface ParamDef {
 }
 ```
 
-### v1 Codecs
+`isLossy` is a **predicate over the input dtype**, not a plain boolean — this deviates from `docs/extension-read-step.md`'s original `lossy: boolean` field (see that doc's own note on the deviation). A single boolean cannot express Delta's actual behavior: after removing an early clamping bug, Delta's encode/decode is an exact modular round-trip for every integer dtype (typed-array writes wrap mod 2^N, so a negative diff on an unsigned dtype is not clamped away — it wraps and un-wraps exactly), but Delta is still lossy on float dtypes, because each difference gets re-rounded to the float's own precision. `isLossy(dtype)` is the minimum shape that can say "exact for integers, lossy for floats."
 
-**Mapping codecs** (transform value domains):
+### The 4 Codecs
 
-| Codec | Params | Input → Output | Description |
-|-------|--------|---------------|-------------|
-| Scale/Offset | scale: number, offset: number, outputDtype: select | any → any | `(value - offset) × scale`, cast to output type. Primary use: float → integer for compressibility. |
-| Bit Round | keepBits: number (1-23) | float → float | Zero least-significant mantissa bits. Reduces precision to improve compressibility. Only meaningful for float types. |
+**Reordering codecs** (rearrange bytes for better compressibility; `isLossy` varies):
 
-**Reordering codecs** (rearrange bytes for better compressibility):
+| Codec | Params | Input → Output | isLossy | Description |
+|-------|--------|---------------|---------|-------------|
+| Delta | order: number (1-3) | any non-float → same | float dtypes only | Store value-to-value differences via typed-array arithmetic (wraps mod 2^N for integers — exact round-trip on every integer dtype, including unsigned). Lossy only on float dtypes, where each difference is re-rounded to float precision. `applicableTo` returns false for float dtypes, surfacing the ⚠ warning there. |
+| Byte Shuffle | elementSize: number (1-8) | any → same | never | Transpose bytes by position within each element. `applicableTo` returns false for 1-byte dtypes (nothing to transpose). A **separate** param-aware warning (not expressible via `applicableTo`, which only sees the dtype) fires when `elementSize` doesn't match the actual input dtype's size — this is the "shuffle needs to know the element boundary" lesson; garbled output is intentional, not blocked. |
 
-| Codec | Params | Input → Output | Description |
-|-------|--------|---------------|-------------|
-| Delta | order: number (1-3) | any → same | Store value-to-value differences. Operates in typed value space, not byte space. Effective for slowly-changing data (sorted IDs, timestamps, coordinates). |
-| Byte Shuffle | elementSize: number (1-8) | any → same | Transpose bytes by position within each element. Groups MSBs together, LSBs together. Element size should match dtype size (auto-defaulted). |
+**Entropy codecs** (compress redundancy; always applicable, byte-wise, no dtype awareness):
 
-**Entropy codecs** (compress redundancy):
+| Codec | Params | Input → Output | isLossy | Description |
+|-------|--------|---------------|---------|-------------|
+| RLE | — | any → uint8 | never | Run-length encoding. Outputs (count, value) byte pairs, one byte each (count capped at 255, so a run longer than 255 splits into multiple pairs). |
+| LZ (simple) | windowSize: number | any → uint8 | never | Simplified LZ77 with back-references (`[length, offsetHi, offsetLo]`) or literals (`[0x00, byte]`). Finds repeated byte sequences within `windowSize` bytes behind the cursor. |
 
-| Codec | Params | Input → Output | Description |
-|-------|--------|---------------|-------------|
-| RLE | — | any → uint8 | Run-length encoding. Outputs (count, value) byte pairs. Effective after bitround or quantization creates runs. |
-| LZ (simple) | windowSize: number | any → uint8 | Simplified LZ77 with back-references. Finds repeated byte sequences. |
+Both entropy codecs collapse the output dtype to `uint8` — this is the dtype-flow rule below.
 
 **v2 additions** (future): zstd via WASM, deflate, variable-length encoding, quantize.
 
 ### Codec Applicability and Warnings
 
-Codecs declare which dtypes they're applicable to via `applicableTo()`. When a codec is applied to an inapplicable dtype (e.g., bitround on an integer, or shuffle on interleaved heterogeneous types), the UI shows a warning but does **not** prevent the operation. The result may be garbage — and that's intentional. The user learns through experimentation why certain codecs require certain data layouts.
+Codecs declare which dtypes they're applicable to via `applicableTo()`. When a codec is applied to an inapplicable dtype (e.g., Delta on a float, or Byte Shuffle on a 1-byte dtype), the UI shows a warning but does **not** prevent the operation. The result may be garbage (or, for Delta on float, merely re-rounded) — and that's intentional. The user learns through experimentation why certain codecs require certain data layouts.
 
-**Warning UI**: when a codec step receives an input dtype that fails `applicableTo()`, the step in the pipeline editor gets a small warning icon (⚠) next to the codec name, colored in the `warning` theme color. Hovering or clicking the icon shows a tooltip with a short explanation (e.g., "Bit Round is designed for float types; applying to int16 zeros out data bits rather than mantissa bits"). The same warning icon appears on the corresponding node in the pipeline strip.
+**Warning UI**: `stepWarnings()` (`src/engine/codecs.ts`) is the single source of truth for both the per-step ⚠ icon in `CodecPipelineEditor` and the Encoded-stage ⚠ icon in the pipeline strip (`pipeline-stage-encoded-warning`). It combines two independent checks:
+
+- `codec.applicableTo(dtype)` at each step's actual running input dtype (computed via the dtype-flow rule below, not re-derived locally).
+- Byte Shuffle's `elementSize` param against the step's actual input dtype size — a mismatch here is a *separate* warning from `applicableTo`, since `applicableTo` never sees the step's params.
+
+Hovering or clicking the icon shows the warning text (e.g., "Delta on Float32 is lossy — differences are re-rounded to float precision each step..." or "Element size 2 doesn't match dtype size 4 — bytes will be grouped incorrectly...").
 
 Additionally, when the interleaving is set to row-oriented and the variables have heterogeneous dtypes, the codec section's explanatory callout should note: "Mixed dtypes are interleaved — codecs like Byte Shuffle and Delta that assume uniform element size will produce garbled output. This is a key reason column-oriented formats exist."
 
 When a codec produces output **larger** than its input (e.g., RLE on random data), the byte count in the pipeline strip node and the codec step annotation should display in the `warning` color to draw attention to the size increase.
 
-### Codec Pipeline Display
+### Codec Pipeline Display and the Dtype-Flow Rule
 
-Each step in the pipeline editor shows the output dtype as an annotation (e.g., "Scale/Offset →int16"). The dtype flows through the pipeline: scale/offset changes it, entropy codecs collapse it to uint8, other codecs preserve it. This makes it visible when a codec is receiving unexpected input.
+Each step in the pipeline editor shows the output dtype as an annotation (e.g., "Byte Shuffle →int16"). The dtype flows through the pipeline via one rule, `outputDtypeFor(codec, inputDtype)` (`src/engine/codecs.ts`) — the single source of truth, called by both the codec pipeline executor and the UI's warning/annotation logic (never re-implemented locally):
+
+```typescript
+function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey): DtypeKey {
+  return codec.category === 'entropy' ? 'uint8' : inputDtype;
+}
+```
+
+Entropy codecs (RLE, LZ) always collapse the running dtype to `uint8`; reordering codecs (Delta, Byte Shuffle) always preserve it. Each step's `encode()` input dtype is the previous step's `outputDtype` (or the variable's `typeAssignment.storageDtype` for the first step) — this makes it visible when a codec is receiving unexpected input, and keeps the pipeline's dtype bookkeeping in exactly one place.
 
 ## UI Architecture
 
@@ -411,60 +491,106 @@ Drag handles should be visually subtle (a thin line or dots pattern that highlig
 
 ### Persistent State
 
-All pipeline configuration is persisted to `localStorage` with a debounced save (500ms after last change). State is restored on page load.
+All pipeline configuration is persisted to `localStorage` with a debounced save (500ms after last change), flushed synchronously on `pagehide` so edits in the final 500ms before the tab closes aren't lost. State is restored on page load.
 
-The persistence layer should be a thin abstraction (`src/state/persistence.ts`) with `loadState(): AppState | null` and `saveState(state: AppState): void` functions, so the storage backend can be swapped later if needed (e.g., to IndexedDB for larger state, or to URL hash encoding for shareable links).
+The persistence layer is a thin abstraction (`src/state/persistence.ts`) with `loadState(model): AppState | null` and `saveState(state): void`, plus `loadActiveModel()`/`saveActiveModel()` for the third storage key described below — so the storage backend can be swapped later if needed (e.g., to IndexedDB for larger state, or to URL hash encoding for shareable links).
 
-Storage key: `"0x00c0dec5-state"`. Each data model (tabular, array) gets a separate key: `"0x00c0dec5-state-tabular"` and `"0x00c0dec5-state-array"`, so switching models doesn't destroy the other model's configuration.
+**Three storage keys**, not one:
 
-The persisted state object:
+- `"0x00c0dec5-state-tabular"` and `"0x00c0dec5-state-array"` — one per data model, so switching models doesn't destroy the other model's configuration.
+- `"0x00c0dec5-active-model"` — records whichever model the user was last looking at, so a fresh page load restores it (rather than always defaulting to tabular).
+
+The persisted state object (verbatim from `src/types/state.ts`):
 
 ```typescript
-interface AppState {
-  dataModel: "tabular" | "array";
-  shape: number[];
-  chunkShape: number[];
-  interleaving: "row" | "column";
-  chunkOrder: "row-major" | "column-major";
-  variables: Variable[];
-  fieldPipelines: Record<string, CodecStep[]>;  // per-variable, used in column mode
-  chunkPipeline: CodecStep[];                    // per-chunk, used in row mode
-  metadata: {
-    customEntries: { key: string; value: string }[];
-    serialization: "json" | "binary";
-  };
-  write: {
-    magicNumber: string;          // hex string
-    partitioning: "single" | "per-chunk";
-    metadataPlacement: "header" | "footer" | "sidecar";
-    chunkOrder: "row-major" | "column-major";
-  };
-  ui: {
-    leftPaneStage: number;
-    rightPaneStage: number;
-    leftPaneView: string;
-    rightPaneView: string;
-    sidebarWidth: number;         // pixels
-    leftPaneRatio: number;        // 0-1, fraction of main area width allocated to left pane
-  };
+type LogicalType = "integer" | "decimal" | "continuous";
+
+interface LogicalTypeConfig {
+  type: LogicalType;
+  min: number;
+  max: number;
+  decimalPlaces?: number;       // decimal only
+  significantFigures?: number;  // continuous only
+}
+
+interface TypeAssignment {
+  storageDtype: DtypeKey;
+  scale?: number;    // for integer storage of decimal/continuous
+  offset?: number;   // for integer storage of decimal/continuous
+  keepBits?: number; // for float precision reduction
 }
 
 interface Variable {
   id: string;
   name: string;
-  dtype: string;
+  logicalType: LogicalTypeConfig;
+  typeAssignment: TypeAssignment;
   color: string;
+}
+
+interface AppState {
+  dataModel: "tabular" | "array";
+  shape: number[];
+  chunkShape: number[];
+  interleaving: "row" | "column";
+  variables: Variable[];
+  fieldPipelines: Record<string, CodecStep[]>;  // keyed by Variable.id (not name — see below)
+  chunkPipeline: CodecStep[];                    // per-chunk, used in row mode
+  metadata: {
+    customEntries: { key: string; value: string }[];
+    serialization: "json" | "binary";
+    includeChunkIndex: boolean;   // default true — see "Chunk Index" under Write Step
+  };
+  write: {
+    includeMetadata: boolean;     // default false — see the Read Step extension
+    magicNumber: string;          // hex string
+    partitioning: "single" | "per-chunk";
+    metadataPlacement: "header" | "footer" | "sidecar";
+    chunkOrder: "row-major" | "column-major";
+    footerLocator: "trailer" | "none";  // default 'trailer' — see "Footer Locator" under Write Step
+  };
+  ui: {
+    leftPaneStage: StageName;     // one of the 7 stage names, not an index
+    rightPaneStage: StageName;    // default 'write'
+    leftPaneView: string;
+    rightPaneView: string;
+    showDiff: boolean;
+  };
 }
 
 interface CodecStep {
   codec: string;                  // codec key
-  params: Record<string, any>;
+  params: Record<string, number | string>;
 }
 ```
 
+Two shapes worth calling out because they changed since the tool's first draft:
+
+- **`fieldPipelines` is keyed by `Variable.id`, not `Variable.name`.** Names are user-editable and can collide (two variables named the same thing, or one renamed onto an existing name); keying by name meant a rename or collision could silently clobber or delete another variable's codec pipeline. The file format itself still keys `codec_pipelines` by variable *name* (see Metadata Assembly) — the id→name translation happens once, at metadata-collection time, not throughout the app. One consequence: duplicate variable names are now harmless to the pipeline itself (each variable still has its own pipeline, keyed by its own id) — the UI still flags duplicate/empty names with a warning border, because the *file format* keys by name and a written file with duplicate variable names is genuinely ambiguous to a reader.
+- **`ui.leftPaneStage`/`rightPaneStage` are `StageName` strings, not numeric indices**, and there is no `-1` sentinel. Persisting an index into a list that has already grown twice (Typed, then Read) meant an old save's index quietly pointed at the wrong stage after the list grew. Stage names are stable under list growth; `rightPaneStage` defaults to `'write'` (a real, correct default — not a sentinel resolved elsewhere).
+- `ui.sidebarWidth`/`ui.leftPaneRatio` from earlier drafts don't exist — panel sizing is handled entirely by `react-resizable-panels`' own persistence, not app state.
+
+### State Updates
+
+The reducer (`src/state/useAppState.ts`) groups actions into three shapes rather than one setter action per field:
+
+1. **Semantic actions** for anything with real validation or structural consequences: `SET_SHAPE` (clamps/pads `chunkShape` to match), `SET_CHUNK_SHAPE` (rejects empty/non-positive/wrong-length shapes, mirroring `SET_SHAPE`), `ADD_VARIABLE`/`REMOVE_VARIABLE`/`UPDATE_VARIABLE`, `SET_INTERLEAVING`, `SET_FIELD_PIPELINE`/`SET_CHUNK_PIPELINE`, and the metadata custom-entry CRUD actions (`ADD_METADATA_ENTRY`/`REMOVE_METADATA_ENTRY`/`UPDATE_METADATA_ENTRY`).
+2. **Three patch actions** for plain-object config sections with no cross-field validation: `UPDATE_WRITE` (merges into `state.write`), `UPDATE_METADATA_CONFIG` (merges into `state.metadata`'s `serialization`/`includeChunkIndex`), `UPDATE_UI` (merges into `state.ui`). These replaced roughly a dozen one-field setter actions from earlier drafts.
+3. **`SET_DATA_MODEL`** is intentionally a pure, storage-free reducer case — it only flips `state.dataModel`. The actual model-switch sequence (save the outgoing model's state, load the incoming model's state or default, force `dataModel` onto the resolved state, record the new active model, then swap it in) lives in a `switchDataModel()` wrapper exposed alongside `dispatch`, which dispatches a `REPLACE_STATE` action with the fully-resolved state. Keeping storage I/O out of the reducer body matters under React StrictMode, which double-invokes reducers.
+
+### Migration Behavior
+
+`loadState(model)` runs three passes before state reaches the app, each with a defined fallback:
+
+1. **`migrateState`**: handles the one known historical shape migration (variables that carried a flat `dtype` field instead of `logicalType`/`typeAssignment` get synthesized logical types and their pipelines get stripped of the now-nonexistent `scale-offset`/`bitround` codec steps). Returns `null` (→ treated as absent, falls through to defaults) if migration itself throws.
+2. **`deepMergeDefaults`**: recursively merges the migrated state over `DEFAULT_STATE`, field by field — anything missing at any level (a newer field like `write.footerLocator` that didn't exist when the save was written) is filled in from the default. `fieldPipelines` is treated as an open-ended dictionary (all of the source's own keys are kept, not just keys present in the default) rather than a fixed shape.
+3. **`validateState`**: structural validation on the merged result — invalid `variables` entries are dropped; a non-array or empty/non-positive `shape` resets the *entire* state to defaults (there's no sane partial recovery from a corrupt shape); `chunkShape` is clamped/padded to match `shape` exactly as `SET_SHAPE` does; `leftPaneStage`/`rightPaneStage` migrate old numeric indices (including the old `-1` sentinel, mapped to `'write'`) to `StageName`s via `STAGE_ORDER`, falling back to the default stage name if unrecognized; `fieldPipelines` keys are re-matched — a legacy key equal to some variable's *name* (not id) is re-keyed to that variable's id, and any key matching neither an id nor a name is dropped.
+
+Every fallback in this chain returns a deep clone of `DEFAULT_STATE`'s data (never a live reference to it), so a caller mutating a loaded-and-defaulted state can never corrupt the shared default object for the rest of the session.
+
 ### Model Switching
 
-Switching between "Tabular" and "N-d Array" changes the UI presentation but does not destroy state unnecessarily. The current state is saved before switching, and restored if the user switches back. Each data model has a separate saved state slot.
+Switching between "Tabular" and "N-d Array" changes the UI presentation but does not destroy state unnecessarily. The current state is saved before switching, and restored if the user switches back. Each data model has a separate saved state slot, and the switch is recorded so a reload returns to the model that was active (see "Persistent State" above).
 
 ### Presets (v2)
 
@@ -474,6 +600,8 @@ Named state snapshots that can be loaded. Built-in presets would replicate real-
 - "This is basically Zarr" (N-d array, per-chunk files, sidecar metadata)
 
 A "Custom" preset auto-saves the user's current configuration. Selecting a built-in preset doesn't destroy the custom state.
+
+Not yet built — see `docs/remediation-plan.md` decision D10 for the pinned design once this is implemented.
 
 ## Data Generation
 
@@ -529,9 +657,13 @@ The Metadata section in the sidebar contains:
 
 2. **Custom entries**: an editable list of key-value pairs. Each row has a text input for the key, a text input for the value, and a delete button. An "Add entry" button appends a new blank row. For the geospatial use case, the presenter would add entries like `crs` = `EPSG:4326` and `transform` = `[1.0, 0.0, 0.0, 0.0, -1.0, 90.0]`.
 
+   **Custom keys that collide with an auto-collected key are renamed, not silently dropped.** Once metadata entries collapse into a flat key→value object at serialization, a custom entry keyed e.g. `shape` would otherwise overwrite the real auto-collected `shape` entry with last-write-wins semantics — corrupting the file's self-description with no warning. Instead, `collectMetadata()` (`src/engine/metadata.ts`) deterministically renames any colliding custom key by prefixing `user_` (repeating the prefix if the user's own key is already `user_<autoKey>`, so the rename itself can never introduce a fresh collision). Auto keys always keep their name; no information is lost, but the written key may differ from what was typed. `MetadataEditor` surfaces a warning on the affected row showing the resulting key.
+
 3. **Serialization toggle**: radio group for JSON / Binary.
 
-4. **Serialized size**: displays the total byte count of the serialized metadata.
+4. **Chunk index toggle**: see "Chunk Index" under Write Step below — it lives in this section because `chunk_index` is a metadata entry, but the option itself is under `state.metadata.includeChunkIndex`.
+
+5. **Serialized size**: displays the total byte count of the serialized metadata.
 
 The Metadata Assembly also appears as a selectable stage in the pipeline strip and pane dropdowns. When selected, the pane shows the serialized metadata bytes in hex or flat view — so you can see exactly what the metadata looks like as bytes.
 
@@ -541,17 +673,47 @@ Serialized metadata bytes are then placed according to the Write step's configur
 
 The write step assembles the final file(s). It combines:
 
-1. **Magic number** (optional): user-defined bytes at the start of the file. Could also appear at the end (configurable). Default: `00 C0 DE C5` (the tool's own name as a hex literal — and itself a demonstration of the concept).
+1. **Magic number** (optional): user-defined bytes at the start of the file. Also written at the end of every file (single-file and per-chunk alike) so the Read step (see the Read Step extension) has a trailing marker to check when a trailer is in play. Default: `00 C0 DE C5` (the tool's own name as a hex literal — and itself a demonstration of the concept).
 
-2. **Metadata bytes**: the serialized metadata from the Metadata Assembly step, placed as header (before data), footer (after data), or in a separate sidecar file.
+2. **Metadata bytes**: the serialized metadata from the Metadata Assembly step, placed as header (before data), footer (after data), or in a separate sidecar file. Only written at all when `write.includeMetadata` is true — see the Read Step extension for the default-false rationale.
 
 3. **Chunk data**: the encoded bytes from the codec pipeline, ordered according to the chunk ordering setting (row-major or column-major).
 
-4. **Chunk index**: a table of byte offsets for each chunk. This is part of the metadata and is critical for random access. If metadata is a header, the chunk index can only be written after all chunks are written (requiring a two-pass write or a placeholder that gets filled in — worth discussing in the talk). If metadata is a footer, the chunk index is natural to write.
+4. **Chunk index**: a table of byte offsets for each chunk (`coords`/`offset`/`size`, plus `variableName` in column mode). This is part of the metadata and is critical for random access — see "Chunk Index" below for the user-facing toggle and what happens without it.
 
-5. **Partitioning**: in "single file" mode, everything goes in one file. In "per-chunk" mode, each chunk is a separate file (named by chunk coordinates), and metadata lives in a root file or sidecar. This mirrors zarr's directory structure.
+5. **Partitioning**: in "single file" mode, everything goes in one file. In "per-chunk" mode, each chunk is a separate file (named `{variable}_chunk_{coords}` in column mode or `chunk_{coords}` in row mode), and metadata (when included) lives in its own `metadata` sidecar file. This mirrors zarr's directory structure.
 
-The output is one or more "virtual files" displayed in a file explorer view. Each file shows its name, size, and byte content (viewable in the hex/flat viewers).
+The output is one or more "virtual files" displayed in a file explorer view (`data-testid="file-explorer"`, entries `file-entry-{i}`). Each file shows its name, size, and byte content (viewable in the hex/flat viewers).
+
+### Header Metadata and Offset Convergence
+
+When metadata is placed as a **header**, the chunk index it embeds needs to know the byte offsets where chunk data starts — but those offsets depend on the header's own serialized size, which depends on the chunk index's digit counts, which can change the header's size. `assembleFiles` (`src/engine/write.ts`) resolves this with a small bounded fixed-point loop (`convergeHeaderMetadata`, capped at 6 iterations): re-serialize using the previous pass's length as the next pass's assumed header size, until the length stops changing. If it genuinely doesn't settle (an oscillation between two lengths), the metadata is padded with trailing whitespace (JSON only) to the largest length seen — offsets computed for that length remain exactly correct once the bytes are padded out to it. The final offsets are asserted against the actual data start before the file is returned, so a convergence bug fails loudly (a thrown error) rather than shipping a file whose reader would mis-slice chunks.
+
+Footer and sidecar placement don't need this: chunk data is written starting right after the leading magic regardless of metadata size, so those offsets are exact on the first pass.
+
+### Footer Locator (D1)
+
+When `write.metadataPlacement === 'footer'`, a second option controls **how a reader is expected to find the footer**: `write.footerLocator: 'trailer' | 'none'` (default `'trailer'`), shown in the Write sidebar section only in that placement.
+
+- **`'trailer'`**: the file layout is `[magic][chunks][metadata][u32 LE metadata-length][magic]` — this is exactly how Parquet works (`[footer][4-byte length]['PAR1']`; the help text says so directly). The reader seeks to `end − magicLen − 4`, reads the length, and slices the metadata exactly. Works identically for JSON and binary metadata.
+- **`'none'`**: the layout stays the plain `[magic][chunks][metadata][magic]` with no length recorded anywhere. The reader falls back to a best-effort backward scan: for JSON, a string-literal-aware brace scan (so an unbalanced `{`/`}` inside a custom metadata *value* — e.g. a WKT string — doesn't throw off the boundary); for binary, a bounded plausibility scan looking for a 4-byte little-endian value that looks like a small positive entry count. **Scanning may legitimately fail** — that's the intended lesson, not a bug, and the failure mode is deliberately narrow: no further heuristics are layered on to make it succeed more often. On failure, the Read step reports `metadata-not-found` (see the Read Step extension's failure taxonomy) with a message that names the Footer locator option as the fix.
+
+This is a genuine user-facing format decision, following the tool's philosophy that the user makes format decisions and the Read step shows the consequence — rather than the app quietly making footer metadata always locatable.
+
+### Chunk Index (D3)
+
+A new Metadata option, `metadata.includeChunkIndex: boolean` (default `true`), controls whether the `chunk_index` entry (coords/offset/size per chunk) is written into metadata at all.
+
+- **`true`** (default): current/expected behavior — the reader locates each chunk directly from the index.
+- **`false`**: `chunk_index` is omitted entirely. The Read step then attempts to **compute** chunk offsets itself, from `chunkShape × dtype size` in row-major chunk order — but this is only possible when *every* codec pipeline in play is size-preserving (Delta, Byte Shuffle — not RLE or LZ, whose encoded size isn't derivable from the input shape alone). When a size-changing codec is present with no index, the Read step fails with reason `no-chunk-index`, explaining that variable-size chunks are unlocatable without an index — arguably the tool's clearest lesson in why real chunked/columnar formats (Zarr, Parquet) always carry one.
+
+Reassembly always keys chunks by coordinates — taken from real index entries when present, or from the computed row-major layout when absent — never from filename parsing or raw byte-offset order.
+
+### Reader Knows the Magic Number (D2)
+
+The Read step extension originally specified that the reader "operates only on what's in the file — it does not have access to the pipeline configuration." That still holds for everything *except* the magic number: `readFile(files, formatSpec: { magic: Uint8Array })` is handed the configured magic as part of the "format definition" it was built to understand — exactly as a real Parquet reader is compiled knowing to expect `PAR1`, or a TIFF reader knows `II*\0`. This is a deliberate, narrow exception to the "reader has no config access" rule, scoped to magic only; every other structural fact (shape, dtypes, chunking, codecs) still comes exclusively from the file's own metadata.
+
+With the magic known, the reader **verifies** it — both the leading magic, and the trailing magic when a footer trailer is in play — rather than blindly stripping `magic.length` bytes from each end and hoping for the best. A mismatch is its own failure reason, `bad-magic`, with a message that draws the Parquet/TIFF analogy directly: this reader only understands files it was built for, and a mismatch means either the wrong kind of file or file corruption before the reader ever got to interpret contents. This closes a real gap: without verification, a reader that merely strips N bytes from each end has no way to detect that those weren't actually magic bytes at all, and would silently attempt to parse garbage as if it were the real payload.
 
 ## File Explorer (v1 minimal, v2 expanded)
 
@@ -570,6 +732,8 @@ The tool supports a live presentation workflow:
 5. **Build up incrementally**: each configuration change updates the output in real time. The audience watches the file bytes evolve.
 
 ## Project Structure
+
+This was the planned structure going into implementation. Some files were added, split, or renamed as the engine grew (a byte-utility module, a decode/reversal module, the type-assignment engine, a `PipelineContext`, etc.) — see `docs/architecture.md` for a current, verified map of where each concern actually lives.
 
 ```
 src/
@@ -643,18 +807,25 @@ The tool should handle degenerate configurations gracefully rather than crashing
 
 | Scenario | Behavior |
 |----------|----------|
-| Zero variables | Show an empty pipeline with a prompt: "Add a variable to get started." Panes show placeholder text. Pipeline stages produce 0-byte outputs. |
-| Empty shape (e.g., `[0]` or `[]`) | Treat as invalid input. Keep the previous valid shape. Show input border in warning color. |
-| Shape with very large dimensions (> 10K total elements) | Allow but show a warning below the shape input: "Large datasets may be slow. This tool is for learning, not production." Cap rendering at ~10K values in table/grid views. |
-| Chunk shape larger than data shape on any dimension | Clamp each chunk dimension to the data shape dimension silently (one chunk on that axis). This is not an error — it just means no splitting on that axis. |
-| Chunk shape of 1 on any dimension | Valid (maximally chunked). May produce many chunks. Warn if total chunk count exceeds ~1000. |
-| Variable name collision (two variables with same name) | Show input border in warning color on the duplicate. The pipeline uses names as keys, so duplicates will cause data loss. |
-| Variable name empty | Show input border in warning color. Use a fallback like `"unnamed_0"` internally. |
-| Codec pipeline produces 0 bytes | Valid (e.g., RLE on empty input). Show "0B" in pipeline strip. Hex view shows empty state. |
-| Codec pipeline produces bytes larger than input | Valid (not an error). Byte count shown in warning color as noted in Codec Applicability section. |
+| Zero variables | GridView shows "No variables defined" (its early-return now happens *after* all hooks run — an earlier draft violated React's rules of hooks here and crashed on delete-then-add-variable; fixed). TableView/FlatView/HexView render their normal (empty) structure. Pipeline stages produce 0-byte or near-empty outputs (magic/metadata bytes may still be present) rather than crashing. |
+| Empty shape (e.g., `[0]` or `[]`) | Cannot actually reach state: the Schema editor's shape inputs clamp to `Math.max(1, parseInt(...) \|\| 1)` per dimension before dispatch, and `SET_SHAPE` independently rejects any shape that is empty or has a non-positive dimension (returning the unchanged state). No warning-border UI exists for shape — the value simply can't go invalid. |
+| Shape with very large dimensions (> 10K total elements) | Not enforced as a hard warning in the current UI; the tool's stated ~10K-element guidance is a design target, not (yet) a rendered warning banner. Virtual scrolling keeps large element counts from freezing the table/grid/hex/flat views regardless. |
+| Chunk shape larger than data shape on any dimension | Clamped per-dimension to the data shape (both in `ChunkConfig`'s input handler and in `SET_CHUNK_SHAPE`/`validateState`) — one chunk on that axis, silently, not an error. |
+| Chunk shape of 0 on any dimension | Rejected outright: `SET_CHUNK_SHAPE` requires every dimension to be a positive integer and returns the unchanged state otherwise; `ChunkConfig`'s input also clamps to a minimum of 1. (An earlier draft let a hand-edited `chunkShape: [0]` reach `computeChunkGrid`, which divides by the chunk dimension and hangs on an infinite loop — fixed by rejecting at the source.) |
+| Chunk shape of 1 on any dimension | Valid (maximally chunked); may produce many chunks. `ChunkConfig` shows the resulting chunk count in the warning color with "— consider larger chunks" once it exceeds 1000. |
+| Variable name collision (two variables with same name) | `SchemaEditor` shows a warning border on every variable sharing a duplicated (or empty) name. Unlike earlier drafts, this is now purely a display/file-format concern, not a data-loss risk: `fieldPipelines` is keyed by each variable's stable `id`, so duplicate or renamed display names no longer clobber another variable's codec pipeline or values. The warning still matters because the *written file format* keys `codec_pipelines`/`schema` by variable name, so a file with duplicate names is genuinely ambiguous to a reader. |
+| Variable name empty | Same warning-border treatment as a name collision (`hasWarning = !v.name || duplicateNames.has(v.name)`); there is no internal fallback name synthesized — the empty string is what gets used as the (ambiguous) key at metadata-serialization time. |
+| Codec pipeline produces 0 bytes | Valid (e.g., RLE or LZ on empty input return `new Uint8Array(0)`). Pipeline strip and hex view handle the empty stage without special-casing. |
+| Codec pipeline produces bytes larger than input | Valid (not an error); the pipeline strip is expected to call this out in the warning color per the Codec Applicability section. |
 | All variables deleted | Same as zero variables case. |
-| Interleaving switched from column to row with existing per-field pipelines | The per-field pipelines are preserved in state but become inactive. The UI switches to show the per-chunk pipeline editor. If the user switches back to column, the per-field pipelines reappear. |
-| Shape dimensions changed (e.g., from 1-d to 2-d) while chunk shape is still 1-d | Pad chunk shape with the data shape's new dimensions (i.e., default new chunk dimensions to full extent). |
+| Interleaving switched from column to row with existing per-field pipelines | The per-field pipelines are preserved in state (`fieldPipelines` is untouched by `SET_INTERLEAVING`) but become inactive — the Encoded stage in row mode reads `chunkPipeline` instead. Switching back to column reactivates the same `fieldPipelines`, unchanged. `CodecSection` swaps between the per-field and per-chunk editors based on `state.interleaving`, with the mixed-dtype explanatory callout. |
+| Shape dimensions changed (e.g., from 1-d to 2-d) while chunk shape is still 1-d | `SET_SHAPE` pads `chunkShape` with the new dimensions' full extent (new dims default to no splitting) and clamps existing dims that shrank; `validateState`'s merge-time fallback does the equivalent clamp/pad for a stale persisted `chunkShape`. |
+| Odd-length or non-hex magic-number input | `hexToBytes` (`src/engine/bytes.ts`) is the single tolerant implementation used by both write and read: it strips non-hex characters and drops a trailing unpaired nibble rather than throwing. `WriteConfig`'s magic input (`data-testid="magic-input"`) shows a warning border for non-hex characters, but no input can crash the pipeline. |
+| Stale/corrupt/outdated `localStorage` | `loadState()` runs migrate → deep-merge-over-defaults → structural validation (see State Management → Migration Behavior) before the app ever sees the result; anything unrecoverable (e.g. a corrupt shape) resets to a full default state rather than reaching the engine with missing fields. |
+| `write.includeMetadata = false` | The Write stage omits metadata entirely (not even a placeholder) — only magic + chunk data. The Read stage fails with reason `no-metadata`, prompting the user to enable it. This is the read extension's central lesson and is the default. |
+| Metadata present but its locator/scanner can't find it (`footerLocator: 'none'`) | Read fails with reason `metadata-not-found`, distinct from `no-metadata` — the message explains that metadata was written but a best-effort scan couldn't pin it down, and names the Footer locator "trailer" option as the fix. |
+| Chunk index omitted (`includeChunkIndex: false`) with a size-changing codec (RLE/LZ) in play | Read fails with reason `no-chunk-index` rather than attempting (and silently getting wrong) a computed offset guess. |
+| Magic number mismatch on read | Read fails with reason `bad-magic` before any attempt to locate metadata or reconstruct values. |
 
 ## Open Questions for Implementation
 
@@ -673,6 +844,9 @@ These are decisions left to the implementer's judgment:
 ## Implementation Order
 
 Build in this order. Each phase should be functional and testable before moving to the next.
+(This is the original pre-implementation plan, kept for historical reference — see the Codec
+Registry and Logical Types sections above for what actually shipped: 4 codecs, not 6, with
+scale/offset and bit-round moved to a separate Type Assignment concept and its own Typed stage.)
 
 **Phase 1: Engine + Tests**
 1. `src/types/` — all type definitions (dtypes, codecs, pipeline, state)
@@ -680,7 +854,7 @@ Build in this order. Each phase should be functional and testable before moving 
 3. `src/engine/elements.ts` — value → binary element conversion
 4. `src/engine/chunk.ts` — chunking logic
 5. `src/engine/linearize.ts` — interleaving
-6. `src/engine/codecs.ts` — codec pipeline execution (all 6 codecs)
+6. `src/engine/codecs.ts` — codec pipeline execution
 7. `src/engine/trace.ts` — byte tracing with fidelity degradation
 8. `src/engine/metadata.ts` — metadata collection + JSON/binary serialization
 9. `src/engine/write.ts` — file assembly (magic number, metadata placement, chunk ordering, partitioning)

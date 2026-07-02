@@ -15,7 +15,12 @@ const delta: CodecDefinition = {
   params: {
     order: { label: 'Order', type: 'number', default: 1, min: 1, max: 3, step: 1 },
   },
-  applicableTo: () => true,
+  // Task 4.3 (UI-4/SW-7): delta is exact (lossless) for every integer dtype
+  // post-Phase-2 — typed-array writes wrap mod 2^N so encode/decode are
+  // perfect inverses, including on uint8. Only float dtypes warrant the
+  // applicability warning: taking a difference and storing it back at the
+  // same float precision re-rounds the value (see `isLossy` below).
+  applicableTo: (dtype) => !getDtype(dtype as DtypeKey).float,
   // Task 2.6 deviation from the extension spec's plain `lossy: boolean`: delta is
   // exact for integer dtypes (post-2.5, typed-array writes wrap mod 2^N so encode
   // and decode are perfect inverses) but lossy for float dtypes (diffs are
@@ -72,7 +77,14 @@ const byteShuffle: CodecDefinition = {
   params: {
     elementSize: { label: 'Element Size', type: 'number', default: 4, min: 1, max: 8, step: 1 },
   },
-  applicableTo: () => true,
+  // Task 4.3 (UI-4): `applicableTo` only receives the input dtype, not the
+  // step's `elementSize` param, so this can only judge dtype-level
+  // applicability: shuffling is a no-op transpose on 1-byte dtypes (nothing
+  // to transpose within a single-byte element), so warn there. The
+  // param-vs-dtype mismatch (elementSize != dtype size) is a *separate*,
+  // param-aware warning — see `stepWarnings` below, which is what actually
+  // catches the "shuffle needs to know the element boundary" lesson.
+  applicableTo: (dtype) => getDtype(dtype as DtypeKey).size > 1,
   isLossy: () => false,
   encode(bytes, inputDtype, params) {
     const elementSize = Number(params.elementSize ?? 4);
@@ -132,6 +144,11 @@ const rle: CodecDefinition = {
   category: 'entropy',
   description: 'Run-length encoding: (count, value) byte pairs',
   params: {},
+  // Task 4.3 (UI-4): RLE operates byte-wise with no notion of element
+  // boundaries or numeric interpretation — it is always applicable,
+  // regardless of dtype. (It may of course *inflate* incompressible input;
+  // that is a size warning, not an applicability one — see the pipeline
+  // strip's size-increase coloring.)
   applicableTo: () => true,
   isLossy: () => false,
   encode(bytes, _inputDtype) {
@@ -181,6 +198,8 @@ const lz: CodecDefinition = {
   params: {
     windowSize: { label: 'Window Size', type: 'number', default: 256, min: 3, max: 32768, step: 1 },
   },
+  // Task 4.3 (UI-4): same reasoning as RLE — LZ is a byte-wise back-reference
+  // scheme with no dtype-specific assumptions, so it is always applicable.
   applicableTo: () => true,
   isLossy: () => false,
   encode(bytes, _inputDtype, params) {
@@ -259,6 +278,96 @@ export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
   'rle': rle,
   'lz': lz,
 };
+
+// ─── Dtype flow (UI-15) ───────────────────────────────────────────────────
+
+/**
+ * Cheap dtype-flow rule for a single codec step, without running `encode`.
+ *
+ * UI-15: `CodecPipelineEditor` used to re-implement this rule locally
+ * (`computeRunningDtype`: "entropy codecs collapse to uint8, everything else
+ * preserves dtype"). That is a real invariant of the registry today — every
+ * `encode` honors it — but it was duplicated rather than derived, so it would
+ * go silently stale the day a dtype-changing codec (e.g. a future
+ * scale/offset-as-codec) was added. This is the single source of truth both
+ * the editor and any other dtype-flow consumer should call instead.
+ */
+export function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey): DtypeKey {
+  return codec.category === 'entropy' ? 'uint8' : inputDtype;
+}
+
+/**
+ * Run the dtype-flow rule across an entire pipeline, returning the dtype fed
+ * into (and the dtype produced by) each step. `runningDtypes[i]` is the input
+ * dtype seen by `steps[i]`; the function's return value is the pipeline's
+ * final output dtype.
+ */
+function computeDtypeFlow(steps: CodecStep[], inputDtype: DtypeKey): DtypeKey[] {
+  const runningDtypes: DtypeKey[] = [];
+  let dtype = inputDtype;
+  for (const step of steps) {
+    runningDtypes.push(dtype);
+    const codec = CODEC_REGISTRY[step.codec];
+    if (!codec) continue;
+    dtype = outputDtypeFor(codec, dtype);
+  }
+  return runningDtypes;
+}
+
+// ─── Applicability warnings (UI-4, SW-7, task 4.3) ────────────────────────
+
+/**
+ * Single source of truth for codec-step warnings, shared by
+ * `CodecPipelineEditor` (per-step ⚠ icon) and `PipelineStrip` (Encoded-stage
+ * ⚠ icon). Returns one human-readable warning string per problem found —
+ * empty when the pipeline has nothing to warn about.
+ *
+ * Per docs/design.md's "Codec Applicability and Warnings" section, this is
+ * advisory only: it never blocks or alters the pipeline's actual encode
+ * behavior, it only surfaces text for the UI to render.
+ *
+ * Two independent checks feed into this:
+ *  - `codec.applicableTo(dtype)` — dtype-level applicability (e.g. delta on
+ *    float, shuffle on 1-byte dtypes).
+ *  - Byte Shuffle's `elementSize` param vs. the actual input dtype size —
+ *    `applicableTo` only receives the dtype, not the step's params, so this
+ *    mismatch can't be expressed there. It is exactly the "shuffle needs to
+ *    know the element boundary" lesson the design doc is built around.
+ */
+export function stepWarnings(steps: CodecStep[], inputDtype: DtypeKey): string[] {
+  const warnings: string[] = [];
+  const runningDtypes = computeDtypeFlow(steps, inputDtype);
+
+  steps.forEach((step, i) => {
+    const codec = CODEC_REGISTRY[step.codec];
+    if (!codec) return;
+    const dtype = runningDtypes[i];
+    const dtypeInfo = getDtype(dtype);
+
+    if (!codec.applicableTo(dtype)) {
+      if (step.codec === 'delta') {
+        warnings.push(
+          `Delta on ${dtypeInfo.label} is lossy — differences are re-rounded to float precision each step (integer dtypes round-trip exactly; this is why).`,
+        );
+      } else {
+        warnings.push(
+          `${codec.label} is not applicable to ${dtypeInfo.label} input — results may be garbled or meaningless.`,
+        );
+      }
+    }
+
+    if (step.codec === 'byte-shuffle') {
+      const elementSize = Number(step.params.elementSize ?? 4);
+      if (elementSize !== dtypeInfo.size) {
+        warnings.push(
+          `Element size ${elementSize} doesn't match dtype size ${dtypeInfo.size} — bytes will be grouped incorrectly (this is the lesson: shuffle needs to know the element boundary).`,
+        );
+      }
+    }
+  });
+
+  return warnings;
+}
 
 // ─── Pipeline Execution ─────────────────────────────────────────────────
 

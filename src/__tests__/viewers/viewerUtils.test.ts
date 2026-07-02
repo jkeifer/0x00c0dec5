@@ -9,6 +9,11 @@ import {
   buildChunkIndex,
   buildChunkIndexWithCounts,
   buildChunkRegions,
+  isDiffValue,
+  computeDiffSummary,
+  computeMaxAbsDiff,
+  cellIndexToRowCol,
+  scrollOffsetForCell,
 } from '../../components/viewers/viewerUtils.ts';
 import type { PipelineStage, ByteTrace } from '../../types/pipeline.ts';
 
@@ -414,5 +419,146 @@ describe('buildChunkIndexWithCounts', () => {
     expect(index.size).toBe(1);
     expect(index.has('')).toBe(false);
     expect(index.get('chunk:0')).toEqual({ firstByte: 1, lastByte: 1, count: 1 });
+  });
+});
+
+// Task 4.5 (remediation-plan.md, fixes UI-14/UI-5): NaN-aware diff equality
+// and the diff summary stats extracted as pure functions so they're testable
+// without rendering TableView/GridView.
+describe('isDiffValue', () => {
+  it('treats equal numbers as not a diff', () => {
+    expect(isDiffValue(1, 1)).toBe(false);
+    expect(isDiffValue(0, 0)).toBe(false);
+    expect(isDiffValue(-3.5, -3.5)).toBe(false);
+  });
+
+  it('treats different numbers as a diff', () => {
+    expect(isDiffValue(1, 2)).toBe(true);
+    expect(isDiffValue(42.7134, 42.7)).toBe(true);
+  });
+
+  it('treats NaN vs NaN as NOT a diff (fixes UI-14)', () => {
+    expect(isDiffValue(NaN, NaN)).toBe(false);
+  });
+
+  it('treats NaN vs a real number as a diff', () => {
+    expect(isDiffValue(NaN, 5)).toBe(true);
+    expect(isDiffValue(5, NaN)).toBe(true);
+  });
+
+  it('treats -0 vs 0 as not a diff', () => {
+    expect(isDiffValue(-0, 0)).toBe(false);
+    expect(isDiffValue(0, -0)).toBe(false);
+  });
+});
+
+describe('computeDiffSummary', () => {
+  it('returns zeroed summary when there are no differences', () => {
+    const summary = computeDiffSummary([1, 2, 3], [1, 2, 3]);
+    expect(summary).toEqual({ count: 0, maxAbsError: 0, meanAbsError: 0 });
+  });
+
+  it('counts differing values and computes max/mean abs error', () => {
+    // diffs: |1-1|=0 (no diff), |5-2|=3, |10-3|=7
+    const summary = computeDiffSummary([1, 5, 10], [1, 2, 3]);
+    expect(summary.count).toBe(2);
+    expect(summary.maxAbsError).toBe(7);
+    expect(summary.meanAbsError).toBeCloseTo(5, 10);
+  });
+
+  it('excludes NaN-vs-NaN pairs from the diff count (fixes UI-14)', () => {
+    const summary = computeDiffSummary([1, NaN, 3], [1, NaN, 5]);
+    expect(summary.count).toBe(1);
+    expect(summary.maxAbsError).toBe(2);
+  });
+
+  it('guards length mismatches by only comparing overlapping indices (fixes UI-5)', () => {
+    // origValues is shorter — index 2 has no original to compare against.
+    const summary = computeDiffSummary([1, 2, 100], [1, 2]);
+    expect(summary.count).toBe(0);
+    expect(Number.isNaN(summary.maxAbsError)).toBe(false);
+    expect(Number.isNaN(summary.meanAbsError)).toBe(false);
+  });
+
+  it('returns empty summary for empty arrays', () => {
+    expect(computeDiffSummary([], [])).toEqual({ count: 0, maxAbsError: 0, meanAbsError: 0 });
+  });
+});
+
+describe('computeMaxAbsDiff', () => {
+  it('returns 0 when values are identical', () => {
+    expect(computeMaxAbsDiff([1, 2, 3], [1, 2, 3])).toBe(0);
+  });
+
+  it('returns the largest absolute difference', () => {
+    expect(computeMaxAbsDiff([1, 5, 10], [1, 2, 3])).toBe(7);
+    expect(computeMaxAbsDiff([-10, 0], [0, 0])).toBe(10);
+  });
+
+  it('never produces NaN on length mismatch (fixes UI-5)', () => {
+    const result = computeMaxAbsDiff([1, 2, 100, 200], [1, 2]);
+    expect(Number.isNaN(result)).toBe(false);
+    expect(result).toBe(0);
+  });
+
+  it('excludes NaN-vs-NaN pairs', () => {
+    expect(computeMaxAbsDiff([NaN, 5], [NaN, 2])).toBe(3);
+  });
+
+  it('does not let a NaN pair poison the running max (no NaN propagation)', () => {
+    // If NaN leaked into the running max via Math.max, every subsequent
+    // comparison would also become NaN.
+    const result = computeMaxAbsDiff([NaN, 5, 10], [NaN, 2, 3]);
+    expect(Number.isNaN(result)).toBe(false);
+    expect(result).toBe(7);
+  });
+});
+
+describe('cellIndexToRowCol', () => {
+  it('computes row/col for a grid with given column count', () => {
+    expect(cellIndexToRowCol(0, 4)).toEqual({ row: 0, col: 0 });
+    expect(cellIndexToRowCol(3, 4)).toEqual({ row: 0, col: 3 });
+    expect(cellIndexToRowCol(4, 4)).toEqual({ row: 1, col: 0 });
+    expect(cellIndexToRowCol(9, 4)).toEqual({ row: 2, col: 1 });
+  });
+
+  it('handles cols <= 0 without dividing by zero', () => {
+    expect(cellIndexToRowCol(5, 0)).toEqual({ row: 0, col: 0 });
+  });
+});
+
+describe('scrollOffsetForCell', () => {
+  const viewport = { scrollTop: 0, scrollLeft: 0, clientWidth: 100, clientHeight: 100 };
+
+  it('does not scroll when the cell is already fully visible', () => {
+    // cols=10, cellSize=10 -> cell 0 occupies [0,10)x[0,10), well within view
+    const result = scrollOffsetForCell(0, 10, 10, viewport);
+    expect(result).toEqual({ scrollTop: 0, scrollLeft: 0 });
+  });
+
+  it('scrolls down/right (nearest) when the cell is below/right of the viewport', () => {
+    // cols=10, cellSize=20 -> row = floor(idx/10). idx=59 -> row=5,col=9
+    // cellTop = 100, cellBottom = 120; clientHeight=100 -> scrollTop should
+    // become cellBottom - clientHeight = 20
+    const result = scrollOffsetForCell(59, 10, 20, viewport);
+    expect(result.scrollTop).toBe(20);
+    // cellLeft = 9*20 = 180, cellRight = 200; clientWidth=100 -> scrollLeft = 100
+    expect(result.scrollLeft).toBe(100);
+  });
+
+  it('scrolls up/left (nearest) when the cell is above/left of the current scroll position', () => {
+    const scrolledViewport = { scrollTop: 500, scrollLeft: 500, clientWidth: 100, clientHeight: 100 };
+    // cell 0 at (0,0), cellSize 20 -> well above/left of scroll position 500
+    const result = scrollOffsetForCell(0, 10, 20, scrolledViewport);
+    expect(result.scrollTop).toBe(0);
+    expect(result.scrollLeft).toBe(0);
+  });
+
+  it('leaves scroll position unchanged on the axis the cell is already visible on', () => {
+    const scrolledViewport = { scrollTop: 50, scrollLeft: 0, clientWidth: 100, clientHeight: 100 };
+    // idx=0 -> row 0, col 0; cellTop=0 < scrollTop=50 -> scrolls up to 0
+    const result = scrollOffsetForCell(0, 10, 20, scrolledViewport);
+    expect(result.scrollTop).toBe(0);
+    expect(result.scrollLeft).toBe(0);
   });
 });
