@@ -13,8 +13,8 @@ export function ReadStatus({ readResult, showDiff, onShowDiffChange }: ReadStatu
     return (
       <div data-testid="read-status" style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
-          <span style={{ color: '#e06c75', fontSize: fontSizes.md, fontWeight: 700 }}>&#x2717;</span>
-          <span style={{ color: '#e06c75', fontSize: fontSizes.sm, fontWeight: 600 }}>Read failed</span>
+          <span style={{ color: colors.error, fontSize: fontSizes.md, fontWeight: 700 }}>&#x2717;</span>
+          <span style={{ color: colors.error, fontSize: fontSizes.sm, fontWeight: 600 }}>Read failed</span>
         </div>
         <div
           style={{
@@ -40,8 +40,8 @@ export function ReadStatus({ readResult, showDiff, onShowDiffChange }: ReadStatu
   return (
     <div data-testid="read-status" style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
-        <span style={{ color: '#98c379', fontSize: fontSizes.md, fontWeight: 700 }}>&#x2713;</span>
-        <span style={{ color: '#98c379', fontSize: fontSizes.sm, fontWeight: 600 }}>
+        <span style={{ color: colors.success, fontSize: fontSizes.md, fontWeight: 700 }}>&#x2713;</span>
+        <span style={{ color: colors.success, fontSize: fontSizes.sm, fontWeight: 600 }}>
           File parsed successfully
         </span>
       </div>

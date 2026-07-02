@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { hexToBytes, bytesToHex } from '../../engine/bytes.ts';
+import { hexToBytes, bytesToHex, concatBytes, formatByteCount } from '../../engine/bytes.ts';
 import { assembleFiles } from '../../engine/write.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
 import type { EncodedChunk } from '../../types/pipeline.ts';
@@ -81,6 +81,67 @@ describe('bytesToHex', () => {
 
   it('handles empty input', () => {
     expect(bytesToHex(new Uint8Array(0))).toBe('');
+  });
+});
+
+describe('concatBytes', () => {
+  it('concatenates multiple arrays in order', () => {
+    const result = concatBytes([
+      new Uint8Array([1, 2]),
+      new Uint8Array([3]),
+      new Uint8Array([4, 5, 6]),
+    ]);
+    expect(Array.from(result)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it('returns an empty array for an empty list', () => {
+    expect(concatBytes([]).length).toBe(0);
+  });
+
+  it('handles a single array', () => {
+    const result = concatBytes([new Uint8Array([9, 8, 7])]);
+    expect(Array.from(result)).toEqual([9, 8, 7]);
+  });
+
+  it('handles empty arrays interspersed with non-empty ones', () => {
+    const result = concatBytes([
+      new Uint8Array([1]),
+      new Uint8Array(0),
+      new Uint8Array([2, 3]),
+    ]);
+    expect(Array.from(result)).toEqual([1, 2, 3]);
+  });
+
+  it('does not mutate the input arrays', () => {
+    const a = new Uint8Array([1, 2]);
+    const b = new Uint8Array([3, 4]);
+    concatBytes([a, b]);
+    expect(Array.from(a)).toEqual([1, 2]);
+    expect(Array.from(b)).toEqual([3, 4]);
+  });
+});
+
+describe('formatByteCount', () => {
+  it('formats sub-1024 byte counts as whole bytes', () => {
+    expect(formatByteCount(0)).toBe('0 B');
+    expect(formatByteCount(1)).toBe('1 B');
+    expect(formatByteCount(1023)).toBe('1023 B');
+  });
+
+  it('formats kilobyte-range counts to one decimal place', () => {
+    expect(formatByteCount(1024)).toBe('1.0 KB');
+    expect(formatByteCount(1536)).toBe('1.5 KB');
+    expect(formatByteCount(10240)).toBe('10.0 KB');
+  });
+
+  it('formats megabyte-range counts to one decimal place', () => {
+    expect(formatByteCount(1024 * 1024)).toBe('1.0 MB');
+    expect(formatByteCount(1024 * 1024 * 2.5)).toBe('2.5 MB');
+  });
+
+  it('is at the KB/MB boundary exactly at 1024*1024 bytes', () => {
+    expect(formatByteCount(1024 * 1024 - 1)).toBe('1024.0 KB');
+    expect(formatByteCount(1024 * 1024)).toBe('1.0 MB');
   });
 });
 

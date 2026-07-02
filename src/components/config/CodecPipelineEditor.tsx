@@ -3,6 +3,7 @@ import type { DtypeKey } from '../../types/dtypes.ts';
 import { CODEC_REGISTRY } from '../../engine/codecs.ts';
 import { DTYPE_REGISTRY } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
+import { inputStyle } from '../shared/controlStyles.ts';
 
 interface CodecPipelineEditorProps {
   steps: CodecStep[];
@@ -11,17 +12,6 @@ interface CodecPipelineEditorProps {
   /** Identifies the pipeline owner for test ids: a variable name in column mode, or 'chunk' in row mode. */
   variableSlot?: string;
 }
-
-const inputStyle: React.CSSProperties = {
-  background: colors.surfaceInput,
-  border: `1px solid ${colors.border}`,
-  borderRadius: radii.sm,
-  fontSize: fontSizes.sm,
-  color: colors.textPrimary,
-  padding: `${spacing.xs}px ${spacing.sm}px`,
-  outline: 'none',
-  fontFamily: 'inherit',
-};
 
 const btnStyle: React.CSSProperties = {
   background: 'transparent',
@@ -182,13 +172,13 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
                     step={paramDef.step}
                     value={Number(step.params[paramKey] ?? paramDef.default)}
                     onChange={(e) => updateParam(i, paramKey, parseFloat(e.target.value) || 0)}
-                    style={{ ...inputStyle, width: 70 }}
+                    style={{ ...inputStyle(), width: 70 }}
                   />
                 ) : (
                   <select
                     value={String(step.params[paramKey] ?? paramDef.default)}
                     onChange={(e) => updateParam(i, paramKey, e.target.value)}
-                    style={{ ...inputStyle, cursor: 'pointer' }}
+                    style={{ ...inputStyle(), cursor: 'pointer' }}
                   >
                     {paramDef.options?.map((opt) => (
                       <option key={opt} value={opt}>
@@ -214,7 +204,7 @@ function AddCodecSelect({ onAdd }: { onAdd: (key: string) => void }) {
       onChange={(e) => {
         if (e.target.value) onAdd(e.target.value);
       }}
-      style={{ ...inputStyle, cursor: 'pointer', color: colors.accent }}
+      style={{ ...inputStyle(), cursor: 'pointer', color: colors.accent }}
     >
       <option value="">+ Add codec</option>
       {categories.map((cat) => {

@@ -12,10 +12,18 @@ import { newContext, shot, bodyRendered, boundaryShown, createHarness, safeReloa
 
 const h = createHarness('scenario-crash-inputs');
 
+// Both panes are present and showing real content (not blank/errored). This
+// used to count occurrences of the "Table" view-mode label across the page,
+// on the assumption both panes default to a Table-capable stage — that
+// assumption broke (correctly) when Phase 3.8/4.1 fixed SW-2: the right pane
+// now genuinely defaults to the Write stage, whose only view mode is Hex, so
+// "Table" appears just once (left pane) on a healthy fresh load. Checking
+// each pane container directly for non-empty content is robust to which
+// stage/view each pane happens to default to.
 async function bothPanesRender(page) {
-  const text = await page.locator('body').innerText().catch(() => '');
-  const tableCount = (text.match(/Table/g) || []).length;
-  return tableCount >= 2;
+  const leftText = await page.locator('[data-testid="pane-left"]').innerText().catch(() => '');
+  const rightText = await page.locator('[data-testid="pane-right"]').innerText().catch(() => '');
+  return leftText.trim().length > 0 && rightText.trim().length > 0;
 }
 
 async function main() {

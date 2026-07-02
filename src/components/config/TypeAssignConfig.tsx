@@ -3,23 +3,13 @@ import type { VariableStats } from '../../types/pipeline.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
 import { DTYPE_KEYS, DTYPE_REGISTRY, getDtype } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
+import { inputStyle } from '../shared/controlStyles.ts';
 
 interface TypeAssignConfigProps {
   variables: Variable[];
   variableStats: Map<string, VariableStats>;
   onUpdateVariable: (id: string, changes: Partial<Pick<Variable, 'typeAssignment'>>) => void;
 }
-
-const inputStyle: React.CSSProperties = {
-  background: colors.surfaceInput,
-  border: `1px solid ${colors.border}`,
-  borderRadius: radii.sm,
-  fontSize: fontSizes.xs,
-  color: colors.textPrimary,
-  padding: `${spacing.xs}px ${spacing.sm}px`,
-  outline: 'none',
-  fontFamily: 'inherit',
-};
 
 export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }: TypeAssignConfigProps) {
   function updateAssignment(v: Variable, changes: Partial<TypeAssignment>) {
@@ -67,7 +57,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
               <select
                 value={outDtype}
                 onChange={(e) => updateAssignment(v, { storageDtype: e.target.value as DtypeKey })}
-                style={{ ...inputStyle, cursor: 'pointer' }}
+                style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
               >
                 {DTYPE_KEYS.map((dk) => (
                   <option key={dk} value={dk}>
@@ -86,7 +76,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
                   value={v.typeAssignment.scale ?? 1}
                   step={0.1}
                   onChange={(e) => updateAssignment(v, { scale: parseFloat(e.target.value) || 1 })}
-                  style={{ ...inputStyle, width: 55 }}
+                  style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                 />
                 <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>offset</span>
                 <input
@@ -94,7 +84,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
                   value={v.typeAssignment.offset ?? 0}
                   step={1}
                   onChange={(e) => updateAssignment(v, { offset: parseFloat(e.target.value) || 0 })}
-                  style={{ ...inputStyle, width: 55 }}
+                  style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                 />
               </div>
             )}
@@ -113,7 +103,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
                     const val = parseInt(e.target.value);
                     updateAssignment(v, { keepBits: isNaN(val) ? undefined : val });
                   }}
-                  style={{ ...inputStyle, width: 55 }}
+                  style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                 />
               </div>
             )}
@@ -128,7 +118,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
                     {stats.rounded > 0 && `${stats.rounded} rounded`}
                   </span>
                 ) : (
-                  <span style={{ color: '#98c379' }}>lossless</span>
+                  <span style={{ color: colors.success }}>lossless</span>
                 )}
               </div>
             )}

@@ -3,7 +3,8 @@ import type { AppState } from '../../types/state.ts';
 import { collectMetadata, serializeMetadata, dedupeCustomKey, type ChunkIndexEntry } from '../../engine/metadata.ts';
 import { computeChunkGrid, enumerateChunkCoords } from '../../engine/chunk.ts';
 import { Radio } from '../shared/Radio.tsx';
-import { colors, fontSizes, radii, spacing } from '../../theme.ts';
+import { colors, fontSizes, spacing } from '../../theme.ts';
+import { inputStyle } from '../shared/controlStyles.ts';
 
 interface MetadataEditorProps {
   metadata: AppState['metadata'];
@@ -14,17 +15,6 @@ interface MetadataEditorProps {
   onUpdateEntry: (index: number, key?: string, value?: string) => void;
   onIncludeChunkIndexChange: (includeChunkIndex: boolean) => void;
 }
-
-const inputStyle: React.CSSProperties = {
-  background: colors.surfaceInput,
-  border: `1px solid ${colors.border}`,
-  borderRadius: radii.sm,
-  fontSize: fontSizes.sm,
-  color: colors.textPrimary,
-  padding: `${spacing.xs}px ${spacing.sm}px`,
-  outline: 'none',
-  fontFamily: 'inherit',
-};
 
 /**
  * Build placeholder chunk_index entries for the sidebar preview only — real
@@ -191,11 +181,11 @@ export function MetadataEditor({
                 onChange={(e) => onUpdateEntry(i, e.target.value, undefined)}
                 data-testid={`metadata-custom-key-${i}`}
                 style={{
-                  ...inputStyle,
+                  ...inputStyle(),
                   flex: 1,
                   minWidth: 0,
                   borderColor: !entry.key
-                    ? colors.paneAccentRight
+                    ? colors.warning
                     : customKeyInfo[i]?.collides
                       ? colors.warning
                       : colors.border,
@@ -206,7 +196,7 @@ export function MetadataEditor({
                 value={entry.value}
                 placeholder="value"
                 onChange={(e) => onUpdateEntry(i, undefined, e.target.value)}
-                style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                style={{ ...inputStyle(), flex: 1, minWidth: 0 }}
               />
               <button
                 onClick={() => onRemoveEntry(i)}
@@ -256,7 +246,7 @@ export function MetadataEditor({
       <button
         onClick={onAddEntry}
         style={{
-          ...inputStyle,
+          ...inputStyle(),
           cursor: 'pointer',
           color: colors.accent,
           background: 'transparent',

@@ -1,23 +1,26 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import type { PipelineStage } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
-import type { DtypeKey } from '../../types/dtypes.ts';
-import { getDtype } from '../../types/dtypes.ts';
-import { bytesToValues } from '../../engine/elements.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
+import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 
 interface GridViewProps {
-  stage: PipelineStage;
   variables: Variable[];
   shape: number[];
   paneId: 'left' | 'right';
+  /**
+   * D6 (remediation-plan.md, Phase 3.3): source values per variable NAME,
+   * supplied by the pipeline (`logicalValues`/`typedValues`/
+   * `readResult.reconstructedValues`) rather than decoded from stage bytes
+   * here. GridView only ever renders the Values/Typed/Read stages (see
+   * StagePane's view-mode gating), so this is always populated for it.
+   */
+  values: Map<string, number[]>;
   chunkTraceMap?: Map<string, Set<string>>;
   traceChunkMap?: Map<string, string>;
   diffValues?: Map<string, number[]>;
   showDiff?: boolean;
-  isLogicalValues?: boolean; // true for Values/Read stage (float64 logical values)
 }
 
 const CELL_SIZE = 20;
@@ -58,7 +61,7 @@ function valueToColor(value: number, min: number, max: number, baseColor: string
   return `rgb(${outR},${outG},${outB})`;
 }
 
-export function GridView({ stage, variables, shape, paneId, chunkTraceMap, traceChunkMap, diffValues, showDiff, isLogicalValues }: GridViewProps) {
+export function GridView({ variables, shape, paneId, values: valuesByName, chunkTraceMap, traceChunkMap, diffValues, showDiff }: GridViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const [selectedVarIdx, setSelectedVarIdx] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -71,22 +74,11 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
   // Compute diff data for the selected variable
   const origVarVals = showDiff && diffValues && selectedVar ? diffValues.get(selectedVar.name) : undefined;
 
-  // Reconstruct values for selected variable
+  // Look up the selected variable's values from the pipeline-supplied map —
+  // no byte decoding here (D6, fixes UI-9).
   const { values, min, max } = useMemo(() => {
     if (!selectedVar) return { values: [] as number[], min: Infinity, max: -Infinity };
-    let offset = 0;
-    for (let i = 0; i < effectiveVarIdx && i < variables.length; i++) {
-      const dtype: DtypeKey = isLogicalValues ? 'float64' : variables[i].typeAssignment.storageDtype;
-      const info = getDtype(dtype);
-      const totalElements = computeTotalElements(stage, variables, isLogicalValues);
-      offset += totalElements * info.size;
-    }
-    const dtype: DtypeKey = isLogicalValues ? 'float64' : selectedVar.typeAssignment.storageDtype;
-    const info = getDtype(dtype);
-    const totalElements = computeTotalElements(stage, variables, isLogicalValues);
-    const byteLen = totalElements * info.size;
-    const varBytes = stage.bytes.slice(offset, offset + byteLen);
-    const vals = bytesToValues(varBytes, dtype);
+    const vals = valuesByName.get(selectedVar.name) ?? [];
 
     let mn = Infinity;
     let mx = -Infinity;
@@ -96,7 +88,7 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
     }
 
     return { values: vals, min: mn, max: mx };
-  }, [stage, variables, effectiveVarIdx, selectedVar, isLogicalValues]);
+  }, [valuesByName, selectedVar]);
 
   // Determine grid dimensions from shape
   const rows = shape.length >= 2 ? shape[0] : 1;
@@ -104,16 +96,16 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
   const is1D = shape.length < 2;
   const cellCount = Math.min(values.length, MAX_CELLS);
 
-  // Cross-pane auto-scroll
+  // Cross-pane auto-scroll. Must check parseTraceId's `kind` before treating
+  // the remainder as coordinates — a chunk-level id like 'chunk:0,1'
+  // otherwise "parses" as variable name 'chunk' with bogus coords (UI-3).
   useEffect(() => {
     if (!hoveredTraceId || hoverSource === paneId || !gridRef.current || !selectedVar) return;
-    const colonIdx = hoveredTraceId.indexOf(':');
-    if (colonIdx < 0) return;
-    const varName = hoveredTraceId.slice(0, colonIdx);
-    if (varName !== selectedVar.name) return;
-    const coordStr = hoveredTraceId.slice(colonIdx + 1);
-    const parts = coordStr.split(',').map(Number);
-    if (parts.some(isNaN)) return;
+    const parsed = parseTraceId(hoveredTraceId);
+    if (parsed.kind !== 'value' || parsed.coords.length === 0) return;
+    if (parsed.variableName !== selectedVar.name) return;
+    const parts = parsed.coords;
+    if (parts.some((n) => Number.isNaN(n))) return;
     let idx = 0;
     for (let d = 0; d < parts.length; d++) {
       idx = idx * (shape[d] ?? 1) + parts[d];
@@ -209,7 +201,7 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
 
             const val = values[i];
             const coords = flatIndexToCoords(i, shape);
-            const traceId = `${selectedVar.name}:${coords.join(',')}`;
+            const traceId = makeTraceId(selectedVar.name, coords);
             const isValueHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
             const gridChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
             const isChunkHovered = !isValueHovered && gridChunkTraceIds != null && gridChunkTraceIds.has(traceId);
@@ -251,14 +243,4 @@ export function GridView({ stage, variables, shape, paneId, chunkTraceMap, trace
       </div>
     </div>
   );
-}
-
-function computeTotalElements(stage: PipelineStage, variables: Variable[], isLogicalValues?: boolean): number {
-  let totalBytesPerElement = 0;
-  for (const v of variables) {
-    const dtype: DtypeKey = isLogicalValues ? 'float64' : v.typeAssignment.storageDtype;
-    totalBytesPerElement += getDtype(dtype).size;
-  }
-  if (totalBytesPerElement === 0) return 0;
-  return Math.floor(stage.bytes.length / totalBytesPerElement);
 }

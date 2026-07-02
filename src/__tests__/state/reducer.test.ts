@@ -92,36 +92,37 @@ describe('ADD_VARIABLE', () => {
     const result = reducer(state, { type: 'ADD_VARIABLE', variable: v });
     expect(result.variables).toHaveLength(1);
     expect(result.variables[0]).toEqual(v);
-    expect(result.fieldPipelines['temp']).toEqual([]);
+    expect(result.fieldPipelines['v1']).toEqual([]);
   });
 
   it('appends to existing variables', () => {
     const v1 = makeVariable({ id: 'v1', name: 'temp' });
     const state = makeState({
       variables: [v1],
-      fieldPipelines: { temp: [] },
+      fieldPipelines: { v1: [] },
     });
     const v2 = makeVariable({ id: 'v2', name: 'pressure', color: '#61afef' });
     const result = reducer(state, { type: 'ADD_VARIABLE', variable: v2 });
     expect(result.variables).toHaveLength(2);
-    expect(result.fieldPipelines['pressure']).toEqual([]);
+    expect(result.fieldPipelines['v2']).toEqual([]);
   });
 
-  // KNOWN BUG SW-1 — flip when Phase 3.1 lands (id-keyed pipelines)
-  it.fails('adding a variable whose name collides with an existing one preserves the existing pipeline', () => {
+  // Fixed by Phase 3.1 (D5, id-keyed pipelines) — was `it.fails` under SW-1.
+  it('adding a variable whose name collides with an existing one preserves the existing pipeline', () => {
     const existingSteps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
     const v1 = makeVariable({ id: 'v1', name: 'temp' });
     const state = makeState({
       variables: [v1],
-      fieldPipelines: { temp: existingSteps },
+      fieldPipelines: { v1: existingSteps },
     });
     // A second variable with a different id but the SAME name.
     const v2 = makeVariable({ id: 'v2', name: 'temp', color: '#61afef' });
     const result = reducer(state, { type: 'ADD_VARIABLE', variable: v2 });
     expect(result.variables).toHaveLength(2);
-    // fieldPipelines is keyed by name, so the new variable's empty pipeline
-    // clobbers the existing one under the shared 'temp' key.
-    expect(result.fieldPipelines['temp']).toEqual(existingSteps);
+    // fieldPipelines is keyed by id, so the new variable's empty pipeline
+    // lands under its own 'v2' key, leaving v1's pipeline untouched.
+    expect(result.fieldPipelines['v1']).toEqual(existingSteps);
+    expect(result.fieldPipelines['v2']).toEqual([]);
   });
 });
 
@@ -133,13 +134,13 @@ describe('REMOVE_VARIABLE', () => {
     const v2 = makeVariable({ id: 'v2', name: 'pressure' });
     const state = makeState({
       variables: [v1, v2],
-      fieldPipelines: { temp: [], pressure: [] },
+      fieldPipelines: { v1: [], v2: [] },
     });
     const result = reducer(state, { type: 'REMOVE_VARIABLE', id: 'v1' });
     expect(result.variables).toHaveLength(1);
     expect(result.variables[0].name).toBe('pressure');
-    expect(result.fieldPipelines).not.toHaveProperty('temp');
-    expect(result.fieldPipelines).toHaveProperty('pressure');
+    expect(result.fieldPipelines).not.toHaveProperty('v1');
+    expect(result.fieldPipelines).toHaveProperty('v2');
   });
 
   it('does nothing for unknown id', () => {
@@ -154,7 +155,7 @@ describe('REMOVE_VARIABLE', () => {
 describe('UPDATE_VARIABLE', () => {
   it('updates typeAssignment only', () => {
     const v = makeVariable({ id: 'v1', name: 'temp' });
-    const state = makeState({ variables: [v], fieldPipelines: { temp: [] } });
+    const state = makeState({ variables: [v], fieldPipelines: { v1: [] } });
     const result = reducer(state, {
       type: 'UPDATE_VARIABLE',
       id: 'v1',
@@ -166,7 +167,7 @@ describe('UPDATE_VARIABLE', () => {
 
   it('updates logicalType only', () => {
     const v = makeVariable({ id: 'v1', name: 'temp' });
-    const state = makeState({ variables: [v], fieldPipelines: { temp: [] } });
+    const state = makeState({ variables: [v], fieldPipelines: { v1: [] } });
     const result = reducer(state, {
       type: 'UPDATE_VARIABLE',
       id: 'v1',
@@ -176,12 +177,12 @@ describe('UPDATE_VARIABLE', () => {
     expect(result.variables[0].name).toBe('temp');
   });
 
-  it('updates name and re-keys fieldPipelines', () => {
+  it('updates name without touching fieldPipelines (id-keyed, D5)', () => {
     const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
     const v = makeVariable({ id: 'v1', name: 'temp' });
     const state = makeState({
       variables: [v],
-      fieldPipelines: { temp: steps },
+      fieldPipelines: { v1: steps },
     });
     const result = reducer(state, {
       type: 'UPDATE_VARIABLE',
@@ -189,8 +190,7 @@ describe('UPDATE_VARIABLE', () => {
       changes: { name: 'temperature' },
     });
     expect(result.variables[0].name).toBe('temperature');
-    expect(result.fieldPipelines).not.toHaveProperty('temp');
-    expect(result.fieldPipelines['temperature']).toEqual(steps);
+    expect(result.fieldPipelines['v1']).toEqual(steps);
   });
 
   it('does nothing for unknown id', () => {
@@ -203,14 +203,14 @@ describe('UPDATE_VARIABLE', () => {
     expect(result).toBe(state);
   });
 
-  // KNOWN BUG SW-1 — flip when Phase 3.1 lands (id-keyed pipelines)
-  it.fails('renaming a variable to another variable\'s name preserves the target\'s pipeline', () => {
+  // Fixed by Phase 3.1 (D5, id-keyed pipelines) — was `it.fails` under SW-1.
+  it('renaming a variable to another variable\'s name preserves the target\'s pipeline', () => {
     const a = makeVariable({ id: 'a', name: 'alpha' });
     const b = makeVariable({ id: 'b', name: 'beta', color: '#61afef' });
     const bSteps: CodecStep[] = [{ codec: 'rle', params: {} }];
     const state = makeState({
       variables: [a, b],
-      fieldPipelines: { alpha: [], beta: bSteps },
+      fieldPipelines: { a: [], b: bSteps },
     });
     const result = reducer(state, {
       type: 'UPDATE_VARIABLE',
@@ -218,21 +218,22 @@ describe('UPDATE_VARIABLE', () => {
       changes: { name: 'beta' },
     });
     expect(result.variables.find((v) => v.id === 'a')!.name).toBe('beta');
-    // Renaming 'alpha' -> 'beta' re-keys fieldPipelines['alpha'] into
-    // fieldPipelines['beta'], clobbering b's existing rle pipeline.
-    expect(result.fieldPipelines['beta']).toEqual(bSteps);
+    // Pipelines are keyed by id, so the name collision has no effect on
+    // either variable's pipeline.
+    expect(result.fieldPipelines['b']).toEqual(bSteps);
+    expect(result.fieldPipelines['a']).toEqual([]);
   });
 
-  // KNOWN BUG SW-1 — flip when Phase 3.1 lands (id-keyed pipelines)
-  it.fails('renaming away after a collision does not resurrect or lose the collided-with pipeline', () => {
+  // Fixed by Phase 3.1 (D5, id-keyed pipelines) — was `it.fails` under SW-1.
+  it('renaming away after a collision does not resurrect or lose the collided-with pipeline', () => {
     const a = makeVariable({ id: 'a', name: 'alpha' });
     const b = makeVariable({ id: 'b', name: 'beta', color: '#61afef' });
     const bSteps: CodecStep[] = [{ codec: 'rle', params: {} }];
     const state = makeState({
       variables: [a, b],
-      fieldPipelines: { alpha: [], beta: bSteps },
+      fieldPipelines: { a: [], b: bSteps },
     });
-    // First, collide: rename a -> 'beta' (clobbers b's pipeline under the shared key).
+    // First, collide: rename a -> 'beta' (no-op on pipelines, id-keyed).
     const collided = reducer(state, {
       type: 'UPDATE_VARIABLE',
       id: 'a',
@@ -246,7 +247,7 @@ describe('UPDATE_VARIABLE', () => {
     });
     expect(result.variables.find((v) => v.id === 'a')!.name).toBe('gamma');
     // b's pipeline should have survived the whole collide/uncollide sequence.
-    expect(result.fieldPipelines['beta']).toEqual(bSteps);
+    expect(result.fieldPipelines['b']).toEqual(bSteps);
   });
 });
 
@@ -321,17 +322,17 @@ describe('SET_INTERLEAVING', () => {
 // ─── SET_FIELD_PIPELINE ────────────────────────────────────────────
 
 describe('SET_FIELD_PIPELINE', () => {
-  it('sets pipeline for a variable', () => {
-    const state = makeState({ fieldPipelines: { temp: [] } });
+  it('sets pipeline for a variable by id', () => {
+    const state = makeState({ fieldPipelines: { v1: [] } });
     const steps: CodecStep[] = [
       { codec: 'delta', params: { order: 1 } },
     ];
     const result = reducer(state, {
       type: 'SET_FIELD_PIPELINE',
-      variableName: 'temp',
+      variableId: 'v1',
       steps,
     });
-    expect(result.fieldPipelines['temp']).toEqual(steps);
+    expect(result.fieldPipelines['v1']).toEqual(steps);
   });
 });
 
@@ -347,11 +348,18 @@ describe('SET_CHUNK_PIPELINE', () => {
 });
 
 // ─── Metadata actions ──────────────────────────────────────────────
+//
+// Task 3.7: SET_METADATA_SERIALIZATION and SET_INCLUDE_CHUNK_INDEX are
+// deleted; both are now expressed via the UPDATE_METADATA_CONFIG patch
+// action (merges into state.metadata).
 
-describe('SET_METADATA_SERIALIZATION', () => {
+describe('UPDATE_METADATA_CONFIG', () => {
   it('sets serialization to binary', () => {
     const state = makeState();
-    const result = reducer(state, { type: 'SET_METADATA_SERIALIZATION', serialization: 'binary' });
+    const result = reducer(state, {
+      type: 'UPDATE_METADATA_CONFIG',
+      changes: { serialization: 'binary' },
+    });
     expect(result.metadata.serialization).toBe('binary');
   });
 
@@ -359,8 +367,58 @@ describe('SET_METADATA_SERIALIZATION', () => {
     const state = makeState({
       metadata: { customEntries: [], serialization: 'binary', includeChunkIndex: true },
     });
-    const result = reducer(state, { type: 'SET_METADATA_SERIALIZATION', serialization: 'json' });
+    const result = reducer(state, {
+      type: 'UPDATE_METADATA_CONFIG',
+      changes: { serialization: 'json' },
+    });
     expect(result.metadata.serialization).toBe('json');
+  });
+
+  it('sets includeChunkIndex to false', () => {
+    const state = makeState();
+    const result = reducer(state, {
+      type: 'UPDATE_METADATA_CONFIG',
+      changes: { includeChunkIndex: false },
+    });
+    expect(result.metadata.includeChunkIndex).toBe(false);
+  });
+
+  it('sets includeChunkIndex back to true', () => {
+    const state = makeState({
+      metadata: { ...DEFAULT_STATE.metadata, includeChunkIndex: false },
+    });
+    const result = reducer(state, {
+      type: 'UPDATE_METADATA_CONFIG',
+      changes: { includeChunkIndex: true },
+    });
+    expect(result.metadata.includeChunkIndex).toBe(true);
+  });
+
+  it('merges a partial patch without touching customEntries', () => {
+    const state = makeState({
+      metadata: {
+        customEntries: [{ key: 'a', value: 'b' }],
+        serialization: 'json',
+        includeChunkIndex: true,
+      },
+    });
+    const result = reducer(state, {
+      type: 'UPDATE_METADATA_CONFIG',
+      changes: { serialization: 'binary' },
+    });
+    expect(result.metadata.serialization).toBe('binary');
+    expect(result.metadata.includeChunkIndex).toBe(true);
+    expect(result.metadata.customEntries).toEqual([{ key: 'a', value: 'b' }]);
+  });
+
+  it('can patch both fields at once', () => {
+    const state = makeState();
+    const result = reducer(state, {
+      type: 'UPDATE_METADATA_CONFIG',
+      changes: { serialization: 'binary', includeChunkIndex: false },
+    });
+    expect(result.metadata.serialization).toBe('binary');
+    expect(result.metadata.includeChunkIndex).toBe(false);
   });
 });
 
@@ -454,70 +512,51 @@ describe('UPDATE_METADATA_ENTRY', () => {
   });
 });
 
-// ─── SET_INCLUDE_CHUNK_INDEX (D3) ───────────────────────────────────
+// ─── UPDATE_WRITE ────────────────────────────────────────────────────
+//
+// Task 3.7: the six SET_WRITE_* setters are deleted, replaced by a single
+// UPDATE_WRITE patch action (merges into state.write).
 
-describe('SET_INCLUDE_CHUNK_INDEX', () => {
-  it('sets includeChunkIndex to false', () => {
-    const state = makeState();
-    const result = reducer(state, { type: 'SET_INCLUDE_CHUNK_INDEX', includeChunkIndex: false });
-    expect(result.metadata.includeChunkIndex).toBe(false);
-  });
-
-  it('sets includeChunkIndex back to true', () => {
-    const state = makeState({
-      metadata: { ...DEFAULT_STATE.metadata, includeChunkIndex: false },
-    });
-    const result = reducer(state, { type: 'SET_INCLUDE_CHUNK_INDEX', includeChunkIndex: true });
-    expect(result.metadata.includeChunkIndex).toBe(true);
-  });
-});
-
-// ─── Write actions ─────────────────────────────────────────────────
-
-describe('SET_WRITE_MAGIC', () => {
+describe('UPDATE_WRITE', () => {
   it('sets magic number', () => {
     const state = makeState();
-    const result = reducer(state, { type: 'SET_WRITE_MAGIC', magicNumber: 'DEADBEEF' });
+    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { magicNumber: 'DEADBEEF' } });
     expect(result.write.magicNumber).toBe('DEADBEEF');
   });
-});
 
-describe('SET_WRITE_PARTITIONING', () => {
   it('sets partitioning', () => {
     const state = makeState();
-    const result = reducer(state, { type: 'SET_WRITE_PARTITIONING', partitioning: 'per-chunk' });
+    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { partitioning: 'per-chunk' } });
     expect(result.write.partitioning).toBe('per-chunk');
   });
-});
 
-describe('SET_WRITE_METADATA_PLACEMENT', () => {
-  it('sets metadata placement', () => {
+  it('sets metadata placement to footer', () => {
     const state = makeState();
-    const result = reducer(state, { type: 'SET_WRITE_METADATA_PLACEMENT', metadataPlacement: 'footer' });
+    const result = reducer(state, {
+      type: 'UPDATE_WRITE',
+      changes: { metadataPlacement: 'footer' },
+    });
     expect(result.write.metadataPlacement).toBe('footer');
   });
 
-  it('sets sidecar placement', () => {
+  it('sets metadata placement to sidecar', () => {
     const state = makeState();
-    const result = reducer(state, { type: 'SET_WRITE_METADATA_PLACEMENT', metadataPlacement: 'sidecar' });
+    const result = reducer(state, {
+      type: 'UPDATE_WRITE',
+      changes: { metadataPlacement: 'sidecar' },
+    });
     expect(result.write.metadataPlacement).toBe('sidecar');
   });
-});
 
-describe('SET_WRITE_CHUNK_ORDER', () => {
   it('sets chunk order', () => {
     const state = makeState();
-    const result = reducer(state, { type: 'SET_WRITE_CHUNK_ORDER', chunkOrder: 'column-major' });
+    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { chunkOrder: 'column-major' } });
     expect(result.write.chunkOrder).toBe('column-major');
   });
-});
 
-// ─── SET_WRITE_FOOTER_LOCATOR (D1) ─────────────────────────────────
-
-describe('SET_WRITE_FOOTER_LOCATOR', () => {
   it('sets footerLocator to "none"', () => {
     const state = makeState();
-    const result = reducer(state, { type: 'SET_WRITE_FOOTER_LOCATOR', footerLocator: 'none' });
+    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { footerLocator: 'none' } });
     expect(result.write.footerLocator).toBe('none');
   });
 
@@ -525,17 +564,13 @@ describe('SET_WRITE_FOOTER_LOCATOR', () => {
     const state = makeState({
       write: { ...DEFAULT_STATE.write, footerLocator: 'none' },
     });
-    const result = reducer(state, { type: 'SET_WRITE_FOOTER_LOCATOR', footerLocator: 'trailer' });
+    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { footerLocator: 'trailer' } });
     expect(result.write.footerLocator).toBe('trailer');
   });
-});
 
-// ─── SET_WRITE_INCLUDE_METADATA ───────────────────────────────────
-
-describe('SET_WRITE_INCLUDE_METADATA', () => {
   it('sets includeMetadata to true', () => {
     const state = makeState();
-    const result = reducer(state, { type: 'SET_WRITE_INCLUDE_METADATA', includeMetadata: true });
+    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { includeMetadata: true } });
     expect(result.write.includeMetadata).toBe(true);
   });
 
@@ -543,17 +578,63 @@ describe('SET_WRITE_INCLUDE_METADATA', () => {
     const state = makeState({
       write: { ...DEFAULT_STATE.write, includeMetadata: true },
     });
-    const result = reducer(state, { type: 'SET_WRITE_INCLUDE_METADATA', includeMetadata: false });
+    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { includeMetadata: false } });
     expect(result.write.includeMetadata).toBe(false);
+  });
+
+  it('merges a partial patch without touching sibling fields', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { magicNumber: 'CAFE' } });
+    expect(result.write.magicNumber).toBe('CAFE');
+    expect(result.write.partitioning).toBe(state.write.partitioning);
+    expect(result.write.metadataPlacement).toBe(state.write.metadataPlacement);
+  });
+
+  it('can patch multiple fields at once', () => {
+    const state = makeState();
+    const result = reducer(state, {
+      type: 'UPDATE_WRITE',
+      changes: { magicNumber: 'CAFE', partitioning: 'per-chunk', includeMetadata: true },
+    });
+    expect(result.write.magicNumber).toBe('CAFE');
+    expect(result.write.partitioning).toBe('per-chunk');
+    expect(result.write.includeMetadata).toBe(true);
   });
 });
 
-// ─── SET_SHOW_DIFF ─────────────────────────────────────────────────
+// ─── UPDATE_UI ───────────────────────────────────────────────────────
+//
+// Task 3.7: SET_LEFT_PANE_STAGE/VIEW, SET_RIGHT_PANE_STAGE/VIEW, and
+// SET_SHOW_DIFF are deleted, replaced by a single UPDATE_UI patch action.
 
-describe('SET_SHOW_DIFF', () => {
+describe('UPDATE_UI', () => {
+  it('sets leftPaneStage', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'UPDATE_UI', changes: { leftPaneStage: 'encoded' } });
+    expect(result.ui.leftPaneStage).toBe('encoded');
+  });
+
+  it('sets rightPaneStage', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'UPDATE_UI', changes: { rightPaneStage: 'write' } });
+    expect(result.ui.rightPaneStage).toBe('write');
+  });
+
+  it('sets leftPaneView', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'UPDATE_UI', changes: { leftPaneView: 'grid' } });
+    expect(result.ui.leftPaneView).toBe('grid');
+  });
+
+  it('sets rightPaneView', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'UPDATE_UI', changes: { rightPaneView: 'flat' } });
+    expect(result.ui.rightPaneView).toBe('flat');
+  });
+
   it('sets showDiff to true', () => {
     const state = makeState();
-    const result = reducer(state, { type: 'SET_SHOW_DIFF', showDiff: true });
+    const result = reducer(state, { type: 'UPDATE_UI', changes: { showDiff: true } });
     expect(result.ui.showDiff).toBe(true);
   });
 
@@ -561,59 +642,69 @@ describe('SET_SHOW_DIFF', () => {
     const state = makeState({
       ui: { ...DEFAULT_STATE.ui, showDiff: true },
     });
-    const result = reducer(state, { type: 'SET_SHOW_DIFF', showDiff: false });
+    const result = reducer(state, { type: 'UPDATE_UI', changes: { showDiff: false } });
     expect(result.ui.showDiff).toBe(false);
+  });
+
+  it('merges a partial patch without touching sibling fields', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'UPDATE_UI', changes: { leftPaneStage: 'linearized' } });
+    expect(result.ui.leftPaneStage).toBe('linearized');
+    expect(result.ui.rightPaneStage).toBe(state.ui.rightPaneStage);
+    expect(result.ui.leftPaneView).toBe(state.ui.leftPaneView);
+  });
+
+  it('can patch multiple fields at once', () => {
+    const state = makeState();
+    const result = reducer(state, {
+      type: 'UPDATE_UI',
+      changes: { leftPaneStage: 'typed', rightPaneStage: 'read', showDiff: true },
+    });
+    expect(result.ui.leftPaneStage).toBe('typed');
+    expect(result.ui.rightPaneStage).toBe('read');
+    expect(result.ui.showDiff).toBe(true);
   });
 });
 
 // ─── SET_DATA_MODEL ────────────────────────────────────────────────
 //
-// SET_DATA_MODEL performs localStorage I/O (saveState/loadState) directly
-// inside the reducer body — finding SW-4, a known design smell (reducers
-// should be pure). These tests document/verify the CURRENT behavior, not
-// endorse the pattern; localStorage is stubbed the same way persistence.test.ts
-// does it.
+// Task 3.7 (fixes SW-4): SET_DATA_MODEL is now a pure reducer case — it only
+// sets `state.dataModel`. All storage I/O (save the outgoing model, load or
+// default the incoming model, record the active model) moved to the
+// `switchDataModel` wrapper exposed by the provider (tested separately
+// below), which dispatches REPLACE_STATE instead.
 
 describe('SET_DATA_MODEL', () => {
   it('is a no-op when switching to the already-active model', () => {
     const state = makeState({ dataModel: 'tabular' });
     const result = reducer(state, { type: 'SET_DATA_MODEL', model: 'tabular' });
     expect(result).toBe(state);
-    // No save should have happened for a no-op switch.
-    expect(localStorage.getItem(TABULAR_KEY)).toBeNull();
   });
 
-  it('saves the current state under the OLD model key when switching', () => {
+  it('sets dataModel and nothing else', () => {
     const state = makeState({ dataModel: 'tabular', shape: [99] });
+    const result = reducer(state, { type: 'SET_DATA_MODEL', model: 'array' });
+    expect(result.dataModel).toBe('array');
+    // Nothing else about the state changes — no save/load/default swap.
+    expect(result.shape).toEqual([99]);
+    expect(result.variables).toBe(state.variables);
+  });
+
+  it('never touches localStorage (reducer purity, SW-4)', () => {
+    const state = makeState({ dataModel: 'tabular' });
     reducer(state, { type: 'SET_DATA_MODEL', model: 'array' });
-    const saved = localStorage.getItem(TABULAR_KEY);
-    expect(saved).not.toBeNull();
-    expect(JSON.parse(saved!).shape).toEqual([99]);
-    // Nothing should have been written to the array key by this switch.
+    expect(localStorage.getItem(TABULAR_KEY)).toBeNull();
     expect(localStorage.getItem(ARRAY_KEY)).toBeNull();
   });
+});
 
-  it('switching to a model with no saved state yields defaults with the new dataModel', () => {
-    const state = makeState({ dataModel: 'tabular' });
-    const result = reducer(state, { type: 'SET_DATA_MODEL', model: 'array' });
-    expect(result).toEqual({ ...DEFAULT_STATE, dataModel: 'array' });
-  });
+// ─── REPLACE_STATE ───────────────────────────────────────────────────
 
-  it('switching back to a model restores its previously saved state', () => {
-    const tabularState = makeState({ dataModel: 'tabular', shape: [77] });
-    // Switch away: tabular gets saved, array has no saved state -> defaults.
-    const arrayState = reducer(tabularState, { type: 'SET_DATA_MODEL', model: 'array' });
-    expect(arrayState.dataModel).toBe('array');
-
-    // Modify the array-side state, then switch back to tabular.
-    const modifiedArrayState = { ...arrayState, shape: [4, 4] };
-    const backToTabular = reducer(modifiedArrayState, { type: 'SET_DATA_MODEL', model: 'tabular' });
-    expect(backToTabular.dataModel).toBe('tabular');
-    expect(backToTabular.shape).toEqual([77]);
-
-    // And switching to array again should restore the modified array state.
-    const backToArray = reducer(backToTabular, { type: 'SET_DATA_MODEL', model: 'array' });
-    expect(backToArray.dataModel).toBe('array');
-    expect(backToArray.shape).toEqual([4, 4]);
+describe('REPLACE_STATE', () => {
+  it('replaces the entire state wholesale', () => {
+    const state = makeState({ dataModel: 'tabular', shape: [10] });
+    const replacement = makeState({ dataModel: 'array', shape: [4, 4] });
+    const result = reducer(state, { type: 'REPLACE_STATE', state: replacement });
+    expect(result).toBe(replacement);
   });
 });

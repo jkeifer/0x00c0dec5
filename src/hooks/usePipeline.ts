@@ -1,6 +1,16 @@
 import { useMemo } from 'react';
-import type { AppState } from '../types/state.ts';
-import type { PipelineStage, ByteTrace, EncodedChunk, VirtualFile, ReadFileResult, VariableStats } from '../types/pipeline.ts';
+import type { AppState, Variable } from '../types/state.ts';
+import type { CodecStep } from '../types/codecs.ts';
+import type {
+  PipelineStage,
+  ByteTrace,
+  Chunk,
+  LinearizedChunk,
+  EncodedChunk,
+  VirtualFile,
+  ReadFileResult,
+  VariableStats,
+} from '../types/pipeline.ts';
 import { buildChunkRegions } from '../components/viewers/viewerUtils.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
 import { getDtype } from '../types/dtypes.ts';
@@ -13,20 +23,9 @@ import { collectMetadata, serializeMetadata } from '../engine/metadata.ts';
 import { assembleFiles } from '../engine/write.ts';
 import { valuesToBytes } from '../engine/elements.ts';
 import { formatValue, formatLogicalValue } from '../engine/elements.ts';
-import { isChunkLevelTrace } from '../engine/trace.ts';
+import { isChunkLevelTrace, makeTraceId } from '../engine/trace.ts';
 import { readFile } from '../engine/read.ts';
-import { hexToBytes } from '../engine/bytes.ts';
-
-function concatBytes(arrays: Uint8Array[]): Uint8Array {
-  const totalLength = arrays.reduce((acc, a) => acc + a.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const a of arrays) {
-    result.set(a, offset);
-    offset += a.length;
-  }
-  return result;
-}
+import { hexToBytes, concatBytes } from '../engine/bytes.ts';
 
 function makeStage(name: string, bytes: Uint8Array, traces: ByteTrace[]): PipelineStage {
   return {
@@ -41,38 +40,29 @@ function makeStage(name: string, bytes: Uint8Array, traces: ByteTrace[]): Pipeli
   };
 }
 
-export interface PipelineResult {
-  stages: PipelineStage[];
-  files: VirtualFile[];
-  chunkTraceMap: Map<string, Set<string>>;
-  traceChunkMap: Map<string, string>;
-  readResult: ReadFileResult;
-  variableStats: Map<string, VariableStats>;
-}
-
-export function computePipelineStages(state: AppState): PipelineResult {
-  const totalElements = state.shape.reduce((a, b) => a * b, 1);
-
-  // 1. Generate logical values for all variables
-  const variableValues = new Map<string, number[]>();
-  for (const v of state.variables) {
-    variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
-  }
-
-  // Build "Values" stage: logical values stored as float64 bytes with per-byte traces
-  const valuesPartBytes: Uint8Array[] = [];
-  const valuesTraces: ByteTrace[] = [];
-  for (const v of state.variables) {
-    const vals = variableValues.get(v.name)!;
+/**
+ * Build a Values-stage-shaped byte blob + per-byte traces for a set of logical
+ * (float64) values per variable. Shared by the Values stage and the Read
+ * stage, which both display reconstructed logical values in the same layout.
+ */
+function buildLogicalValuesStage(
+  variables: Pick<Variable, 'name' | 'color'>[],
+  shape: number[],
+  valuesByName: Map<string, number[]>,
+): { bytes: Uint8Array; traces: ByteTrace[] } {
+  const partBytes: Uint8Array[] = [];
+  const traces: ByteTrace[] = [];
+  for (const v of variables) {
+    const vals = valuesByName.get(v.name) ?? [];
     const bytes = valuesToBytes(vals, 'float64');
-    valuesPartBytes.push(bytes);
+    partBytes.push(bytes);
 
     for (let i = 0; i < vals.length; i++) {
-      const coords = flatIndexToCoords(i, state.shape);
-      const traceId = `${v.name}:${coords.join(',')}`;
+      const coords = flatIndexToCoords(i, shape);
+      const traceId = makeTraceId(v.name, coords);
       const display = formatLogicalValue(vals[i]);
       for (let b = 0; b < 8; b++) { // float64 = 8 bytes
-        valuesTraces.push({
+        traces.push({
           traceId,
           variableName: v.name,
           variableColor: v.color,
@@ -86,17 +76,59 @@ export function computePipelineStages(state: AppState): PipelineResult {
       }
     }
   }
-  const valuesBytes = concatBytes(valuesPartBytes);
-  const stages: PipelineStage[] = [makeStage('Values', valuesBytes, valuesTraces)];
+  return { bytes: concatBytes(partBytes), traces };
+}
 
-  // 2. Type assignment: convert logical values to typed bytes
+// ─── Stage 1: Values ───────────────────────────────────────────────────────
+//
+// Depends only on: shape, and each variable's name/color/logicalType. Does
+// NOT depend on typeAssignment, chunkShape, interleaving, codecs, metadata,
+// or write config.
+
+export interface ValuesStageResult {
+  stage: PipelineStage;
+  variableValues: Map<string, number[]>;
+}
+
+export function computeValuesStage(
+  shape: number[],
+  variables: Variable[],
+): ValuesStageResult {
+  const totalElements = shape.reduce((a, b) => a * b, 1);
+
+  const variableValues = new Map<string, number[]>();
+  for (const v of variables) {
+    variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
+  }
+
+  const { bytes, traces } = buildLogicalValuesStage(variables, shape, variableValues);
+  return { stage: makeStage('Values', bytes, traces), variableValues };
+}
+
+// ─── Stage 2: Typed ──────────────────────────────────────────────────────────
+//
+// Depends on: the Values stage's variableValues, shape, and each variable's
+// name/color/logicalType/typeAssignment. Does NOT depend on chunkShape,
+// interleaving, codecs, metadata, or write config.
+
+export interface TypedStageResult {
+  stage: PipelineStage;
+  typedVariableValues: Map<string, number[]>;
+  variableStats: Map<string, VariableStats>;
+}
+
+export function computeTypedStage(
+  shape: number[],
+  variables: Variable[],
+  variableValues: Map<string, number[]>,
+): TypedStageResult {
   const typedPartBytes: Uint8Array[] = [];
   const typedTraces: ByteTrace[] = [];
   const variableStats = new Map<string, VariableStats>();
-  const typedVariableValues = new Map<string, number[]>(); // typed values for chunking
+  const typedVariableValues = new Map<string, number[]>();
 
-  for (const v of state.variables) {
-    const vals = variableValues.get(v.name)!;
+  for (const v of variables) {
+    const vals = variableValues.get(v.name) ?? [];
     const result = assignType(vals, v.logicalType, v.typeAssignment);
     const storageDtype = v.typeAssignment.storageDtype;
     const dtypeInfo = getDtype(storageDtype);
@@ -106,13 +138,13 @@ export function computePipelineStages(state: AppState): PipelineResult {
 
     // Read back the typed values for use in chunking
     const typedVals = Array.from(
-      new (dtypeInfo.TypedArray)(result.bytes.buffer as ArrayBuffer, result.bytes.byteOffset, vals.length)
+      new (dtypeInfo.TypedArray)(result.bytes.buffer as ArrayBuffer, result.bytes.byteOffset, vals.length),
     );
     typedVariableValues.set(v.name, typedVals);
 
     for (let i = 0; i < vals.length; i++) {
-      const coords = flatIndexToCoords(i, state.shape);
-      const traceId = `${v.name}:${coords.join(',')}`;
+      const coords = flatIndexToCoords(i, shape);
+      const traceId = makeTraceId(v.name, coords);
       const display = formatValue(typedVals[i], storageDtype);
       for (let b = 0; b < dtypeInfo.size; b++) {
         typedTraces.push({
@@ -130,23 +162,46 @@ export function computePipelineStages(state: AppState): PipelineResult {
     }
   }
   const typedBytes = concatBytes(typedPartBytes);
-  stages.push(makeStage('Typed', typedBytes, typedTraces));
+  return {
+    stage: makeStage('Typed', typedBytes, typedTraces),
+    typedVariableValues,
+    variableStats,
+  };
+}
 
-  // 3. Chunk + Linearize (using storageDtype from typeAssignment)
-  // Build variables with storage dtypes for chunking
-  const chunkVariables = state.variables.map((v) => ({
+// ─── Stage 3: Linearized (chunk + linearize) ───────────────────────────────
+//
+// Depends on: the Typed stage's typedVariableValues, shape, chunkShape,
+// interleaving, and each variable's name/color/typeAssignment.storageDtype.
+// Does NOT depend on logicalType, codecs, metadata, or write config.
+
+export interface LinearizedStageResult {
+  stage: PipelineStage;
+  chunks: Chunk[];
+  linearizedChunks: LinearizedChunk[];
+  chunkTraceMap: Map<string, Set<string>>;
+  traceChunkMap: Map<string, string>;
+}
+
+export function computeLinearizedStage(
+  shape: number[],
+  chunkShape: number[],
+  interleaving: 'row' | 'column',
+  variables: Variable[],
+  typedVariableValues: Map<string, number[]>,
+): LinearizedStageResult {
+  const chunkVariables = variables.map((v) => ({
     ...v,
     dtype: v.typeAssignment.storageDtype as string,
   }));
-  const chunks = state.interleaving === 'column'
-    ? chunkDataPerVariable(state.shape, state.chunkShape, chunkVariables, typedVariableValues)
-    : chunkData(state.shape, state.chunkShape, chunkVariables, typedVariableValues);
-  const linearizedChunks = chunks.map((chunk) => linearizeChunk(chunk, state.interleaving));
+  const chunks = interleaving === 'column'
+    ? chunkDataPerVariable(shape, chunkShape, chunkVariables, typedVariableValues)
+    : chunkData(shape, chunkShape, chunkVariables, typedVariableValues);
+  const linearizedChunks = chunks.map((chunk) => linearizeChunk(chunk, interleaving));
   const linearizedBytes = concatBytes(linearizedChunks.map((lc) => lc.bytes));
   const linearizedTraces = linearizedChunks.flatMap((lc) => lc.traces);
-  stages.push(makeStage('Linearized', linearizedBytes, linearizedTraces));
 
-  // Build chunk↔trace maps from linearized traces
+  // Build chunk<->trace maps from linearized traces
   const chunkTraceMap = new Map<string, Set<string>>();
   const traceChunkMap = new Map<string, string>();
   for (const t of linearizedTraces) {
@@ -157,14 +212,47 @@ export function computePipelineStages(state: AppState): PipelineResult {
     }
   }
 
-  // 4. Encode (only byte-level codecs: delta, byte-shuffle, RLE, LZ)
+  return {
+    stage: makeStage('Linearized', linearizedBytes, linearizedTraces),
+    chunks,
+    linearizedChunks,
+    chunkTraceMap,
+    traceChunkMap,
+  };
+}
+
+// ─── Stage 4: Encoded (codec pipelines) ────────────────────────────────────
+//
+// Depends on: the Linearized stage's chunks/linearizedChunks, interleaving,
+// fieldPipelines, chunkPipeline, and each variable's id/name (for the
+// name -> id lookup — fieldPipelines is id-keyed per D5). Does NOT depend on
+// shape/chunkShape/logicalType/metadata/write config directly (only via the
+// already-computed chunks).
+
+export interface EncodedStageResult {
+  stage: PipelineStage;
+  encodedChunks: EncodedChunk[];
+}
+
+export function computeEncodedStage(
+  chunks: Chunk[],
+  linearizedChunks: LinearizedChunk[],
+  interleaving: 'row' | 'column',
+  variables: Variable[],
+  fieldPipelines: Record<string, CodecStep[]>,
+  chunkPipeline: CodecStep[],
+): EncodedStageResult {
+  // fieldPipelines is keyed by Variable.id (D5); ChunkVariable only carries the
+  // variable's name (the file format's key), so resolve name -> id here.
+  const nameToId = new Map(variables.map((v) => [v.name, v.id]));
   const encodedChunks: EncodedChunk[] = chunks.map((chunk, idx) => {
     const linearized = linearizedChunks[idx];
 
-    if (state.interleaving === 'column') {
+    if (interleaving === 'column') {
       // Per-variable chunks: each chunk has exactly one variable
       const cv = chunk.variables[0];
-      const steps = state.fieldPipelines[cv.variableName] ?? [];
+      const variableId = nameToId.get(cv.variableName);
+      const steps = (variableId !== undefined ? fieldPipelines[variableId] : undefined) ?? [];
       const result = runCodecPipeline(linearized.bytes, linearized.traces, steps, cv.dtype as DtypeKey);
       return {
         chunkId: linearized.chunkId,
@@ -174,7 +262,7 @@ export function computePipelineStages(state: AppState): PipelineResult {
         variableName: linearized.variableName,
       };
     } else {
-      const steps = state.chunkPipeline;
+      const steps = chunkPipeline;
       const uniqueDtypes = new Set(chunk.variables.map((cv) => cv.dtype));
       const inputDtype: DtypeKey = chunk.variables.length === 0
         ? 'uint8'
@@ -193,10 +281,26 @@ export function computePipelineStages(state: AppState): PipelineResult {
 
   const encodedBytes = concatBytes(encodedChunks.map((ec) => ec.bytes));
   const encodedTraces = encodedChunks.flatMap((ec) => ec.traces);
-  stages.push(makeStage('Encoded', encodedBytes, encodedTraces));
+  return { stage: makeStage('Encoded', encodedBytes, encodedTraces), encodedChunks };
+}
 
-  // 5. Metadata
-  const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
+// ─── Stage 5: Metadata ──────────────────────────────────────────────────────
+//
+// Depends on: the full AppState (collectMetadata re-derives schema/shape/
+// codec config from state directly rather than from prior stage outputs) plus
+// the Encoded stage's encodedChunks and the Typed stage's variableStats.
+// Typing a metadata custom entry re-runs only this stage (and Files/Read
+// after it) — NOT generation/typing/chunking/encoding.
+
+export interface MetadataStageResult {
+  stage: PipelineStage;
+}
+
+export function computeMetadataStage(
+  state: AppState,
+  encodedChunks: EncodedChunk[],
+  variableStats: Map<string, VariableStats>,
+): MetadataStageResult {
   const metaEntries = collectMetadata(state, encodedChunks, variableStats);
   const metaBytes = serializeMetadata(metaEntries, state.metadata.serialization);
   const metaTraces: ByteTrace[] = Array.from({ length: metaBytes.length }, (_, i) => ({
@@ -210,70 +314,213 @@ export function computePipelineStages(state: AppState): PipelineResult {
     byteInValue: i,
     byteCount: metaBytes.length,
   }));
-  stages.push(makeStage('Metadata', metaBytes, metaTraces));
+  return { stage: makeStage('Metadata', metaBytes, metaTraces) };
+}
 
-  // 6. Write (assembled file)
+// ─── Stage 6: Write (assembled files) ──────────────────────────────────────
+//
+// Depends on: the full AppState (assembleFiles re-derives metadata bytes from
+// state directly — see collectMetadata calls inside engine/write.ts) plus the
+// Encoded stage's encodedChunks and the Typed stage's variableStats.
+
+export interface FilesStageResult {
+  stage: PipelineStage;
+  files: VirtualFile[];
+}
+
+export function computeFilesStage(
+  state: AppState,
+  encodedChunks: EncodedChunk[],
+  variableStats: Map<string, VariableStats>,
+): FilesStageResult {
+  const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
   const files = assembleFiles(state, encodedChunks, chunkGrid, variableStats);
   const writeBytes = concatBytes(files.map((f) => f.bytes));
   const writeTraces = files.flatMap((f) => f.traces);
-  stages.push(makeStage('Write', writeBytes, writeTraces));
-
-  // 7. Read (reconstruct from file bytes). Per D2, the reader is given the
-  // format's magic number as bytes (not the raw hex-string config) and
-  // verifies it rather than blindly stripping it.
-  const readResult = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
-
-  if (readResult.success) {
-    // Build a Values-like stage with reconstructed values
-    const readPartBytes: Uint8Array[] = [];
-    const readTraces: ByteTrace[] = [];
-    for (const v of state.variables) {
-      const vals = readResult.reconstructedValues.get(v.name) ?? [];
-      // Read stage shows logical values (float64), same as Values stage
-      const bytes = valuesToBytes(vals, 'float64');
-      readPartBytes.push(bytes);
-
-      for (let i = 0; i < vals.length; i++) {
-        const coords = flatIndexToCoords(i, state.shape);
-        const traceId = `${v.name}:${coords.join(',')}`;
-        const display = formatLogicalValue(vals[i]);
-        for (let b = 0; b < 8; b++) {
-          readTraces.push({
-            traceId,
-            variableName: v.name,
-            variableColor: v.color,
-            coords,
-            displayValue: display,
-            dtype: 'float64',
-            chunkId: '',
-            byteInValue: b,
-            byteCount: 8,
-          });
-        }
-      }
-    }
-    const readBytes = concatBytes(readPartBytes);
-    stages.push(makeStage('Read', readBytes, readTraces));
-  } else {
-    // Failed read — push empty stage
-    stages.push(makeStage('Read', new Uint8Array(0), []));
-  }
-
-  return { stages, files, chunkTraceMap, traceChunkMap, readResult, variableStats };
+  return { stage: makeStage('Write', writeBytes, writeTraces), files };
 }
 
+// ─── Stage 7: Read ──────────────────────────────────────────────────────────
+//
+// Depends on: the Files stage's output, shape, each variable's name/color,
+// and the write magic number.
+
+export interface ReadStageResult {
+  stage: PipelineStage;
+  readResult: ReadFileResult;
+  logicalValues: Map<string, number[]>;
+}
+
+export function computeReadStage(
+  files: VirtualFile[],
+  shape: number[],
+  variables: Variable[],
+  magicNumber: string,
+): ReadStageResult {
+  // Per D2, the reader is given the format's magic number as bytes (not the
+  // raw hex-string config) and verifies it rather than blindly stripping it.
+  const readResult = readFile(files, { magic: hexToBytes(magicNumber) });
+
+  if (readResult.success) {
+    const logicalValues = new Map<string, number[]>();
+    for (const v of variables) {
+      logicalValues.set(v.name, readResult.reconstructedValues.get(v.name) ?? []);
+    }
+    const { bytes, traces } = buildLogicalValuesStage(variables, shape, logicalValues);
+    return { stage: makeStage('Read', bytes, traces), readResult, logicalValues };
+  }
+
+  return { stage: makeStage('Read', new Uint8Array(0), []), readResult, logicalValues: new Map() };
+}
+
+// ─── Full composition (pure; used directly by tests and as the reference
+// implementation for the memoized hook below) ───────────────────────────────
+
+export interface PipelineResult {
+  stages: PipelineStage[];
+  files: VirtualFile[];
+  chunkTraceMap: Map<string, Set<string>>;
+  traceChunkMap: Map<string, string>;
+  readResult: ReadFileResult;
+  variableStats: Map<string, VariableStats>;
+  /**
+   * D6 (remediation-plan.md, Phase 3.3): Values-stage source arrays, keyed by
+   * variable NAME (matching `readResult.reconstructedValues`). Viewers
+   * consume this instead of re-decoding `stages[0].bytes` themselves — fixes
+   * UI-9 and the two other byte-slicing copies in TableView/GridView.
+   */
+  logicalValues: Map<string, number[]>;
+  /** D6: Typed-stage source arrays, keyed by variable NAME. */
+  typedValues: Map<string, number[]>;
+}
+
+export function computePipelineStages(state: AppState): PipelineResult {
+  const values = computeValuesStage(state.shape, state.variables);
+  const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
+  const linearized = computeLinearizedStage(
+    state.shape,
+    state.chunkShape,
+    state.interleaving,
+    state.variables,
+    typed.typedVariableValues,
+  );
+  const encoded = computeEncodedStage(
+    linearized.chunks,
+    linearized.linearizedChunks,
+    state.interleaving,
+    state.variables,
+    state.fieldPipelines,
+    state.chunkPipeline,
+  );
+  const metadata = computeMetadataStage(state, encoded.encodedChunks, typed.variableStats);
+  const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats);
+  const read = computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber);
+
+  const stages: PipelineStage[] = [
+    values.stage,
+    typed.stage,
+    linearized.stage,
+    encoded.stage,
+    metadata.stage,
+    files.stage,
+    read.stage,
+  ];
+
+  return {
+    stages,
+    files: files.files,
+    chunkTraceMap: linearized.chunkTraceMap,
+    traceChunkMap: linearized.traceChunkMap,
+    readResult: read.readResult,
+    variableStats: typed.variableStats,
+    logicalValues: values.variableValues,
+    typedValues: typed.typedVariableValues,
+  };
+}
+
+// ─── Memoized hook ──────────────────────────────────────────────────────────
+//
+// Chained useMemos with real dependency boundaries (SW-3): a change to a
+// later-stage-only input (e.g. a metadata custom entry, or the write magic
+// number) must not recompute generation/typing/chunking/encoding. Each memo
+// below lists exactly the state slices its stage function reads — see the
+// per-stage doc comments above for the full dependency rationale.
+
 export function usePipeline(state: AppState): PipelineResult {
-  return useMemo(
-    () => computePipelineStages(state),
-    [
+  const values = useMemo(
+    () => computeValuesStage(state.shape, state.variables),
+    [state.shape, state.variables],
+  );
+
+  const typed = useMemo(
+    () => computeTypedStage(state.shape, state.variables, values.variableValues),
+    [state.shape, state.variables, values.variableValues],
+  );
+
+  const linearized = useMemo(
+    () => computeLinearizedStage(
       state.shape,
       state.chunkShape,
       state.interleaving,
       state.variables,
+      typed.typedVariableValues,
+    ),
+    [state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues],
+  );
+
+  const encoded = useMemo(
+    () => computeEncodedStage(
+      linearized.chunks,
+      linearized.linearizedChunks,
+      state.interleaving,
+      state.variables,
       state.fieldPipelines,
       state.chunkPipeline,
-      state.metadata,
-      state.write,
+    ),
+    [
+      linearized.chunks,
+      linearized.linearizedChunks,
+      state.interleaving,
+      state.variables,
+      state.fieldPipelines,
+      state.chunkPipeline,
     ],
+  );
+
+  const metadata = useMemo(
+    () => computeMetadataStage(state, encoded.encodedChunks, typed.variableStats),
+    [state, encoded.encodedChunks, typed.variableStats],
+  );
+
+  const files = useMemo(
+    () => computeFilesStage(state, encoded.encodedChunks, typed.variableStats),
+    [state, encoded.encodedChunks, typed.variableStats],
+  );
+
+  const read = useMemo(
+    () => computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber),
+    [files.files, state.shape, state.variables, state.write.magicNumber],
+  );
+
+  return useMemo(
+    () => ({
+      stages: [
+        values.stage,
+        typed.stage,
+        linearized.stage,
+        encoded.stage,
+        metadata.stage,
+        files.stage,
+        read.stage,
+      ],
+      files: files.files,
+      chunkTraceMap: linearized.chunkTraceMap,
+      traceChunkMap: linearized.traceChunkMap,
+      readResult: read.readResult,
+      variableStats: typed.variableStats,
+      logicalValues: values.variableValues,
+      typedValues: typed.typedVariableValues,
+    }),
+    [values, typed, linearized, encoded.stage, metadata.stage, files, read],
   );
 }

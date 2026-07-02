@@ -3,14 +3,60 @@ import { DEFAULT_STATE } from '../types/state.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
 import { getDtype, DTYPE_KEYS } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
+import type { StageName } from '../types/pipeline.ts';
+import { STAGE_ORDER } from '../types/pipeline.ts';
 
 const STORAGE_KEYS: Record<AppState['dataModel'], string> = {
   tabular: '0x00c0dec5-state-tabular',
   array: '0x00c0dec5-state-array',
 };
 
-/** Number of stages in the pipeline strip; valid pane-stage indices are 0..STAGE_COUNT-1. */
-const STAGE_COUNT = 7;
+/**
+ * Third storage key (SW-5, Phase 3.7): records which data model was last
+ * active, independent of either model's own per-model state key, so a fresh
+ * page load can restore the model the user was actually looking at rather
+ * than always defaulting to `DEFAULT_STATE.dataModel` (tabular).
+ */
+const ACTIVE_MODEL_KEY = '0x00c0dec5-active-model';
+
+/** Read the last-active data model, or `null` if none is recorded / the
+ * stored value isn't a recognized model. */
+export function loadActiveModel(): AppState['dataModel'] | null {
+  try {
+    const raw = localStorage.getItem(ACTIVE_MODEL_KEY);
+    if (raw === 'tabular' || raw === 'array') return raw;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Record the currently-active data model. */
+export function saveActiveModel(model: AppState['dataModel']): void {
+  try {
+    localStorage.setItem(ACTIVE_MODEL_KEY, model);
+  } catch {
+    // silently fail on storage errors
+  }
+}
+
+/**
+ * Migrate a persisted pane-stage value to a `StageName` (D5, Phase 3.8).
+ * Old saves stored a numeric index into the (fixed, but previously
+ * index-identified) stage list; the old `-1` sentinel meant "default to
+ * Write" (the original intent behind SW-2's now-removed workaround).
+ * Anything else invalid/out-of-range/unrecognized falls back to `fallback`.
+ */
+function migratePaneStage(value: unknown, fallback: StageName): StageName {
+  if (typeof value === 'string' && (STAGE_ORDER as string[]).includes(value)) {
+    return value as StageName;
+  }
+  if (typeof value === 'number' && Number.isInteger(value)) {
+    if (value === -1) return 'write';
+    if (value >= 0 && value < STAGE_ORDER.length) return STAGE_ORDER[value];
+  }
+  return fallback;
+}
 
 /** Migrate old state format (v1: Variable with dtype) to new format (v2: logicalType + typeAssignment). */
 function migrateState(raw: Record<string, unknown>): AppState | null {
@@ -162,32 +208,36 @@ function validateState(state: AppState): AppState {
     state.chunkShape = newChunkShape;
   }
 
-  // ui.leftPaneStage / ui.rightPaneStage: integers within stage range; rightPaneStage also
-  // allows the -1 sentinel.
-  if (
-    typeof state.ui.leftPaneStage !== 'number' ||
-    !Number.isInteger(state.ui.leftPaneStage) ||
-    state.ui.leftPaneStage < 0 ||
-    state.ui.leftPaneStage >= STAGE_COUNT
-  ) {
-    state.ui.leftPaneStage = DEFAULT_STATE.ui.leftPaneStage;
-  }
-  if (
-    typeof state.ui.rightPaneStage !== 'number' ||
-    !Number.isInteger(state.ui.rightPaneStage) ||
-    (state.ui.rightPaneStage !== -1 &&
-      (state.ui.rightPaneStage < 0 || state.ui.rightPaneStage >= STAGE_COUNT))
-  ) {
-    state.ui.rightPaneStage = DEFAULT_STATE.ui.rightPaneStage;
-  }
+  // ui.leftPaneStage / ui.rightPaneStage (D5, Phase 3.8): StageName, not a
+  // numeric index. Old numeric saves (including the -1 sentinel) migrate via
+  // STAGE_ORDER; anything else invalid/unrecognized falls back to the
+  // appropriate default ('values' for left, 'write' for right).
+  state.ui.leftPaneStage = migratePaneStage(state.ui.leftPaneStage, DEFAULT_STATE.ui.leftPaneStage);
+  state.ui.rightPaneStage = migratePaneStage(state.ui.rightPaneStage, DEFAULT_STATE.ui.rightPaneStage);
 
-  // fieldPipelines: object of arrays
+  // fieldPipelines: object of arrays, keyed by Variable.id (D5, Phase 3.1).
+  // Migrate legacy name-keyed saves: a key matching a variable's NAME (but not
+  // any variable's id) is re-keyed to that variable's id; keys matching
+  // neither a name nor an id are dropped (stale/orphaned entries).
   if (!isPlainObject(state.fieldPipelines)) {
     state.fieldPipelines = {};
   } else {
+    const idSet = new Set(state.variables.map((v) => v.id));
+    const nameToId = new Map(state.variables.map((v) => [v.name, v.id]));
     const cleaned: Record<string, CodecStep[]> = {};
     for (const [key, val] of Object.entries(state.fieldPipelines)) {
-      cleaned[key] = Array.isArray(val) ? val : [];
+      const steps = Array.isArray(val) ? val : [];
+      if (idSet.has(key)) {
+        cleaned[key] = steps;
+      } else if (nameToId.has(key)) {
+        // Legacy name-keyed entry: re-key to the matching variable's id,
+        // unless that id already has a (presumably newer/id-keyed) entry.
+        const id = nameToId.get(key)!;
+        if (!(id in cleaned)) {
+          cleaned[id] = steps;
+        }
+      }
+      // else: key matches neither an id nor a name — drop it.
     }
     state.fieldPipelines = cleaned;
   }

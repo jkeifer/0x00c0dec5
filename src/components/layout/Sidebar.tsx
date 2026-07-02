@@ -1,4 +1,5 @@
 import { useAppState } from '../../state/useAppState.ts';
+import { usePipelineContext } from '../../state/PipelineContext.tsx';
 import { SchemaEditor } from '../config/SchemaEditor.tsx';
 import { ChunkConfig } from '../config/ChunkConfig.tsx';
 import { InterleaveConfig } from '../config/InterleaveConfig.tsx';
@@ -9,7 +10,6 @@ import { WriteConfig } from '../config/WriteConfig.tsx';
 import { ReadStatus } from '../config/ReadStatus.tsx';
 import { FileExplorer } from '../files/FileExplorer.tsx';
 import { colors, fontSizes, spacing } from '../../theme.ts';
-import type { VirtualFile, ReadFileResult, VariableStats } from '../../types/pipeline.ts';
 
 const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Type Assignment', 'Codecs', 'Metadata', 'Write', 'Read'] as const;
 
@@ -43,14 +43,13 @@ const dividerStyle: React.CSSProperties = {
   marginBottom: 14,
 };
 
-interface SidebarProps {
-  files: VirtualFile[];
-  readResult: ReadFileResult;
-  variableStats: Map<string, VariableStats>;
-}
-
-export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
+// Task 3.9 (remediation-plan.md, Phase 3): files/readResult/variableStats
+// come from PipelineContext now — Sidebar took no other pipeline-derived
+// props, so consuming context directly (rather than adding a prop-drilling
+// wrapper) removes the last props App.tsx had to thread through it.
+export function Sidebar() {
   const { state, dispatch } = useAppState();
+  const { files, readResult, variableStats } = usePipelineContext();
 
   function renderSection(section: (typeof SECTIONS)[number]) {
     switch (section) {
@@ -118,8 +117,8 @@ export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
             variables={state.variables}
             fieldPipelines={state.fieldPipelines}
             chunkPipeline={state.chunkPipeline}
-            onFieldPipelineChange={(variableName, steps) =>
-              dispatch({ type: 'SET_FIELD_PIPELINE', variableName, steps })
+            onFieldPipelineChange={(variableId, steps) =>
+              dispatch({ type: 'SET_FIELD_PIPELINE', variableId, steps })
             }
             onChunkPipelineChange={(steps) =>
               dispatch({ type: 'SET_CHUNK_PIPELINE', steps })
@@ -132,7 +131,7 @@ export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
             metadata={state.metadata}
             state={state}
             onSerializationChange={(serialization) =>
-              dispatch({ type: 'SET_METADATA_SERIALIZATION', serialization })
+              dispatch({ type: 'UPDATE_METADATA_CONFIG', changes: { serialization } })
             }
             onAddEntry={() => dispatch({ type: 'ADD_METADATA_ENTRY' })}
             onRemoveEntry={(index) =>
@@ -142,7 +141,7 @@ export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
               dispatch({ type: 'UPDATE_METADATA_ENTRY', index, key, value })
             }
             onIncludeChunkIndexChange={(includeChunkIndex) =>
-              dispatch({ type: 'SET_INCLUDE_CHUNK_INDEX', includeChunkIndex })
+              dispatch({ type: 'UPDATE_METADATA_CONFIG', changes: { includeChunkIndex } })
             }
           />
         );
@@ -152,22 +151,22 @@ export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
             <WriteConfig
               write={state.write}
               onMagicChange={(magicNumber) =>
-                dispatch({ type: 'SET_WRITE_MAGIC', magicNumber })
+                dispatch({ type: 'UPDATE_WRITE', changes: { magicNumber } })
               }
               onPartitioningChange={(partitioning) =>
-                dispatch({ type: 'SET_WRITE_PARTITIONING', partitioning })
+                dispatch({ type: 'UPDATE_WRITE', changes: { partitioning } })
               }
               onMetadataPlacementChange={(metadataPlacement) =>
-                dispatch({ type: 'SET_WRITE_METADATA_PLACEMENT', metadataPlacement })
+                dispatch({ type: 'UPDATE_WRITE', changes: { metadataPlacement } })
               }
               onChunkOrderChange={(chunkOrder) =>
-                dispatch({ type: 'SET_WRITE_CHUNK_ORDER', chunkOrder })
+                dispatch({ type: 'UPDATE_WRITE', changes: { chunkOrder } })
               }
               onIncludeMetadataChange={(includeMetadata) =>
-                dispatch({ type: 'SET_WRITE_INCLUDE_METADATA', includeMetadata })
+                dispatch({ type: 'UPDATE_WRITE', changes: { includeMetadata } })
               }
               onFooterLocatorChange={(footerLocator) =>
-                dispatch({ type: 'SET_WRITE_FOOTER_LOCATOR', footerLocator })
+                dispatch({ type: 'UPDATE_WRITE', changes: { footerLocator } })
               }
             />
             <FileExplorer files={files} />
@@ -179,7 +178,7 @@ export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
             readResult={readResult}
             showDiff={state.ui.showDiff}
             onShowDiffChange={(showDiff) =>
-              dispatch({ type: 'SET_SHOW_DIFF', showDiff })
+              dispatch({ type: 'UPDATE_UI', changes: { showDiff } })
             }
           />
         );

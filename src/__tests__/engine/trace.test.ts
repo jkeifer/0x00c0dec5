@@ -3,6 +3,9 @@ import {
   propagateTracesValuePreserving,
   degradeTracesToChunkLevel,
   isChunkLevelTrace,
+  makeTraceId,
+  makeChunkTraceId,
+  parseTraceId,
 } from '../../engine/trace.ts';
 import type { ByteTrace } from '../../types/pipeline.ts';
 
@@ -170,5 +173,97 @@ describe('isChunkLevelTrace', () => {
   it('rejects value-level trace ids', () => {
     expect(isChunkLevelTrace('temperature:0')).toBe(false);
     expect(isChunkLevelTrace('var:1,2')).toBe(false);
+  });
+});
+
+// ─── D8 (remediation-plan.md, Phase 3.4): traceId helpers ──────────────────
+
+describe('makeTraceId', () => {
+  it('builds a value traceId from a variable name and 1D coords', () => {
+    expect(makeTraceId('temperature', [5])).toBe('temperature:5');
+  });
+
+  it('builds a value traceId from multi-dimensional coords', () => {
+    expect(makeTraceId('humidity', [2, 3])).toBe('humidity:2,3');
+  });
+
+  it('handles empty coords', () => {
+    expect(makeTraceId('scalar', [])).toBe('scalar:');
+  });
+});
+
+describe('makeChunkTraceId', () => {
+  it('prefixes a raw chunk identifier with "chunk:"', () => {
+    expect(makeChunkTraceId('0,1')).toBe('chunk:0,1');
+  });
+
+  it('prefixes a per-variable raw chunk identifier', () => {
+    expect(makeChunkTraceId('temperature:0')).toBe('chunk:temperature:0');
+  });
+
+  it('is idempotent — does not double-prefix an already-prefixed id', () => {
+    expect(makeChunkTraceId('chunk:0,1')).toBe('chunk:0,1');
+    expect(makeChunkTraceId(makeChunkTraceId('0,1'))).toBe('chunk:0,1');
+  });
+});
+
+describe('parseTraceId', () => {
+  it('parses a 1D value traceId', () => {
+    expect(parseTraceId('temperature:5')).toEqual({
+      kind: 'value',
+      variableName: 'temperature',
+      coords: [5],
+    });
+  });
+
+  it('parses a multi-dimensional value traceId', () => {
+    expect(parseTraceId('humidity:2,3,4')).toEqual({
+      kind: 'value',
+      variableName: 'humidity',
+      coords: [2, 3, 4],
+    });
+  });
+
+  it('round-trips through makeTraceId', () => {
+    const id = makeTraceId('pressure', [1, 2]);
+    expect(parseTraceId(id)).toEqual({ kind: 'value', variableName: 'pressure', coords: [1, 2] });
+  });
+
+  it('parses a chunk-level traceId, returning the full prefixed chunkId', () => {
+    expect(parseTraceId('chunk:0,1')).toEqual({ kind: 'chunk', chunkId: 'chunk:0,1' });
+    expect(parseTraceId('chunk:temperature:0')).toEqual({ kind: 'chunk', chunkId: 'chunk:temperature:0' });
+  });
+
+  it('round-trips through makeChunkTraceId', () => {
+    const id = makeChunkTraceId('temperature:0');
+    expect(parseTraceId(id)).toEqual({ kind: 'chunk', chunkId: 'chunk:temperature:0' });
+  });
+
+  it('never mis-parses a chunk-level id as value coordinates (UI-3 regression)', () => {
+    // Before the D8 fix, TableView/GridView split on the FIRST ':' without
+    // checking for the chunk prefix, so 'chunk:0,1' "parsed" as variableName
+    // 'chunk' with coords [0, 1] — silently wrong instead of falling back to
+    // the chunk-level lookup path.
+    const parsed = parseTraceId('chunk:0,1');
+    expect(parsed.kind).toBe('chunk');
+    if (parsed.kind === 'chunk') {
+      expect(parsed.chunkId).toBe('chunk:0,1');
+    }
+  });
+
+  it('parses a bare identifier with no colon as a value with empty coords', () => {
+    expect(parseTraceId('metadata')).toEqual({ kind: 'value', variableName: 'metadata', coords: [] });
+  });
+
+  // Documented choice (D8): split on the FIRST ':' only. Variable names
+  // containing ':' are not supported — the remainder after the first colon
+  // is treated as the coordinate string, which for a colon-bearing name
+  // simply fails to parse as clean numeric coords rather than corrupting
+  // unrelated data.
+  it('a variable name containing ":" does not round-trip through makeTraceId/parseTraceId', () => {
+    const id = makeTraceId('a:b', [0]);
+    expect(id).toBe('a:b:0');
+    const parsed = parseTraceId(id);
+    expect(parsed).toEqual({ kind: 'value', variableName: 'a', coords: [NaN] });
   });
 });

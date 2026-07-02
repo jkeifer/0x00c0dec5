@@ -247,7 +247,7 @@ describe('column-mode codec pipeline', () => {
           typeAssignment: { storageDtype: 'float32' },
         },
       ],
-      fieldPipelines: { temperature: [{ codec: 'rle', params: {} }] },
+      fieldPipelines: { a: [{ codec: 'rle', params: {} }] },
     });
     const { stages } = computePipelineStages(state);
     const encoded = stages[3]; // Encoded is index 3

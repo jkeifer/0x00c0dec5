@@ -1,3 +1,35 @@
+/**
+ * Fixed 7-stage pipeline order (remediation-plan.md decision D5) — the single
+ * source of truth for stage identity. `AppState.ui.leftPaneStage` /
+ * `rightPaneStage` (types/state.ts) persist one of these names rather than a
+ * numeric index (Phase 3.8, fixes SW-2/SW-6/SW-10): stage names survive the
+ * stage list growing (it already has, twice — Typed, then Read), whereas a
+ * persisted index silently points at the wrong stage after such a change.
+ *
+ * Placed here (not types/state.ts) because this file has zero imports of its
+ * own and is never imported by state.ts's dependencies (dtypes.ts/codecs.ts),
+ * so state.ts importing `StageName` from here cannot create a cycle; the
+ * reverse (this file importing from state.ts) is never needed.
+ */
+export type StageName =
+  | 'values'
+  | 'typed'
+  | 'linearized'
+  | 'encoded'
+  | 'metadata'
+  | 'write'
+  | 'read';
+
+export const STAGE_ORDER: StageName[] = [
+  'values',
+  'typed',
+  'linearized',
+  'encoded',
+  'metadata',
+  'write',
+  'read',
+];
+
 export interface ByteTrace {
   traceId: string;
   variableName: string;

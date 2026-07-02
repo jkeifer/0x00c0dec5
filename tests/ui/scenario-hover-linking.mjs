@@ -1,7 +1,9 @@
 // Regression scenario: cross-pane hover linking.
 //
-// Stage index reference (fixed order, see src/hooks/usePipeline.ts):
-//   0 Values, 1 Typed, 2 Linearized, 3 Encoded, 4 Metadata, 5 Write, 6 Read
+// Stage identity reference (fixed order, D5 — see src/types/pipeline.ts's
+// STAGE_ORDER): 'values', 'typed', 'linearized', 'encoded', 'metadata',
+// 'write', 'read'. Phase 3.8 changed the pane dropdown's <option> values from
+// numeric indices to these names, so setPaneStage below selects by name.
 //
 // KNOWN-FAIL UI-2 (docs/remediation-plan.md Part 1, "UI components"): hovering a
 // hex byte in the Values/Typed/Read stages' HexView does not cross-highlight a
@@ -33,8 +35,8 @@ async function tableHighlightCount(page, paneSelector) {
   );
 }
 
-async function setPaneStage(page, paneId, stageIndex) {
-  await page.locator(`[data-testid="pane-dropdown-${paneId}"]`).selectOption(String(stageIndex));
+async function setPaneStage(page, paneId, stageName) {
+  await page.locator(`[data-testid="pane-dropdown-${paneId}"]`).selectOption(stageName);
   await page.waitForTimeout(300);
 }
 
@@ -49,7 +51,7 @@ async function main() {
   const { browser, page } = await launch();
 
   // ── Left pane stays Values/Table (default). Right pane -> Write stage / Hex. ──
-  await setPaneStage(page, 'right', 5); // Write
+  await setPaneStage(page, 'right', 'write');
   await setPaneViewMode(page, 'right', 'Hex');
 
   // Forward: hover a table cell in the left pane, expect hex bytes to highlight
@@ -98,7 +100,7 @@ async function main() {
   await page.mouse.move(10, 10);
   await page.locator('[data-testid="sidebar-section-codecs"] select').first().selectOption('rle');
   await page.waitForTimeout(500);
-  await setPaneStage(page, 'right', 3); // Encoded
+  await setPaneStage(page, 'right', 'encoded');
 
   const cellAfterRle = page.locator('[data-testid="pane-left"] [data-testid^="table-cell-temperature-"]').first();
   await cellAfterRle.hover();
@@ -116,9 +118,9 @@ async function main() {
   // cross-highlight in the (post-RLE) Encoded pane, because traceChunkMap is
   // plumbed into HexView but never consulted.
   await page.mouse.move(10, 10);
-  await setPaneStage(page, 'left', 1); // Typed
+  await setPaneStage(page, 'left', 'typed');
   await setPaneViewMode(page, 'left', 'Hex');
-  await setPaneStage(page, 'right', 3); // Encoded (post-RLE)
+  await setPaneStage(page, 'right', 'encoded'); // post-RLE
 
   const typedHexByte = page.locator('[data-testid="pane-left"] [data-testid^="hex-byte-"]').nth(2);
   await typedHexByte.hover();

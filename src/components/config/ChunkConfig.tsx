@@ -1,22 +1,12 @@
 import { computeChunkGrid, computeChunkCount } from '../../engine/chunk.ts';
-import { colors, fontSizes, radii, spacing } from '../../theme.ts';
+import { colors, fontSizes, spacing } from '../../theme.ts';
+import { inputStyle } from '../shared/controlStyles.ts';
 
 interface ChunkConfigProps {
   shape: number[];
   chunkShape: number[];
   onChunkShapeChange: (chunkShape: number[]) => void;
 }
-
-const inputStyle: React.CSSProperties = {
-  background: colors.surfaceInput,
-  border: `1px solid ${colors.border}`,
-  borderRadius: radii.sm,
-  fontSize: fontSizes.sm,
-  color: colors.textPrimary,
-  padding: `${spacing.xs}px ${spacing.sm}px`,
-  outline: 'none',
-  fontFamily: 'inherit',
-};
 
 export function ChunkConfig({ shape, chunkShape, onChunkShapeChange }: ChunkConfigProps) {
   const grid = computeChunkGrid(shape, chunkShape);
@@ -40,7 +30,7 @@ export function ChunkConfig({ shape, chunkShape, onChunkShapeChange }: ChunkConf
               newChunkShape[d] = v;
               onChunkShapeChange(newChunkShape);
             }}
-            style={{ ...inputStyle, width: 60 }}
+            style={{ ...inputStyle(), width: 60 }}
           />
           <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
             / {shape[d]}
@@ -54,7 +44,7 @@ export function ChunkConfig({ shape, chunkShape, onChunkShapeChange }: ChunkConf
       <div
         style={{
           fontSize: fontSizes.xs,
-          color: count > 1000 ? colors.paneAccentRight : colors.textSecondary,
+          color: count > 1000 ? colors.warning : colors.textSecondary,
         }}
       >
         {count} chunk{count !== 1 ? 's' : ''}

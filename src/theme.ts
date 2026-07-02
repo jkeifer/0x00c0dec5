@@ -32,6 +32,12 @@ export const colors = {
 
   warning: '#d19a66',
   warningDim: '#d19a6615',
+
+  // Task 3.10 (remediation-plan.md, UI-12): the single source for
+  // success/error hex values that were previously hardcoded per call site
+  // (PipelineStrip, ReadStatus, StagePane, TypeAssignConfig).
+  success: '#98c379',
+  error: '#e06c75',
 } as const;
 
 export const fonts = {

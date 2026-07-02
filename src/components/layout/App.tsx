@@ -1,7 +1,7 @@
-import { useMemo } from 'react';
 import { Panel, Group, Separator, useDefaultLayout } from 'react-resizable-panels';
 import { useAppState } from '../../state/useAppState.ts';
 import { usePipeline } from '../../hooks/usePipeline.ts';
+import { PipelineProvider, usePipelineContext } from '../../state/PipelineContext.tsx';
 import { colors } from '../../theme.ts';
 import { Header } from './Header.tsx';
 import { Sidebar } from './Sidebar.tsx';
@@ -9,118 +9,94 @@ import { PipelineStrip } from './PipelineStrip.tsx';
 import { StagePane } from '../viewers/StagePane.tsx';
 import { HoverBar } from '../shared/HoverBar.tsx';
 import { ErrorBoundary } from '../shared/ErrorBoundary.tsx';
-import { bytesToValues } from '../../engine/elements.ts';
 
 function MainLayout() {
   const { state, dispatch } = useAppState();
-  const { stages, files, chunkTraceMap, traceChunkMap, readResult, variableStats } = usePipeline(state);
+  const pipeline = usePipeline(state);
 
   const mainPersist = useDefaultLayout({ id: 'main-layout' });
   const panesPersist = useDefaultLayout({ id: 'panes-layout' });
 
-  // Compute originalValues from the Values stage (stage 0) for diff overlay
-  // Values stage now uses float64 (8 bytes per value per variable)
-  const originalValues = useMemo(() => {
-    const valuesStage = stages[0];
-    if (!valuesStage || valuesStage.bytes.length === 0) return undefined;
-
-    const result = new Map<string, number[]>();
-    let offset = 0;
-    const totalBytesPerElement = state.variables.length * 8; // float64
-    const totalElements = totalBytesPerElement > 0
-      ? Math.floor(valuesStage.bytes.length / totalBytesPerElement)
-      : 0;
-
-    for (const v of state.variables) {
-      const byteLen = totalElements * 8; // float64
-      const varBytes = valuesStage.bytes.slice(offset, offset + byteLen);
-      const values = bytesToValues(varBytes, 'float64');
-      result.set(v.name, values);
-      offset += byteLen;
-    }
-
-    return result;
-  }, [stages, state.variables]);
-
   return (
-    <Group
-      orientation="horizontal"
-      defaultLayout={mainPersist.defaultLayout}
-      onLayoutChanged={mainPersist.onLayoutChanged}
-    >
-      <Panel id="sidebar" defaultSize="25%" minSize="15%" maxSize="35%">
-        <Sidebar files={files} readResult={readResult} variableStats={variableStats} />
-      </Panel>
-      <Separator className="resize-handle" />
-      <Panel id="main" minSize="30%">
-        <div
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            height: '100%',
-            overflow: 'hidden',
-          }}
-        >
-          <PipelineStrip stages={stages} readResult={readResult} variableStats={variableStats} />
-          <HoverBar stages={stages} />
-          <Group
-            orientation="horizontal"
-            defaultLayout={panesPersist.defaultLayout}
-            onLayoutChanged={panesPersist.onLayoutChanged}
-            style={{ flex: 1 }}
+    <PipelineProvider pipeline={pipeline} showDiff={state.ui.showDiff}>
+      <Group
+        orientation="horizontal"
+        defaultLayout={mainPersist.defaultLayout}
+        onLayoutChanged={mainPersist.onLayoutChanged}
+      >
+        <Panel id="sidebar" defaultSize="25%" minSize="15%" maxSize="35%">
+          <Sidebar />
+        </Panel>
+        <Separator className="resize-handle" />
+        <Panel id="main" minSize="30%">
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              height: '100%',
+              overflow: 'hidden',
+            }}
           >
-            <Panel id="left-pane" defaultSize="50%" minSize="5%">
-              <StagePane
-                paneId="left"
-                stages={stages}
-                selectedStage={state.ui.leftPaneStage}
-                viewMode={state.ui.leftPaneView}
-                onStageChange={(stage) =>
-                  dispatch({ type: 'SET_LEFT_PANE_STAGE', stage })
-                }
-                onViewChange={(view) =>
-                  dispatch({ type: 'SET_LEFT_PANE_VIEW', view })
-                }
-                accentColor={colors.paneAccentLeft}
-                variables={state.variables}
-                shape={state.shape}
-                files={files}
-                chunkTraceMap={chunkTraceMap}
-                traceChunkMap={traceChunkMap}
-                readResult={readResult}
-                showDiff={state.ui.showDiff}
-                originalValues={originalValues}
-              />
-            </Panel>
-            <Separator className="resize-handle" />
-            <Panel id="right-pane" defaultSize="50%" minSize="5%">
-              <StagePane
-                paneId="right"
-                stages={stages}
-                selectedStage={state.ui.rightPaneStage}
-                viewMode={state.ui.rightPaneView}
-                onStageChange={(stage) =>
-                  dispatch({ type: 'SET_RIGHT_PANE_STAGE', stage })
-                }
-                onViewChange={(view) =>
-                  dispatch({ type: 'SET_RIGHT_PANE_VIEW', view })
-                }
-                accentColor={colors.paneAccentRight}
-                variables={state.variables}
-                shape={state.shape}
-                files={files}
-                chunkTraceMap={chunkTraceMap}
-                traceChunkMap={traceChunkMap}
-                readResult={readResult}
-                showDiff={state.ui.showDiff}
-                originalValues={originalValues}
-              />
-            </Panel>
-          </Group>
-        </div>
-      </Panel>
-    </Group>
+            <PipelineStripConnected />
+            <HoverBarConnected />
+            <Group
+              orientation="horizontal"
+              defaultLayout={panesPersist.defaultLayout}
+              onLayoutChanged={panesPersist.onLayoutChanged}
+              style={{ flex: 1 }}
+            >
+              <Panel id="left-pane" defaultSize="50%" minSize="5%">
+                <StagePane
+                  paneId="left"
+                  selectedStage={state.ui.leftPaneStage}
+                  viewMode={state.ui.leftPaneView}
+                  onStageChange={(stage) =>
+                    dispatch({ type: 'UPDATE_UI', changes: { leftPaneStage: stage } })
+                  }
+                  onViewChange={(view) =>
+                    dispatch({ type: 'UPDATE_UI', changes: { leftPaneView: view } })
+                  }
+                  accentColor={colors.paneAccentLeft}
+                  variables={state.variables}
+                  shape={state.shape}
+                />
+              </Panel>
+              <Separator className="resize-handle" />
+              <Panel id="right-pane" defaultSize="50%" minSize="5%">
+                <StagePane
+                  paneId="right"
+                  selectedStage={state.ui.rightPaneStage}
+                  viewMode={state.ui.rightPaneView}
+                  onStageChange={(stage) =>
+                    dispatch({ type: 'UPDATE_UI', changes: { rightPaneStage: stage } })
+                  }
+                  onViewChange={(view) =>
+                    dispatch({ type: 'UPDATE_UI', changes: { rightPaneView: view } })
+                  }
+                  accentColor={colors.paneAccentRight}
+                  variables={state.variables}
+                  shape={state.shape}
+                />
+              </Panel>
+            </Group>
+          </div>
+        </Panel>
+      </Group>
+    </PipelineProvider>
   );
+}
+
+/** Thin context-consuming wrappers (task 3.9) so `PipelineStrip`/`HoverBar`
+ * keep taking plain props (easy to test in isolation) while `MainLayout`
+ * no longer drills pipeline fields into them by hand. */
+function PipelineStripConnected() {
+  const { stages, readResult, variableStats } = usePipelineContext();
+  return <PipelineStrip stages={stages} readResult={readResult} variableStats={variableStats} />;
+}
+
+function HoverBarConnected() {
+  const { stages } = usePipelineContext();
+  return <HoverBar stages={stages} />;
 }
 
 export function App() {

@@ -1,14 +1,9 @@
 import type { VirtualFile } from '../../types/pipeline.ts';
 import { colors, fonts, fontSizes, spacing, radii } from '../../theme.ts';
+import { formatByteCount } from '../../engine/bytes.ts';
 
 interface FileExplorerProps {
   files: VirtualFile[];
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function FileExplorer({ files }: FileExplorerProps) {
@@ -47,7 +42,7 @@ export function FileExplorer({ files }: FileExplorerProps) {
         >
           <span style={{ color: colors.textPrimary }}>{file.name}</span>
           <span style={{ color: colors.textTertiary, marginLeft: spacing.sm }}>
-            {formatFileSize(file.bytes.length)}
+            {formatByteCount(file.bytes.length)}
           </span>
         </div>
       ))}

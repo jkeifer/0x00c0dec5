@@ -1,10 +1,6 @@
 import { colors, fontSizes, spacing, radii } from '../../theme.ts';
 import type { PipelineStage, ReadFileResult, VariableStats } from '../../types/pipeline.ts';
-
-function formatByteCount(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(1)} KB`;
-}
+import { formatByteCount } from '../../engine/bytes.ts';
 
 function formatEntropy(entropy: number): string {
   return `${entropy.toFixed(2)} b/B`;
@@ -75,7 +71,7 @@ export function PipelineStrip({ stages, readResult, variableStats }: PipelineStr
                 {stage.name}
                 {stage.name === 'Read' && (
                   <span style={{
-                    color: readResult.success ? '#98c379' : '#e06c75',
+                    color: readResult.success ? colors.success : colors.error,
                     fontWeight: 700,
                     fontSize: fontSizes.md,
                   }}>

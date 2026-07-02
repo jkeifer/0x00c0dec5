@@ -8,7 +8,7 @@ const MODEL_OPTIONS = [
 ];
 
 export function Header() {
-  const { state, dispatch } = useAppState();
+  const { state, switchDataModel } = useAppState();
 
   return (
     <div
@@ -37,9 +37,7 @@ export function Header() {
       <Radio
         options={MODEL_OPTIONS}
         value={state.dataModel}
-        onChange={(model) =>
-          dispatch({ type: 'SET_DATA_MODEL', model: model as 'tabular' | 'array' })
-        }
+        onChange={(model) => switchDataModel(model as 'tabular' | 'array')}
         size="sm"
       />
     </div>

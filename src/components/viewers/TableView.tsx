@@ -1,25 +1,31 @@
 import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { PipelineStage } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
-import { getDtype } from '../../types/dtypes.ts';
-import { bytesToValues, formatValue, formatLogicalValue } from '../../engine/elements.ts';
+import { formatValue, formatLogicalValue } from '../../engine/elements.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
+import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 
 interface TableViewProps {
-  stage: PipelineStage;
   variables: Variable[];
   shape: number[];
   paneId: 'left' | 'right';
+  /**
+   * D6 (remediation-plan.md, Phase 3.3): source values per variable NAME,
+   * supplied by the pipeline (`logicalValues`/`typedValues`/
+   * `readResult.reconstructedValues`) rather than decoded from stage bytes
+   * here. TableView only ever renders the Values/Typed/Read stages (see
+   * StagePane's view-mode gating), so this is always populated for it.
+   */
+  values: Map<string, number[]>;
   chunkTraceMap?: Map<string, Set<string>>;
   traceChunkMap?: Map<string, string>;
   diffValues?: Map<string, number[]>;
   showDiff?: boolean;
-  isLogicalValues?: boolean; // true for Values/Read stage (float64 logical values)
+  isLogicalValues?: boolean; // true for Values/Read stage (float64 logical values) — controls display formatting only
 }
 
 const ROW_HEIGHT = 24;
@@ -31,29 +37,18 @@ interface ColumnData {
   dtype: DtypeKey;
 }
 
-export function TableView({ stage, variables, shape, paneId, chunkTraceMap, traceChunkMap, diffValues, showDiff, isLogicalValues }: TableViewProps) {
+export function TableView({ variables, shape, paneId, values, chunkTraceMap, traceChunkMap, diffValues, showDiff, isLogicalValues }: TableViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
 
-  // Reconstruct column values from the stage bytes
-  // Layout: all bytes for var0, then var1, etc. (column-oriented)
+  // Look up each variable's values from the pipeline-supplied maps — no byte
+  // decoding here (D6, fixes UI-9).
   const columns = useMemo((): ColumnData[] => {
-    let offset = 0;
     return variables.map((v) => {
-      // For Values/Read stages (isLogicalValues), data is float64
-      // For Typed stage, data is in storageDtype
       const dtype: DtypeKey = isLogicalValues ? 'float64' : v.typeAssignment.storageDtype;
-      const dtypeInfo = getDtype(dtype);
-      const totalElements = stage.bytes.length > 0
-        ? computeVarElementCount(stage, variables, isLogicalValues)
-        : 0;
-      const byteLen = totalElements * dtypeInfo.size;
-      const varBytes = stage.bytes.slice(offset, offset + byteLen);
-      const values = bytesToValues(varBytes, dtype);
-      offset += byteLen;
-      return { variable: v, values, dtype };
+      return { variable: v, values: values.get(v.name) ?? [], dtype };
     });
-  }, [stage, variables, isLogicalValues]);
+  }, [variables, values, isLogicalValues]);
 
   const rowCount = columns.length > 0 ? columns[0].values.length : 0;
 
@@ -68,13 +63,16 @@ export function TableView({ stage, variables, shape, paneId, chunkTraceMap, trac
   const virtualizerRef = useRef(virtualizer);
   virtualizerRef.current = virtualizer;
 
-  // Resolve traceId → row index for auto-scroll
+  // Resolve traceId → row index for auto-scroll. Must check parseTraceId's
+  // `kind` before treating the remainder as coordinates — a chunk-level id
+  // like 'chunk:0,1' otherwise "parses" as bogus coords [0, 1] (UI-3: this
+  // silently produced a wrong auto-scroll target instead of falling through
+  // to the chunk-level fallback in `hoveredRowIndex` below).
   const traceIdToRowIndex = useCallback((traceId: string): number | null => {
-    const colonIdx = traceId.indexOf(':');
-    if (colonIdx < 0) return null;
-    const coordStr = traceId.slice(colonIdx + 1);
-    const parts = coordStr.split(',').map(Number);
-    if (parts.some(isNaN)) return null;
+    const parsed = parseTraceId(traceId);
+    if (parsed.kind !== 'value' || parsed.coords.length === 0) return null;
+    const parts = parsed.coords;
+    if (parts.some((n) => Number.isNaN(n))) return null;
     let idx = 0;
     for (let d = 0; d < parts.length; d++) {
       idx = idx * (shape[d] ?? 1) + parts[d];
@@ -212,7 +210,7 @@ export function TableView({ stage, variables, shape, paneId, chunkTraceMap, trac
               {/* Cells */}
               {columns.map((col) => {
                 const coords = flatIndexToCoords(rowIdx, shape);
-                const traceId = `${col.variable.name}:${coords.join(',')}`;
+                const traceId = makeTraceId(col.variable.name, coords);
                 const isValueHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
                 const tableChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
                 const isChunkHovered = !isValueHovered && tableChunkTraceIds != null && tableChunkTraceIds.has(traceId);
@@ -267,18 +265,4 @@ export function TableView({ stage, variables, shape, paneId, chunkTraceMap, trac
       </div>
     </div>
   );
-}
-
-/** Compute element count for a variable in a given stage. */
-function computeVarElementCount(
-  stage: PipelineStage,
-  variables: Variable[],
-  isLogicalValues?: boolean,
-): number {
-  let totalBytesPerElement = 0;
-  for (const v of variables) {
-    const dtype: DtypeKey = isLogicalValues ? 'float64' : v.typeAssignment.storageDtype;
-    totalBytesPerElement += getDtype(dtype).size;
-  }
-  return totalBytesPerElement > 0 ? Math.floor(stage.bytes.length / totalBytesPerElement) : 0;
 }

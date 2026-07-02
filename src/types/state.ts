@@ -1,5 +1,6 @@
 import type { DtypeKey } from './dtypes.ts';
 import type { CodecStep } from './codecs.ts';
+import type { StageName } from './pipeline.ts';
 
 export type LogicalType = 'integer' | 'decimal' | 'continuous';
 
@@ -32,6 +33,13 @@ export interface AppState {
   chunkShape: number[];
   interleaving: 'row' | 'column';
   variables: Variable[];
+  /**
+   * D5 (remediation-plan.md, Phase 3.1): keyed by Variable.id, not name — names
+   * are mutable and non-unique, so keying by name silently clobbered pipelines
+   * on rename/collision (SW-1). The file format itself still keys
+   * `codec_pipelines` by variable NAME (see `engine/metadata.ts`); the
+   * id -> name translation happens at metadata-collection time only.
+   */
   fieldPipelines: Record<string, CodecStep[]>;
   chunkPipeline: CodecStep[];
   metadata: {
@@ -64,12 +72,10 @@ export interface AppState {
     footerLocator: 'trailer' | 'none';
   };
   ui: {
-    leftPaneStage: number;
-    rightPaneStage: number;
+    leftPaneStage: StageName;
+    rightPaneStage: StageName;
     leftPaneView: string;
     rightPaneView: string;
-    sidebarWidth: number;
-    leftPaneRatio: number;
     showDiff: boolean;
   };
 }
@@ -98,6 +104,9 @@ export const DEFAULT_STATE: AppState = {
   chunkShape: [32],
   interleaving: 'column',
   variables: DEFAULT_VARIABLES,
+  // Keyed by Variable.id (see AppState.fieldPipelines doc comment above). The
+  // starter variables' ids happen to equal their names today, but that is
+  // coincidence, not key semantics.
   fieldPipelines: {
     temperature: [],
     pressure: [],
@@ -118,12 +127,12 @@ export const DEFAULT_STATE: AppState = {
     footerLocator: 'trailer',
   },
   ui: {
-    leftPaneStage: 0,
-    rightPaneStage: -1,
+    // D5 (remediation-plan.md): defaults are stage NAMES, not indices — the
+    // old `-1` sentinel for rightPaneStage is gone entirely (fixes SW-2).
+    leftPaneStage: 'values',
+    rightPaneStage: 'write',
     leftPaneView: 'table',
     rightPaneView: 'hex',
-    sidebarWidth: 300,
-    leftPaneRatio: 0.5,
     showDiff: false,
   },
 };

@@ -1,5 +1,6 @@
 import type { Variable, LogicalTypeConfig, LogicalType } from '../../types/state.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
+import { inputStyle } from '../shared/controlStyles.ts';
 
 interface SchemaEditorProps {
   variables: Variable[];
@@ -10,17 +11,6 @@ interface SchemaEditorProps {
   onUpdateVariable: (id: string, changes: Partial<Pick<Variable, 'name' | 'logicalType' | 'typeAssignment'>>) => void;
   onShapeChange: (shape: number[]) => void;
 }
-
-const inputStyle: React.CSSProperties = {
-  background: colors.surfaceInput,
-  border: `1px solid ${colors.border}`,
-  borderRadius: radii.sm,
-  fontSize: fontSizes.sm,
-  color: colors.textPrimary,
-  padding: `${spacing.xs}px ${spacing.sm}px`,
-  outline: 'none',
-  fontFamily: 'inherit',
-};
 
 const LOGICAL_TYPES: { value: LogicalType; label: string }[] = [
   { value: 'integer', label: 'Integer' },
@@ -67,7 +57,7 @@ export function SchemaEditor({
                 onShapeChange([val]);
               }}
               data-testid="shape-input"
-              style={{ ...inputStyle, width: 60 }}
+              style={{ ...inputStyle(), width: 60 }}
             />
           </div>
         ) : (
@@ -90,7 +80,7 @@ export function SchemaEditor({
                     onShapeChange(newShape);
                   }}
                   data-testid={`shape-input-${d}`}
-                  style={{ ...inputStyle, width: 60 }}
+                  style={{ ...inputStyle(), width: 60 }}
                 />
               </div>
             ))}
@@ -98,11 +88,10 @@ export function SchemaEditor({
               <button
                 onClick={() => onShapeChange([...shape, 4])}
                 style={{
-                  ...inputStyle,
+                  ...inputStyle(fontSizes.xs),
                   cursor: 'pointer',
                   color: colors.accent,
                   background: 'transparent',
-                  fontSize: fontSizes.xs,
                 }}
               >
                 + Dim
@@ -111,11 +100,10 @@ export function SchemaEditor({
                 <button
                   onClick={() => onShapeChange(shape.slice(0, -1))}
                   style={{
-                    ...inputStyle,
+                    ...inputStyle(fontSizes.xs),
                     cursor: 'pointer',
                     color: colors.textSecondary,
                     background: 'transparent',
-                    fontSize: fontSizes.xs,
                   }}
                 >
                   - Dim
@@ -132,7 +120,7 @@ export function SchemaEditor({
         return totalValues > 10_000 ? (
           <div style={{
             fontSize: fontSizes.xs,
-            color: colors.paneAccentRight,
+            color: colors.warning,
             padding: `${spacing.xs}px 0`,
           }}>
             {totalValues.toLocaleString()} total values — large datasets may be slow
@@ -188,10 +176,10 @@ export function SchemaEditor({
                     onChange={(e) => onUpdateVariable(v.id, { name: e.target.value })}
                     data-testid={`variable-name-${varIdx}`}
                     style={{
-                      ...inputStyle,
+                      ...inputStyle(),
                       flex: 1,
                       minWidth: 0,
-                      borderColor: hasWarning ? colors.paneAccentRight : colors.border,
+                      borderColor: hasWarning ? colors.warning : colors.border,
                     }}
                   />
                   <button
@@ -221,7 +209,7 @@ export function SchemaEditor({
                       if (newType === 'continuous') base.significantFigures = 6;
                       onUpdateVariable(v.id, { logicalType: base });
                     }}
-                    style={{ ...inputStyle, cursor: 'pointer', fontSize: fontSizes.xs }}
+                    style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
                   >
                     {LOGICAL_TYPES.map((lt) => (
                       <option key={lt.value} value={lt.value}>{lt.label}</option>
@@ -233,14 +221,14 @@ export function SchemaEditor({
                     type="number"
                     value={v.logicalType.min}
                     onChange={(e) => updateLogicalType(v, { min: parseFloat(e.target.value) || 0 })}
-                    style={{ ...inputStyle, width: 55, fontSize: fontSizes.xs }}
+                    style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                   />
                   <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>max</span>
                   <input
                     type="number"
                     value={v.logicalType.max}
                     onChange={(e) => updateLogicalType(v, { max: parseFloat(e.target.value) || 0 })}
-                    style={{ ...inputStyle, width: 55, fontSize: fontSizes.xs }}
+                    style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                   />
 
                   {v.logicalType.type === 'decimal' && (
@@ -252,7 +240,7 @@ export function SchemaEditor({
                         max={10}
                         value={v.logicalType.decimalPlaces ?? 1}
                         onChange={(e) => updateLogicalType(v, { decimalPlaces: Math.max(0, parseInt(e.target.value) || 0) })}
-                        style={{ ...inputStyle, width: 40, fontSize: fontSizes.xs }}
+                        style={{ ...inputStyle(fontSizes.xs), width: 40 }}
                       />
                     </>
                   )}
@@ -266,7 +254,7 @@ export function SchemaEditor({
                         max={15}
                         value={v.logicalType.significantFigures ?? 6}
                         onChange={(e) => updateLogicalType(v, { significantFigures: Math.max(1, parseInt(e.target.value) || 6) })}
-                        style={{ ...inputStyle, width: 40, fontSize: fontSizes.xs }}
+                        style={{ ...inputStyle(fontSizes.xs), width: 40 }}
                       />
                     </>
                   )}
@@ -282,12 +270,11 @@ export function SchemaEditor({
         onClick={onAddVariable}
         data-testid="add-variable"
         style={{
-          ...inputStyle,
+          ...inputStyle(fontSizes.xs),
           cursor: 'pointer',
           color: colors.accent,
           background: 'transparent',
           textAlign: 'center',
-          fontSize: fontSizes.xs,
         }}
       >
         + Variable

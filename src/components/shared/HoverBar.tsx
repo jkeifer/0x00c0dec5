@@ -4,14 +4,10 @@ import { useHover } from '../../hooks/useHover.ts';
 import { isChunkLevelTrace } from '../../engine/trace.ts';
 import { buildTraceIndexWithCounts, buildChunkIndexWithCounts } from '../viewers/viewerUtils.ts';
 import { colors, fontSizes, spacing, fonts } from '../../theme.ts';
+import { formatByteCount } from '../../engine/bytes.ts';
 
 interface HoverBarProps {
   stages: PipelineStage[];
-}
-
-function formatByteCount(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  return `${(bytes / 1024).toFixed(1)}KB`;
 }
 
 function formatHexOffset(offset: number): string {

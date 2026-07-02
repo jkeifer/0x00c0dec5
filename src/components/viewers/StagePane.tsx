@@ -1,10 +1,11 @@
+import { useMemo } from 'react';
 import { colors, fontSizes, spacing } from '../../theme.ts';
 import { Radio } from '../shared/Radio.tsx';
-import type { PipelineStage, ReadFileResult } from '../../types/pipeline.ts';
-import type { VirtualFile } from '../../types/pipeline.ts';
+import type { StageName } from '../../types/pipeline.ts';
+import { STAGE_ORDER } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
-import { HexView } from './HexView.tsx';
-import { WriteHexView } from './WriteHexView.tsx';
+import { usePipelineContext } from '../../state/PipelineContext.tsx';
+import { HexView, type HexSection } from './HexView.tsx';
 import { FlatView } from './FlatView.tsx';
 import { TableView } from './TableView.tsx';
 import { GridView } from './GridView.tsx';
@@ -36,27 +37,33 @@ const WRITE_VIEW_MODES = [
   { value: 'hex', label: 'Hex' },
 ];
 
+/** Display label per stage name, in `STAGE_ORDER`'s fixed order — used to
+ * populate the pane dropdown's `<option>`s. Kept alongside STAGE_ORDER's
+ * definition intent: capitalized, matching each PipelineStage.name exactly
+ * (see usePipeline.ts's makeStage calls). */
+const STAGE_LABELS: Record<StageName, string> = {
+  values: 'Values',
+  typed: 'Typed',
+  linearized: 'Linearized',
+  encoded: 'Encoded',
+  metadata: 'Metadata',
+  write: 'Write',
+  read: 'Read',
+};
+
 interface StagePaneProps {
   paneId: 'left' | 'right';
-  stages: PipelineStage[];
-  selectedStage: number;
+  selectedStage: StageName;
   viewMode: string;
-  onStageChange: (stage: number) => void;
+  onStageChange: (stage: StageName) => void;
   onViewChange: (view: string) => void;
   accentColor: string;
   variables: Variable[];
   shape: number[];
-  files?: VirtualFile[];
-  chunkTraceMap: Map<string, Set<string>>;
-  traceChunkMap: Map<string, string>;
-  readResult: ReadFileResult;
-  showDiff: boolean;
-  originalValues?: Map<string, number[]>;
 }
 
 export function StagePane({
   paneId,
-  stages,
   selectedStage,
   viewMode,
   onStageChange,
@@ -64,20 +71,44 @@ export function StagePane({
   accentColor,
   variables,
   shape,
-  files,
-  chunkTraceMap,
-  traceChunkMap,
-  readResult,
-  showDiff,
-  originalValues,
 }: StagePaneProps) {
-  // Resolve -1 to last stage
-  const resolvedIndex = selectedStage < 0 ? stages.length - 1 : selectedStage;
+  // Task 3.9 (remediation-plan.md, Phase 3): everything pipeline-derived
+  // comes from PipelineContext now — paneId/selectedStage/viewMode/
+  // onStageChange/onViewChange/accentColor/variables/shape are the only
+  // genuinely per-pane (or state-sourced, non-pipeline) values left as props.
+  const {
+    stages,
+    files,
+    chunkTraceMap,
+    traceChunkMap,
+    readResult,
+    showDiff,
+    originalValues,
+    logicalValues,
+    typedValues,
+  } = usePipelineContext();
+
+  // Task 3.8 (D5, fixes SW-2/SW-6/SW-10): stage identity is a name; resolve
+  // to an index only internally, where the stages array actually needs one.
+  // STAGE_ORDER is the fixed order the pipeline always produces stages in
+  // (see usePipeline.ts), so indexOf is a direct, unambiguous lookup — no
+  // fallback/sentinel resolution needed the way the old -1 index required.
+  const resolvedIndex = STAGE_ORDER.indexOf(selectedStage);
   const stage = stages[resolvedIndex];
-  const isValuesStage = resolvedIndex === 0;
-  const isTypedStage = resolvedIndex === 1;
-  const isReadStage = stage?.name === 'Read';
-  const isWriteStage = stage?.name === 'Write';
+  const isValuesStage = selectedStage === 'values';
+  const isTypedStage = selectedStage === 'typed';
+  const isReadStage = selectedStage === 'read';
+  const isWriteStage = selectedStage === 'write';
+  // Table/Grid views only ever render Values/Typed/Read stages (see
+  // viewModes below — every other stage is hex-only), so exactly one of
+  // these is relevant whenever 'table'/'grid' is reachable (D6, fixes UI-9).
+  const tableGridValues = isValuesStage
+    ? logicalValues
+    : isTypedStage
+      ? typedValues
+      : isReadStage && readResult.success
+        ? readResult.reconstructedValues
+        : new Map<string, number[]>();
   const viewModes = isValuesStage
     ? VALUES_VIEW_MODES
     : isTypedStage
@@ -97,6 +128,24 @@ export function StagePane({
   const diffValues = (isReadStage && showDiff && readResult.success && originalValues)
     ? originalValues
     : undefined;
+
+  // Task 3.5: HexView takes `sections` uniformly. The Write stage maps its
+  // (possibly multiple, per-chunk) output files to one section each, keyed by
+  // file NAME (not index — UI-18: index keys made sticky headers stack across
+  // re-renders where file order could shift). Every other stage is a single
+  // section wrapping that stage's own bytes/traces, keyed by stage name.
+  const hexSections: HexSection[] = useMemo(() => {
+    if (isWriteStage && files && files.length >= 1) {
+      return files.map((f) => ({
+        key: f.name,
+        header: { name: f.name, size: f.bytes.length },
+        bytes: f.bytes,
+        traces: f.traces,
+      }));
+    }
+    if (!stage) return [];
+    return [{ key: stage.name, bytes: stage.bytes, traces: stage.traces, chunkRegions: stage.chunkRegions }];
+  }, [isWriteStage, files, stage]);
 
   function renderViewer() {
     if (!stage) {
@@ -130,7 +179,7 @@ export function StagePane({
           }}
         >
           <div style={{ maxWidth: 400 }}>
-            <div style={{ color: '#e06c75', fontSize: fontSizes.lg, fontWeight: 700, marginBottom: spacing.sm }}>
+            <div style={{ color: colors.error, fontSize: fontSizes.lg, fontWeight: 700, marginBottom: spacing.sm }}>
               Cannot read file
             </div>
             <div style={{ color: colors.textSecondary, fontSize: fontSizes.sm, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
@@ -143,18 +192,15 @@ export function StagePane({
 
     switch (effectiveView) {
       case 'hex':
-        if (isWriteStage && files && files.length >= 1) {
-          return <WriteHexView files={files} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
-        }
-        return <HexView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
+        return <HexView sections={hexSections} paneId={paneId} chunkTraceMap={chunkTraceMap} />;
       case 'flat':
         return <FlatView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
       case 'table':
-        return <TableView stage={stage} variables={variables} shape={shape} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} diffValues={diffValues} showDiff={!!diffValues} isLogicalValues={isValuesStage || isReadStage} />;
+        return <TableView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} diffValues={diffValues} showDiff={!!diffValues} isLogicalValues={isValuesStage || isReadStage} />;
       case 'grid':
-        return <GridView stage={stage} variables={variables} shape={shape} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} diffValues={diffValues} showDiff={!!diffValues} isLogicalValues={isValuesStage || isReadStage} />;
+        return <GridView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} diffValues={diffValues} showDiff={!!diffValues} />;
       default:
-        return <HexView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
+        return <HexView sections={hexSections} paneId={paneId} chunkTraceMap={chunkTraceMap} />;
     }
   }
 
@@ -181,7 +227,7 @@ export function StagePane({
       >
         <select
           value={selectedStage}
-          onChange={(e) => onStageChange(Number(e.target.value))}
+          onChange={(e) => onStageChange(e.target.value as StageName)}
           data-testid={`pane-dropdown-${paneId}`}
           style={{
             background: colors.surfaceInput,
@@ -195,9 +241,13 @@ export function StagePane({
             outline: 'none',
           }}
         >
-          {stages.map((s, i) => (
-            <option key={i} value={i}>
-              {s.name}
+          {/* Task 3.8 (D5): option values are stage NAMES — the dropdown's
+              value binds directly to selectedStage (a StageName), so there is
+              no resolvedIndex hack and the browser can never show a label
+              that doesn't match what's rendered (fixes SW-2). */}
+          {STAGE_ORDER.map((name) => (
+            <option key={name} value={name}>
+              {STAGE_LABELS[name]}
             </option>
           ))}
         </select>

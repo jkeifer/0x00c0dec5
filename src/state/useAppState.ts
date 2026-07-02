@@ -4,21 +4,27 @@ import {
   useReducer,
   useEffect,
   useRef,
+  useCallback,
   type ReactNode,
   createElement,
 } from 'react';
 import { produce } from 'immer';
 import { DEFAULT_STATE, type AppState, type Variable } from '../types/state.ts';
 import type { CodecStep } from '../types/codecs.ts';
-import { loadState, saveState } from './persistence.ts';
+import { loadState, saveState, loadActiveModel, saveActiveModel } from './persistence.ts';
 
 export type AppAction =
+  // SET_DATA_MODEL only sets `state.dataModel` — it is intentionally pure
+  // (SW-4). The storage I/O that used to live inside this case (save the
+  // outgoing model, load/default the incoming one) now lives in the
+  // `switchDataModel` wrapper exposed by `useAppState()`, which dispatches
+  // REPLACE_STATE with the fully-resolved state instead. Nothing should
+  // dispatch SET_DATA_MODEL directly except that wrapper.
   | { type: 'SET_DATA_MODEL'; model: AppState['dataModel'] }
-  | { type: 'SET_LEFT_PANE_STAGE'; stage: number }
-  | { type: 'SET_RIGHT_PANE_STAGE'; stage: number }
-  | { type: 'SET_LEFT_PANE_VIEW'; view: string }
-  | { type: 'SET_RIGHT_PANE_VIEW'; view: string }
-  | { type: 'LOAD_STATE'; state: AppState }
+  // REPLACE_STATE swaps in a full AppState wholesale. Used ONLY by
+  // switchDataModel's wrapper (the one remaining "replace everything" escape
+  // hatch now that LOAD_STATE — never dispatched — is deleted, SW-8).
+  | { type: 'REPLACE_STATE'; state: AppState }
   // Schema
   | { type: 'SET_SHAPE'; shape: number[] }
   | { type: 'ADD_VARIABLE'; variable: Variable }
@@ -29,58 +35,38 @@ export type AppAction =
   // Interleave
   | { type: 'SET_INTERLEAVING'; interleaving: 'row' | 'column' }
   // Codecs
-  | { type: 'SET_FIELD_PIPELINE'; variableName: string; steps: CodecStep[] }
+  | { type: 'SET_FIELD_PIPELINE'; variableId: string; steps: CodecStep[] }
   | { type: 'SET_CHUNK_PIPELINE'; steps: CodecStep[] }
-  // Metadata
-  | { type: 'SET_METADATA_SERIALIZATION'; serialization: 'json' | 'binary' }
+  // Metadata (customEntries CRUD keeps its index-based shape; everything else
+  // in AppState['metadata'] is a patch action, per task 3.7)
   | { type: 'ADD_METADATA_ENTRY' }
   | { type: 'REMOVE_METADATA_ENTRY'; index: number }
   | { type: 'UPDATE_METADATA_ENTRY'; index: number; key?: string; value?: string }
-  | { type: 'SET_INCLUDE_CHUNK_INDEX'; includeChunkIndex: boolean }
-  // Write
-  | { type: 'SET_WRITE_MAGIC'; magicNumber: string }
-  | { type: 'SET_WRITE_PARTITIONING'; partitioning: 'single' | 'per-chunk' }
-  | { type: 'SET_WRITE_METADATA_PLACEMENT'; metadataPlacement: 'header' | 'footer' | 'sidecar' }
-  | { type: 'SET_WRITE_CHUNK_ORDER'; chunkOrder: 'row-major' | 'column-major' }
-  | { type: 'SET_WRITE_INCLUDE_METADATA'; includeMetadata: boolean }
-  | { type: 'SET_WRITE_FOOTER_LOCATOR'; footerLocator: 'trailer' | 'none' }
-  // UI
-  | { type: 'SET_SHOW_DIFF'; showDiff: boolean };
+  | { type: 'UPDATE_METADATA_CONFIG'; changes: Partial<Pick<AppState['metadata'], 'serialization' | 'includeChunkIndex'>> }
+  // Write — one patch action replaces the six SET_WRITE_* setters
+  | { type: 'UPDATE_WRITE'; changes: Partial<AppState['write']> }
+  // UI — one patch action replaces the pane stage/view setters and SET_SHOW_DIFF
+  | { type: 'UPDATE_UI'; changes: Partial<AppState['ui']> };
 
 export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
     case 'SET_DATA_MODEL': {
+      // Pure: just sets dataModel. No storage I/O here (SW-4) — see
+      // `switchDataModel` in AppStateProvider for the save/load/restore
+      // sequence, which dispatches REPLACE_STATE instead of this action.
       if (action.model === state.dataModel) return state;
-      // Save current state before switching
-      saveState(state);
-      // Load the other model's state, or fall back to default
-      const loaded = loadState(action.model);
-      if (loaded) return loaded;
-      return { ...DEFAULT_STATE, dataModel: action.model };
+      return produce(state, (draft) => {
+        draft.dataModel = action.model;
+      });
     }
 
-    case 'SET_LEFT_PANE_STAGE':
-      return produce(state, (draft) => {
-        draft.ui.leftPaneStage = action.stage;
-      });
-
-    case 'SET_RIGHT_PANE_STAGE':
-      return produce(state, (draft) => {
-        draft.ui.rightPaneStage = action.stage;
-      });
-
-    case 'SET_LEFT_PANE_VIEW':
-      return produce(state, (draft) => {
-        draft.ui.leftPaneView = action.view;
-      });
-
-    case 'SET_RIGHT_PANE_VIEW':
-      return produce(state, (draft) => {
-        draft.ui.rightPaneView = action.view;
-      });
-
-    case 'LOAD_STATE':
+    case 'REPLACE_STATE':
       return action.state;
+
+    case 'UPDATE_UI':
+      return produce(state, (draft) => {
+        Object.assign(draft.ui, action.changes);
+      });
 
     // ─── Schema ──────────────────────────────────────────────────────
     case 'SET_SHAPE': {
@@ -109,32 +95,26 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case 'ADD_VARIABLE':
       return produce(state, (draft) => {
         draft.variables.push(action.variable);
-        draft.fieldPipelines[action.variable.name] = [];
+        draft.fieldPipelines[action.variable.id] = [];
       });
 
     case 'REMOVE_VARIABLE':
       return produce(state, (draft) => {
         const idx = draft.variables.findIndex((v) => v.id === action.id);
         if (idx === -1) return;
-        const name = draft.variables[idx].name;
         draft.variables.splice(idx, 1);
-        delete draft.fieldPipelines[name];
+        delete draft.fieldPipelines[action.id];
       });
 
     case 'UPDATE_VARIABLE':
       return produce(state, (draft) => {
         const v = draft.variables.find((v) => v.id === action.id);
         if (!v) return;
-        const oldName = v.name;
         if (action.changes.name !== undefined) v.name = action.changes.name;
         if (action.changes.logicalType !== undefined) v.logicalType = action.changes.logicalType;
         if (action.changes.typeAssignment !== undefined) v.typeAssignment = action.changes.typeAssignment;
-        // Re-key fieldPipelines if name changed
-        if (action.changes.name !== undefined && action.changes.name !== oldName) {
-          const pipeline = draft.fieldPipelines[oldName] ?? [];
-          delete draft.fieldPipelines[oldName];
-          draft.fieldPipelines[action.changes.name] = pipeline;
-        }
+        // fieldPipelines is keyed by Variable.id (D5), which never changes here —
+        // no re-keying needed on rename. (Fixes SW-1.)
       });
 
     // ─── Chunk ───────────────────────────────────────────────────────
@@ -161,7 +141,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
     // ─── Codecs ──────────────────────────────────────────────────────
     case 'SET_FIELD_PIPELINE':
       return produce(state, (draft) => {
-        draft.fieldPipelines[action.variableName] = action.steps;
+        draft.fieldPipelines[action.variableId] = action.steps;
       });
 
     case 'SET_CHUNK_PIPELINE':
@@ -170,11 +150,6 @@ export function reducer(state: AppState, action: AppAction): AppState {
       });
 
     // ─── Metadata ────────────────────────────────────────────────────
-    case 'SET_METADATA_SERIALIZATION':
-      return produce(state, (draft) => {
-        draft.metadata.serialization = action.serialization;
-      });
-
     case 'ADD_METADATA_ENTRY':
       return produce(state, (draft) => {
         draft.metadata.customEntries.push({ key: '', value: '' });
@@ -193,45 +168,15 @@ export function reducer(state: AppState, action: AppAction): AppState {
         if (action.value !== undefined) entry.value = action.value;
       });
 
-    case 'SET_INCLUDE_CHUNK_INDEX':
+    case 'UPDATE_METADATA_CONFIG':
       return produce(state, (draft) => {
-        draft.metadata.includeChunkIndex = action.includeChunkIndex;
+        Object.assign(draft.metadata, action.changes);
       });
 
     // ─── Write ───────────────────────────────────────────────────────
-    case 'SET_WRITE_MAGIC':
+    case 'UPDATE_WRITE':
       return produce(state, (draft) => {
-        draft.write.magicNumber = action.magicNumber;
-      });
-
-    case 'SET_WRITE_PARTITIONING':
-      return produce(state, (draft) => {
-        draft.write.partitioning = action.partitioning;
-      });
-
-    case 'SET_WRITE_METADATA_PLACEMENT':
-      return produce(state, (draft) => {
-        draft.write.metadataPlacement = action.metadataPlacement;
-      });
-
-    case 'SET_WRITE_CHUNK_ORDER':
-      return produce(state, (draft) => {
-        draft.write.chunkOrder = action.chunkOrder;
-      });
-
-    case 'SET_WRITE_INCLUDE_METADATA':
-      return produce(state, (draft) => {
-        draft.write.includeMetadata = action.includeMetadata;
-      });
-
-    case 'SET_WRITE_FOOTER_LOCATOR':
-      return produce(state, (draft) => {
-        draft.write.footerLocator = action.footerLocator;
-      });
-
-    case 'SET_SHOW_DIFF':
-      return produce(state, (draft) => {
-        draft.ui.showDiff = action.showDiff;
+        Object.assign(draft.write, action.changes);
       });
 
     default:
@@ -242,18 +187,40 @@ export function reducer(state: AppState, action: AppAction): AppState {
 interface AppStateContextValue {
   state: AppState;
   dispatch: React.Dispatch<AppAction>;
+  /**
+   * Switches the active data model. Unlike dispatching SET_DATA_MODEL
+   * directly (which is now a pure, storage-free reducer case — SW-4), this
+   * wrapper performs the actual model-switch sequence: save the OUTGOING
+   * model's current state, load the INCOMING model's persisted state (or its
+   * default), force `dataModel` to the incoming model on whichever state was
+   * resolved, record the incoming model as the active one (SW-5), then
+   * dispatch a single REPLACE_STATE with the fully-resolved state. This is
+   * the only caller that should ever dispatch REPLACE_STATE.
+   */
+  switchDataModel: (model: AppState['dataModel']) => void;
 }
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
 
 function getInitialState(): AppState {
-  const loaded = loadState(DEFAULT_STATE.dataModel);
-  return loaded ?? DEFAULT_STATE;
+  // SW-5: restore whichever model was last active, not always the default
+  // model's slot.
+  const activeModel = loadActiveModel() ?? DEFAULT_STATE.dataModel;
+  const loaded = loadState(activeModel);
+  if (loaded) return loaded;
+  return activeModel === DEFAULT_STATE.dataModel
+    ? DEFAULT_STATE
+    : { ...DEFAULT_STATE, dataModel: activeModel };
 }
 
 export function AppStateProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, getInitialState);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // switchDataModel needs the CURRENT state (to save the outgoing model's
+  // data) without itself being recreated on every state change, so its
+  // identity stays stable for consumers — a ref mirrors the latest state.
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   // Debounced save to localStorage
   useEffect(() => {
@@ -270,9 +237,27 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     };
   }, [state]);
 
+  const switchDataModel = useCallback(
+    (model: AppState['dataModel']) => {
+      const currentState = stateRef.current;
+      if (model === currentState.dataModel) return;
+      // Save the OUTGOING model's state before switching away from it.
+      saveState(currentState);
+      // Load the INCOMING model's persisted state, or fall back to defaults.
+      const loaded = loadState(model);
+      const nextState: AppState = loaded ?? { ...DEFAULT_STATE, dataModel: model };
+      // The requested model always wins, regardless of what was persisted.
+      nextState.dataModel = model;
+      // SW-5: record the newly-active model so a fresh page load restores it.
+      saveActiveModel(model);
+      dispatch({ type: 'REPLACE_STATE', state: nextState });
+    },
+    [],
+  );
+
   return createElement(
     AppStateContext.Provider,
-    { value: { state, dispatch } },
+    { value: { state, dispatch, switchDataModel } },
     children,
   );
 }

@@ -10,7 +10,7 @@ interface CodecSectionProps {
   variables: Variable[];
   fieldPipelines: Record<string, CodecStep[]>;
   chunkPipeline: CodecStep[];
-  onFieldPipelineChange: (variableName: string, steps: CodecStep[]) => void;
+  onFieldPipelineChange: (variableId: string, steps: CodecStep[]) => void;
   onChunkPipelineChange: (steps: CodecStep[]) => void;
 }
 
@@ -60,9 +60,9 @@ export function CodecSection({
               </span>
             </div>
             <CodecPipelineEditor
-              steps={fieldPipelines[v.name] ?? []}
+              steps={fieldPipelines[v.id] ?? []}
               inputDtype={v.typeAssignment.storageDtype}
-              onChange={(steps) => onFieldPipelineChange(v.name, steps)}
+              onChange={(steps) => onFieldPipelineChange(v.id, steps)}
               variableSlot={v.name}
             />
           </div>
@@ -93,7 +93,7 @@ export function CodecSection({
         Row mode: a single codec pipeline is applied to all interleaved data.
       </div>
       {mixedDtypes && (
-        <div style={{ fontSize: fontSizes.xs, color: colors.paneAccentRight }}>
+        <div style={{ fontSize: fontSizes.xs, color: colors.warning }}>
           Mixed dtypes are interleaved — codecs like Byte Shuffle and Delta that assume uniform
           element size will produce garbled output.
         </div>

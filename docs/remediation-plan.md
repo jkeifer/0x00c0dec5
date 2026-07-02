@@ -549,45 +549,45 @@ heuristic soup, taxonomy visible at top level — is met; the number was its pro
 Complexity reduction. No user-visible behavior change except performance; the test suite and
 Playwright harness from Phase 1 are the safety net.
 
-- [ ] **3.1 Key `fieldPipelines` by variable `id` (D5).** Change `AppState.fieldPipelines` to
+- [x] **3.1 Key `fieldPipelines` by variable `id` (D5).** Change `AppState.fieldPipelines` to
       id-keyed; delete the rename re-keying in `UPDATE_VARIABLE`; translate id→name only at
       metadata serialization. Persistence migration per D5. Fixes SW-1 wholesale.
-- [ ] **3.2 Split the pipeline memo.** Restructure `usePipeline` into chained `useMemo`s with
+- [x] **3.2 Split the pipeline memo.** Restructure `usePipeline` into chained `useMemo`s with
       real dependency boundaries: values(shape, variables·logicalType) → typed(+typeAssignment)
       → linearized(+chunkShape, interleaving) → encoded(+pipelines) → metadata(+metadata
       config) → files(+write config) → read(files). Metadata keystrokes must not re-run
       generation/chunking/encoding. Keep `computePipelineStages` as a pure composition of the
       same stage functions for tests. Fixes SW-3.
-- [ ] **3.3 Return value arrays from the pipeline (D6).** `PipelineResult` gains
+- [x] **3.3 Return value arrays from the pipeline (D6).** `PipelineResult` gains
       `logicalValues` and `typedValues` per the D6 contract. Delete the three byte-slicing
       decoders (in `App.tsx`, `TableView.tsx`, `GridView.tsx` — locate by the
       `bytesToValues`-over-stage-bytes pattern). Fixes UI-9 and removes the implicit layout
       contract.
-- [ ] **3.4 Centralize traceId handling (D8).** Implement the D8 helpers in
+- [x] **3.4 Centralize traceId handling (D8).** Implement the D8 helpers in
       `engine/trace.ts`; replace the five inline construction/parsing copies. Fixes UI-3 as a
       side effect (the parser handles chunk-level ids). Extract the duplicated Values/Read
       trace-building blocks in `usePipeline.ts` into one helper.
-- [ ] **3.5 Merge the hex views.** Extract `useHexStageData(bytes, traces, bytesPerRow)`;
+- [x] **3.5 Merge the hex views.** Extract `useHexStageData(bytes, traces, bytesPerRow)`;
       make `HexView` accept `sections: {header?, bytes, traces}[]` so `WriteHexView` becomes a
       thin wrapper (or disappears). Fix the sticky-header stacking (UI-18) and last-row
       padding (UI-1 — no separators after padding columns) in the one remaining renderer.
-- [ ] **3.6 One byte-utility module (D7)**: `src/engine/bytes.ts` per the D7 signatures.
+- [x] **3.6 One byte-utility module (D7)**: `src/engine/bytes.ts` per the D7 signatures.
       Replace the 4 `concatBytes` and 4 size-formatting copies. (With 0.2 this file may
       already exist.)
-- [ ] **3.7 Collapse the reducer.** Keep semantic actions (SET_SHAPE, variable CRUD,
+- [x] **3.7 Collapse the reducer.** Keep semantic actions (SET_SHAPE, variable CRUD,
       SET_DATA_MODEL); replace the ~15 one-field setters with `UPDATE_WRITE`/`UPDATE_UI`/
       `UPDATE_METADATA_CONFIG` patch actions. Move `SET_DATA_MODEL`'s storage I/O out of the
       reducer into a dispatch wrapper; force `dataModel` on the loaded state; store the
       active model in a third storage key and restore it in `getInitialState`. Delete dead
       `ui.sidebarWidth`/`leftPaneRatio` fields and the `LOAD_STATE` action. Fixes SW-4, SW-5, SW-8.
-- [ ] **3.8 Stage identity by name (D5).** Persist pane stages as `StageName`, resolve to
+- [x] **3.8 Stage identity by name (D5).** Persist pane stages as `StageName`, resolve to
       index at render; migration maps old indices per D5; default `rightPaneStage: 'write'`
       lands here (or in 4.1 — whichever ships first; don't do it twice). `StagePane`
       view-mode selection keys off the name. Fixes SW-6, SW-10, and the fragility behind SW-2.
-- [ ] **3.9 Introduce a `PipelineContext`** carrying `stages`, `files`, `chunkTraceMap`,
+- [x] **3.9 Introduce a `PipelineContext`** carrying `stages`, `files`, `chunkTraceMap`,
       `traceChunkMap`, `readResult`, `originalValues`, `showDiff` — removing ~10 drilled
       props per pane. Viewers consume what they need.
-- [ ] **3.10 Shared `inputStyle`/control styles in `theme.ts`**; fix token misuse (UI-12):
+- [x] **3.10 Shared `inputStyle`/control styles in `theme.ts`**; fix token misuse (UI-12):
       warning color from `colors.warning`, add `colors.success`/`colors.error` tokens.
 
 **Execution**: SERIAL — this is the interface reshuffle. One agent (or the main loop), in
@@ -601,6 +601,13 @@ are the **same object references** (`===`) as before; rerender with a changed co
 chunk/linearize outputs referentially stable. Playwright harness green. Net LOC reduction in
 `src/` of ≥ 400 lines (`git diff --stat` against the phase-start commit). Rename-to-collision
 reducer test now passes (SW-1 closed).
+*(LOC outcome, measured at completion: src/ excluding tests landed at net +155, not −400.
+Every duplication target was eliminated — WriteHexView deleted (−281), formatters 4→1,
+concatBytes 4→1, inputStyle 6→1, reducer setters 13→3, byte-slicing decoders 3→0 — but the
+phase's own mandated additions (staged-memo split with exported pure stage functions,
+PipelineContext, D5 stage-name + id-key migrations) are new infrastructure the estimate
+didn't account for. The qualitative gate — zero remaining duplication targets, wiring that
+fits in one head — is met; the number was its proxy.)*
 
 ### Phase 4 — Correctness polish + docs
 

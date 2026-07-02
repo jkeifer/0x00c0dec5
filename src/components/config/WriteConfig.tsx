@@ -1,6 +1,7 @@
 import type { AppState } from '../../types/state.ts';
 import { Radio } from '../shared/Radio.tsx';
-import { colors, fonts, fontSizes, radii, spacing } from '../../theme.ts';
+import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
+import { inputStyle } from '../shared/controlStyles.ts';
 
 interface WriteConfigProps {
   write: AppState['write'];
@@ -11,17 +12,6 @@ interface WriteConfigProps {
   onIncludeMetadataChange: (includeMetadata: boolean) => void;
   onFooterLocatorChange: (footerLocator: 'trailer' | 'none') => void;
 }
-
-const inputStyle: React.CSSProperties = {
-  background: colors.surfaceInput,
-  border: `1px solid ${colors.border}`,
-  borderRadius: radii.sm,
-  fontSize: fontSizes.sm,
-  color: colors.textPrimary,
-  padding: `${spacing.xs}px ${spacing.sm}px`,
-  outline: 'none',
-  fontFamily: 'inherit',
-};
 
 function isValidHex(v: string): boolean {
   return /^[0-9a-fA-F]*$/.test(v) && v.length % 2 === 0;
@@ -68,7 +58,7 @@ export function WriteConfig({
           onChange={(e) => onMagicChange(e.target.value)}
           data-testid="magic-input"
           style={{
-            ...inputStyle,
+            ...inputStyle(),
             fontFamily: fonts.mono,
             borderColor: hexValid ? colors.border : colors.warning,
           }}

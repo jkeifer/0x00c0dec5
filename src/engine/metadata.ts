@@ -55,9 +55,15 @@ export function collectMetadata(
   // Partitioning (single file vs one file per chunk)
   entries.push({ key: 'partitioning', value: state.write.partitioning });
 
-  // Codec pipelines
+  // Codec pipelines. fieldPipelines is keyed by Variable.id (D5 — Phase 3.1),
+  // but the file format keys codec_pipelines by variable NAME (the format
+  // doesn't change); translate id -> name here, at the serialization boundary.
   if (state.interleaving === 'column') {
-    entries.push({ key: 'codec_pipelines', value: JSON.stringify(state.fieldPipelines) });
+    const byName: Record<string, unknown> = {};
+    for (const v of state.variables) {
+      byName[v.name] = state.fieldPipelines[v.id] ?? [];
+    }
+    entries.push({ key: 'codec_pipelines', value: JSON.stringify(byName) });
   } else {
     entries.push({ key: 'codec_pipelines', value: JSON.stringify(state.chunkPipeline) });
   }

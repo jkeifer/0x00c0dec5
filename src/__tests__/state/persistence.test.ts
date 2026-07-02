@@ -80,9 +80,14 @@ describe('loadState — v1 dtype-variable migration', () => {
     expect(result!.variables[1].typeAssignment.storageDtype).toBe('uint16');
     expect(result!.variables[1].logicalType.type).toBe('integer');
 
-    // scale-offset / bitround steps stripped from pipelines
-    expect(result!.fieldPipelines.temp).toEqual([{ codec: 'delta', params: { order: 1 } }]);
-    expect(result!.fieldPipelines.hum).toEqual([]);
+    // scale-offset / bitround steps stripped from pipelines. The v1 format
+    // predates id-keyed fieldPipelines (D5, Phase 3.1), so the legacy
+    // name-keyed entries ('temp'/'hum') are re-keyed to the matching
+    // variable's id ('v1'/'v2') by the same load-time migration.
+    expect(result!.fieldPipelines.v1).toEqual([{ codec: 'delta', params: { order: 1 } }]);
+    expect(result!.fieldPipelines.v2).toEqual([]);
+    expect(result!.fieldPipelines).not.toHaveProperty('temp');
+    expect(result!.fieldPipelines).not.toHaveProperty('hum');
   });
 });
 
@@ -109,8 +114,6 @@ describe('loadState — default-merge for missing fields', () => {
         rightPaneStage: -1,
         leftPaneView: 'table',
         rightPaneView: 'hex',
-        sidebarWidth: 300,
-        leftPaneRatio: 0.5,
         // showDiff intentionally omitted
       },
     };
@@ -251,45 +254,123 @@ describe('loadState — variable validation', () => {
   });
 });
 
-describe('loadState — pane stage range validation', () => {
-  it('resets an out-of-range leftPaneStage to the default', () => {
-    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: 99 } };
+// D5 (Phase 3.8): ui.leftPaneStage / ui.rightPaneStage are StageName values,
+// not numeric indices. STAGE_ORDER = ['values', 'typed', 'linearized',
+// 'encoded', 'metadata', 'write', 'read']. Old persisted numeric indices
+// (0..6) migrate positionally via STAGE_ORDER; the old -1 sentinel maps to
+// 'write'; anything else invalid/unrecognized falls back to the default
+// ('values' for left, 'write' for right per D5 — fixes SW-2's stale default).
+describe('loadState — pane stage migration (index -> name, D5)', () => {
+  const STAGE_ORDER = ['values', 'typed', 'linearized', 'encoded', 'metadata', 'write', 'read'];
+
+  it.each(STAGE_ORDER.map((name, i) => [i, name] as const))(
+    'migrates old numeric leftPaneStage %i to %s',
+    (index, name) => {
+      const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: index } };
+      localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+      const result = loadState('tabular');
+      expect(result).not.toBeNull();
+      expect(result!.ui.leftPaneStage).toBe(name);
+    },
+  );
+
+  it.each(STAGE_ORDER.map((name, i) => [i, name] as const))(
+    'migrates old numeric rightPaneStage %i to %s',
+    (index, name) => {
+      const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, rightPaneStage: index } };
+      localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+      const result = loadState('tabular');
+      expect(result).not.toBeNull();
+      expect(result!.ui.rightPaneStage).toBe(name);
+    },
+  );
+
+  it('migrates the old -1 sentinel to "write" for leftPaneStage', () => {
+    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: -1 } };
     localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
     const result = loadState('tabular');
     expect(result).not.toBeNull();
-    expect(result!.ui.leftPaneStage).toBe(DEFAULT_STATE.ui.leftPaneStage);
+    expect(result!.ui.leftPaneStage).toBe('write');
   });
 
-  it('resets a negative leftPaneStage to the default', () => {
-    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: -5 } };
-    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
-    const result = loadState('tabular');
-    expect(result).not.toBeNull();
-    expect(result!.ui.leftPaneStage).toBe(DEFAULT_STATE.ui.leftPaneStage);
-  });
-
-  it('keeps a valid rightPaneStage within 0..6', () => {
-    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, rightPaneStage: 4 } };
-    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
-    const result = loadState('tabular');
-    expect(result).not.toBeNull();
-    expect(result!.ui.rightPaneStage).toBe(4);
-  });
-
-  it('preserves the -1 sentinel for rightPaneStage', () => {
+  it('migrates the old -1 sentinel to "write" for rightPaneStage', () => {
     const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, rightPaneStage: -1 } };
     localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
     const result = loadState('tabular');
     expect(result).not.toBeNull();
-    expect(result!.ui.rightPaneStage).toBe(-1);
+    expect(result!.ui.rightPaneStage).toBe('write');
   });
 
-  it('resets an out-of-range rightPaneStage to the default', () => {
+  it('falls back to the default ("values") for an out-of-range numeric leftPaneStage', () => {
+    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: 99 } };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.ui.leftPaneStage).toBe('values');
+  });
+
+  it('falls back to the default ("values") for a negative (non-sentinel) leftPaneStage', () => {
+    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: -5 } };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.ui.leftPaneStage).toBe('values');
+  });
+
+  it('falls back to the default ("write") for an out-of-range numeric rightPaneStage', () => {
     const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, rightPaneStage: 42 } };
     localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
     const result = loadState('tabular');
     expect(result).not.toBeNull();
-    expect(result!.ui.rightPaneStage).toBe(DEFAULT_STATE.ui.rightPaneStage);
+    expect(result!.ui.rightPaneStage).toBe('write');
+  });
+
+  it('keeps a valid stage-name leftPaneStage unchanged', () => {
+    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: 'encoded' } };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.ui.leftPaneStage).toBe('encoded');
+  });
+
+  it('keeps a valid stage-name rightPaneStage unchanged', () => {
+    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, rightPaneStage: 'read' } };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.ui.rightPaneStage).toBe('read');
+  });
+
+  it('falls back to the default for an unrecognized string leftPaneStage', () => {
+    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: 'not-a-stage' } };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.ui.leftPaneStage).toBe('values');
+  });
+
+  it('falls back to the default for an unrecognized string rightPaneStage', () => {
+    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, rightPaneStage: 'not-a-stage' } };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.ui.rightPaneStage).toBe('write');
+  });
+
+  it('falls back to the default for a non-string, non-integer leftPaneStage', () => {
+    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: 4.5 } };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.ui.leftPaneStage).toBe('values');
+  });
+
+  it('falls back to the default for a null rightPaneStage', () => {
+    const state = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, rightPaneStage: null } };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.ui.rightPaneStage).toBe('write');
   });
 });
 
@@ -321,6 +402,51 @@ describe('loadState — fieldPipelines/chunkPipeline defaults', () => {
     expect(result).not.toBeNull();
     expect(result!.fieldPipelines.temperature).toEqual([{ codec: 'delta', params: { order: 1 } }]);
     expect(result!.fieldPipelines.pressure).toEqual([]);
+  });
+
+  // D5 (Phase 3.1): fieldPipelines is keyed by Variable.id. A persisted save
+  // whose keys are variable NAMEs (e.g. from before this migration, or a
+  // hand-edited/legacy save) must be re-keyed to the matching variable's id;
+  // keys matching neither a name nor an id are dropped.
+  it('re-keys a legacy name-keyed fieldPipelines entry to the matching variable id', () => {
+    const state: Record<string, unknown> = {
+      ...DEFAULT_STATE,
+      variables: [makeVariable({ id: 'v1', name: 'temp' })],
+      fieldPipelines: { temp: [{ codec: 'delta', params: { order: 1 } }] },
+    };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.fieldPipelines.v1).toEqual([{ codec: 'delta', params: { order: 1 } }]);
+    expect(result!.fieldPipelines).not.toHaveProperty('temp');
+  });
+
+  it('drops a fieldPipelines key matching neither a variable id nor a variable name', () => {
+    const state: Record<string, unknown> = {
+      ...DEFAULT_STATE,
+      variables: [makeVariable({ id: 'v1', name: 'temp' })],
+      fieldPipelines: { v1: [], orphaned: [{ codec: 'rle', params: {} }] },
+    };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.fieldPipelines).not.toHaveProperty('orphaned');
+    expect(result!.fieldPipelines.v1).toEqual([]);
+  });
+
+  it('an id-keyed entry wins over a same-named legacy entry when both are present', () => {
+    const state: Record<string, unknown> = {
+      ...DEFAULT_STATE,
+      variables: [makeVariable({ id: 'v1', name: 'temp' })],
+      fieldPipelines: {
+        v1: [{ codec: 'rle', params: {} }],
+        temp: [{ codec: 'delta', params: { order: 1 } }],
+      },
+    };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.fieldPipelines.v1).toEqual([{ codec: 'rle', params: {} }]);
   });
 
   it('defaults chunkPipeline to an empty array when missing', () => {
