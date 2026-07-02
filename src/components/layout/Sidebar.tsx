@@ -141,6 +141,9 @@ export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
             onUpdateEntry={(index, key, value) =>
               dispatch({ type: 'UPDATE_METADATA_ENTRY', index, key, value })
             }
+            onIncludeChunkIndexChange={(includeChunkIndex) =>
+              dispatch({ type: 'SET_INCLUDE_CHUNK_INDEX', includeChunkIndex })
+            }
           />
         );
       case 'Write':
@@ -162,6 +165,9 @@ export function Sidebar({ files, readResult, variableStats }: SidebarProps) {
               }
               onIncludeMetadataChange={(includeMetadata) =>
                 dispatch({ type: 'SET_WRITE_INCLUDE_METADATA', includeMetadata })
+              }
+              onFooterLocatorChange={(footerLocator) =>
+                dispatch({ type: 'SET_WRITE_FOOTER_LOCATOR', footerLocator })
               }
             />
             <FileExplorer files={files} />

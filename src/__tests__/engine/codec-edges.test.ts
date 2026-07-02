@@ -3,14 +3,17 @@
  *
  * Covers remediation-plan.md Phase 1 task 1.2 / §1.7 gaps for:
  *  - Delta codec: unsigned dtypes, decreasing values, near-range values, order 2/3,
- *    empty input, single element (DC-2: clamping breaks round-trip on unsigned dtypes).
+ *    empty input, single element (DC-2: clamping broke round-trip on unsigned dtypes;
+ *    fixed by Phase 2 task 2.5 — the clamp is removed, typed-array writes wrap
+ *    mod 2^N instead).
  *  - LZ codec: back-references with offset > 255, incompressible input.
  *  - Byte shuffle with elementSize != dtype size (garbled-but-reversible round-trip).
  *  - RLE: runs longer than 255, empty input, alternating (worst-case) input.
  *
- * Where remediation-plan.md Part 1 predicts breakage (DC-2), the test is written to
- * assert CORRECT behavior (exact round-trip) and marked `it.fails` with the finding id,
- * per the task's "do not weaken assertions" rule.
+ * The DC-2 cases were originally written to assert CORRECT behavior (exact
+ * round-trip) and marked `it.fails` per the task's "do not weaken assertions"
+ * rule, ahead of the fix landing. Phase 2 task 2.5 has now landed, so they are
+ * flipped to plain `it()`.
  */
 import { describe, it, expect } from 'vitest';
 import { CODEC_REGISTRY } from '../../engine/codecs.ts';
@@ -22,10 +25,11 @@ const rle = CODEC_REGISTRY['rle'];
 const lz = CODEC_REGISTRY['lz'];
 
 describe('delta codec — edge cases', () => {
-  // KNOWN BUG DC-2 — delta encode/decode round/clamp diffs and cumsums to the dtype
-  // range, so any negative diff on an unsigned dtype clamps to 0 instead of wrapping.
-  // flip to it() when Phase 2 lands (2.5 removes the clamp).
-  it.fails('round-trips decreasing values on uint16 exactly', () => {
+  // FIXED DC-2 (task 2.5) — delta encode/decode used to round/clamp diffs and
+  // cumsums to the dtype range, so any negative diff on an unsigned dtype clamped
+  // to 0 instead of wrapping. The clamp is removed; typed-array writes now wrap
+  // mod 2^N, making the round-trip exact.
+  it('round-trips decreasing values on uint16 exactly', () => {
     const original = [57, 12, 90, 3];
     const input = valuesToBytes(original, 'uint16');
     const encoded = delta.encode(input, 'uint16', { order: 1 });
@@ -34,9 +38,9 @@ describe('delta codec — edge cases', () => {
     expect(values).toEqual(original);
   });
 
-  // KNOWN BUG DC-2 — same clamping bug, exercised near the dtype's range boundary
-  // where negative diffs are especially likely. flip to it() when Phase 2 lands.
-  it.fails('round-trips near-range values on uint8 exactly', () => {
+  // FIXED DC-2 (task 2.5) — same former clamping bug, exercised near the dtype's
+  // range boundary where negative diffs are especially likely.
+  it('round-trips near-range values on uint8 exactly', () => {
     const original = [250, 5, 255, 0, 128];
     const input = valuesToBytes(original, 'uint8');
     const encoded = delta.encode(input, 'uint8', { order: 1 });
@@ -45,9 +49,9 @@ describe('delta codec — edge cases', () => {
     expect(values).toEqual(original);
   });
 
-  // KNOWN BUG DC-2 — order=2 compounds first-differences, so clamping corrupts
-  // even faster. flip to it() when Phase 2 lands.
-  it.fails('round-trips decreasing values on uint16 with order=2', () => {
+  // FIXED DC-2 (task 2.5) — order=2 compounds first-differences, so the former
+  // clamping corrupted even faster; now wraps and reverses exactly.
+  it('round-trips decreasing values on uint16 with order=2', () => {
     const original = [57, 12, 90, 3, 40];
     const input = valuesToBytes(original, 'uint16');
     const encoded = delta.encode(input, 'uint16', { order: 2 });
@@ -56,9 +60,8 @@ describe('delta codec — edge cases', () => {
     expect(values).toEqual(original);
   });
 
-  // KNOWN BUG DC-2 — order=3 on an unsigned dtype with decreasing values.
-  // flip to it() when Phase 2 lands.
-  it.fails('round-trips decreasing values on uint16 with order=3', () => {
+  // FIXED DC-2 (task 2.5) — order=3 on an unsigned dtype with decreasing values.
+  it('round-trips decreasing values on uint16 with order=3', () => {
     const original = [5, 20, 8, 40, 1];
     const input = valuesToBytes(original, 'uint16');
     const encoded = delta.encode(input, 'uint16', { order: 3 });

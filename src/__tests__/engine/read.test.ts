@@ -3,6 +3,7 @@ import { readFile } from '../../engine/read.ts';
 import { computePipelineStages } from '../../hooks/usePipeline.ts';
 import { DEFAULT_STATE, type AppState } from '../../types/state.ts';
 import { generateValues } from '../../engine/generate.ts';
+import { hexToBytes } from '../../engine/bytes.ts';
 
 function stateWith(overrides: Partial<AppState>): AppState {
   return { ...DEFAULT_STATE, ...overrides };
@@ -29,22 +30,24 @@ describe('readFile — failure cases', () => {
       write: { ...DEFAULT_STATE.write, includeMetadata: false },
     });
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.errorMessage).toContain('Cannot read file');
-      expect(result.errorMessage).toContain('no metadata');
+      expect(result.reason).toBe('no-metadata');
+      expect(result.message).toContain('Cannot read file');
+      expect(result.message).toContain('no metadata');
     }
   });
 
-  it('failure message includes byte count', () => {
+  it('failure result includes byte count', () => {
     const state = stateWith({
       write: { ...DEFAULT_STATE.write, includeMetadata: false },
     });
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     if (!result.success) {
-      expect(result.errorMessage).toContain('bytes');
+      expect(result.byteCount).toBeGreaterThan(0);
+      expect(result.message).toContain('bytes');
     }
   });
 });
@@ -55,7 +58,7 @@ describe('readFile — lossless roundtrip (column mode, header metadata)', () =>
       write: { includeMetadata: true, metadataPlacement: 'header' },
     }) as AppState;
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -79,7 +82,7 @@ describe('readFile — lossless roundtrip (column mode, footer metadata)', () =>
       write: { includeMetadata: true, metadataPlacement: 'footer' },
     }) as AppState;
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -103,7 +106,7 @@ describe('readFile — lossless roundtrip (column mode, sidecar metadata)', () =
       write: { includeMetadata: true, metadataPlacement: 'sidecar' },
     }) as AppState;
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -128,7 +131,7 @@ describe('readFile — row mode roundtrip', () => {
       write: { includeMetadata: true, metadataPlacement: 'header' },
     }) as AppState;
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -167,7 +170,7 @@ describe('readFile — lossy roundtrip (type assignment with float32 storage)', 
     expect(tempStats.isLossy).toBe(true);
     expect(tempStats.rounded).toBeGreaterThan(0);
 
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.lossyVariables.has('temperature')).toBe(true);
@@ -202,7 +205,7 @@ describe('readFile — lossless roundtrip with scale/offset type assignment', ()
     const tempStats = variableStats.get('temperature')!;
     expect(tempStats.isLossy).toBe(false);
 
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.lossyVariables.has('temperature')).toBe(false);
@@ -238,7 +241,7 @@ describe('readFile — per-chunk partitioning with sidecar', () => {
       },
     };
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -261,7 +264,7 @@ describe('readFile — multiple chunks in single file', () => {
       write: { includeMetadata: true, metadataPlacement: 'footer' },
     }) as AppState;
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -278,6 +281,64 @@ describe('readFile — multiple chunks in single file', () => {
   });
 });
 
+describe('readFile — 2-D multi-chunk reassembly (task 2.1)', () => {
+  it('reconstructs exact values for shape [4,4] chunkShape [2,2] column mode via chunk_index coords', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [4, 4],
+      chunkShape: [2, 2],
+      variables: [
+        {
+          id: 'humidity', name: 'humidity', color: '#98c379',
+          logicalType: { type: 'integer', min: 0, max: 100 },
+          typeAssignment: { storageDtype: 'uint16' },
+        },
+      ],
+      fieldPipelines: { humidity: [] },
+      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const expected = generateValues('humidity', state.variables[0].logicalType, 16);
+      const actual = result.reconstructedValues.get('humidity');
+      expect(actual).toEqual(expected);
+    }
+  });
+
+  it('reconstructs exact values for per-chunk 2-D files matched by coords, not filename order', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [4, 4],
+      chunkShape: [2, 2],
+      variables: [
+        {
+          id: 'humidity', name: 'humidity', color: '#98c379',
+          logicalType: { type: 'integer', min: 0, max: 100 },
+          typeAssignment: { storageDtype: 'uint16' },
+        },
+      ],
+      fieldPipelines: { humidity: [] },
+      write: {
+        ...DEFAULT_STATE.write,
+        includeMetadata: true,
+        partitioning: 'per-chunk',
+      },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const expected = generateValues('humidity', state.variables[0].logicalType, 16);
+      const actual = result.reconstructedValues.get('humidity');
+      expect(actual).toEqual(expected);
+    }
+  });
+});
+
 describe('readFile — JSON and binary metadata formats', () => {
   it('reads JSON metadata successfully', () => {
     const state = deepMerge(DEFAULT_STATE, {
@@ -285,7 +346,7 @@ describe('readFile — JSON and binary metadata formats', () => {
       write: { includeMetadata: true, metadataPlacement: 'header' },
     }) as AppState;
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(true);
   });
 
@@ -295,7 +356,7 @@ describe('readFile — JSON and binary metadata formats', () => {
       write: { includeMetadata: true, metadataPlacement: 'header' },
     }) as AppState;
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(true);
   });
 });

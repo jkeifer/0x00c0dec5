@@ -37,6 +37,14 @@ export interface AppState {
   metadata: {
     customEntries: { key: string; value: string }[];
     serialization: 'json' | 'binary';
+    /**
+     * D3 (remediation-plan.md): whether `chunk_index` (coords/offset/size per
+     * chunk) is included in collected metadata. Default true. When false, the
+     * reader must compute chunk offsets from chunkShape x dtype size, which is
+     * only possible when every codec in play is size-preserving — see
+     * `no-chunk-index` in `ReadFailureReason`.
+     */
+    includeChunkIndex: boolean;
   };
   write: {
     includeMetadata: boolean;
@@ -44,6 +52,16 @@ export interface AppState {
     partitioning: 'single' | 'per-chunk';
     metadataPlacement: 'header' | 'footer' | 'sidecar';
     chunkOrder: 'row-major' | 'column-major';
+    /**
+     * D1 (remediation-plan.md): how a reader locates footer-placed metadata
+     * when there's no separate index to consult. Only meaningful when
+     * `metadataPlacement === 'footer'`.
+     * - 'trailer': [magic][chunks][metadata][u32 LE metadata-length][magic] —
+     *   Parquet-style; the reader seeks to the end and reads the length.
+     * - 'none': layout stays [magic][chunks][metadata][magic]; the reader
+     *   falls back to a best-effort backward scan, which may fail.
+     */
+    footerLocator: 'trailer' | 'none';
   };
   ui: {
     leftPaneStage: number;
@@ -89,6 +107,7 @@ export const DEFAULT_STATE: AppState = {
   metadata: {
     customEntries: [],
     serialization: 'json',
+    includeChunkIndex: true,
   },
   write: {
     includeMetadata: false,
@@ -96,6 +115,7 @@ export const DEFAULT_STATE: AppState = {
     partitioning: 'single',
     metadataPlacement: 'header',
     chunkOrder: 'row-major',
+    footerLocator: 'trailer',
   },
   ui: {
     leftPaneStage: 0,

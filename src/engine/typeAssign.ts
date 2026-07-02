@@ -33,7 +33,9 @@ export function assignType(
 
   let clipped = 0;
   let rounded = 0;
+  let nanCount = 0;
   let sum = 0;
+  let sumCount = 0;
   let min = Infinity;
   let max = -Infinity;
 
@@ -41,9 +43,17 @@ export function assignType(
 
   for (let i = 0; i < values.length; i++) {
     const original = values[i];
-    sum += original;
-    if (original < min) min = original;
-    if (original > max) max = original;
+    // NF-2: skip NaN in min/max/mean accumulation — `NaN < x` / `NaN > x` are always
+    // false, so leaving NaN in the comparisons silently keeps the ±Infinity sentinels
+    // while `sum` gets poisoned to NaN. Count NaN separately instead.
+    if (Number.isNaN(original)) {
+      nanCount++;
+    } else {
+      sum += original;
+      sumCount++;
+      if (original < min) min = original;
+      if (original > max) max = original;
+    }
 
     let result = original;
 
@@ -54,15 +64,26 @@ export function assignType(
 
     // Clamp to output dtype range for integer types
     if (!outInfo.float) {
-      const clamped = Math.max(outInfo.min, Math.min(outInfo.max, Math.round(result)));
-      if (clamped !== result) {
-        if (Math.round(result) !== result) {
-          rounded++;
+      if (Number.isNaN(result)) {
+        // NF-4: NaN written via DataView to an integer dtype silently becomes 0
+        // (setIntN(NaN) => 0), which is indistinguishable from a real zero on
+        // readback. We keep that storage behavior (it's how the format actually
+        // behaves) but the loop above already counted this input in `nanCount`,
+        // which is the explicit signal the stats/UI can act on. Skip the
+        // clipped/rounded bookkeeping here — NaN isn't a rounding or clipping
+        // event, it's a distinct "unrepresentable" event already recorded.
+        result = 0;
+      } else {
+        const clamped = Math.max(outInfo.min, Math.min(outInfo.max, Math.round(result)));
+        if (clamped !== result) {
+          if (Math.round(result) !== result) {
+            rounded++;
+          }
+          if (Math.round(result) < outInfo.min || Math.round(result) > outInfo.max) {
+            clipped++;
+          }
+          result = clamped;
         }
-        if (Math.round(result) < outInfo.min || Math.round(result) > outInfo.max) {
-          clipped++;
-        }
-        result = clamped;
       }
     } else {
       // For float types, check if the value loses precision
@@ -89,7 +110,12 @@ export function assignType(
       if (hasScaleOffset) {
         expected = (expected - offset) * scale;
       }
-      if (readBack[i] !== expected) {
+      // NF-3: `readBack[i] !== expected` is always true for NaN vs NaN (NaN !== NaN
+      // in JS), so a losslessly-stored NaN (float32/float64 represent NaN exactly)
+      // was spuriously flagged as "rounded". Use a NaN-aware comparison: only count
+      // it as rounded if the values differ and it isn't the NaN-both-sides case.
+      const bothNaN = Number.isNaN(readBack[i]) && Number.isNaN(expected);
+      if (!bothNaN && readBack[i] !== expected) {
         rounded++;
       }
     }
@@ -98,16 +124,28 @@ export function assignType(
   const count = values.length;
   const isLossy = clipped > 0 || rounded > 0;
 
+  // Edge cases for min/max/mean:
+  //  - truly empty input (count === 0): keep the existing convention of 0/0/0
+  //    (unchanged behavior, still covered by the "handles empty values" test).
+  //  - all-NaN, non-empty input (count > 0, sumCount === 0): report NaN rather than
+  //    leaking the ±Infinity sentinels into stats/metadata. `JSON.stringify(NaN)`
+  //    serializes to `null`, which is valid JSON (see engine/metadata.ts's
+  //    `variable_statistics` entry) — it just can't be told apart from -Infinity/
+  //    Infinity there, which is an acceptable "no data" signal for a NaN-only
+  //    dataset.
+  const hasFiniteStat = sumCount > 0;
+
   return {
     bytes,
     stats: {
-      min: count > 0 ? min : 0,
-      max: count > 0 ? max : 0,
-      mean: count > 0 ? sum / count : 0,
+      min: count === 0 ? 0 : (hasFiniteStat ? min : NaN),
+      max: count === 0 ? 0 : (hasFiniteStat ? max : NaN),
+      mean: count === 0 ? 0 : (hasFiniteStat ? sum / sumCount : NaN),
       count,
       clipped,
       rounded,
       isLossy,
+      nanCount,
     },
     outputDtype: outDtype,
   };
@@ -154,7 +192,13 @@ function applyBitround(bytes: Uint8Array, dtype: DtypeKey, keepBits: number): Ui
   } else if (dtype === 'float64') {
     const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
     const maskHigh = 0xffffffff << Math.max(0, 20 - keepBits);
-    const maskLow = keepBits >= 20 ? 0xffffffff << (52 - keepBits) : 0;
+    // Boundary fixed (DC-6): at keepBits === 20, `52 - keepBits === 32`, and
+    // `0xffffffff << 32` wraps to `<< 0` in JS (32-bit shift amounts are taken mod 32),
+    // producing an all-ones mask that keeps every low mantissa bit instead of
+    // truncating them all. Using `> 20` (not `>= 20`) routes keepBits===20 through the
+    // `0` branch, which is correct: keepBits=20 keeps 0 bits of the low 32-bit word
+    // (all 20 kept bits live in the high word/exponent side).
+    const maskLow = keepBits > 20 ? 0xffffffff << (52 - keepBits) : 0;
     for (let i = 0; i < result.length; i += 8) {
       const low = view.getUint32(i, true);
       const high = view.getUint32(i + 4, true);

@@ -30,6 +30,57 @@ describe('codec registry', () => {
   });
 });
 
+// ─── isLossy (task 2.6) ────────────────────────────────────────────────
+//
+// isLossy is a predicate over the *input* dtype, not a plain boolean (see the
+// comment on CodecDefinition.isLossy in src/types/codecs.ts): delta is exact
+// for integer dtypes after task 2.5 removed the clamp (typed-array writes wrap
+// mod 2^N, making encode/decode perfect inverses), but is still lossy for
+// float dtypes because diffs are re-rounded to the float dtype's precision.
+
+describe('delta codec — isLossy', () => {
+  const codec = CODEC_REGISTRY['delta'];
+
+  it('is false for every integer dtype', () => {
+    for (const dtype of ['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32'] as const) {
+      expect(codec.isLossy(dtype)).toBe(false);
+    }
+  });
+
+  it('is true for every float dtype', () => {
+    for (const dtype of ['float32', 'float64'] as const) {
+      expect(codec.isLossy(dtype)).toBe(true);
+    }
+  });
+});
+
+describe('byte-shuffle codec — isLossy', () => {
+  it('is always false (pure byte transposition)', () => {
+    const codec = CODEC_REGISTRY['byte-shuffle'];
+    for (const dtype of ['int8', 'uint16', 'int32', 'float32', 'float64'] as const) {
+      expect(codec.isLossy(dtype)).toBe(false);
+    }
+  });
+});
+
+describe('rle codec — isLossy', () => {
+  it('is always false (exact expansion of runs)', () => {
+    const codec = CODEC_REGISTRY['rle'];
+    for (const dtype of ['int8', 'uint16', 'int32', 'float32', 'float64'] as const) {
+      expect(codec.isLossy(dtype)).toBe(false);
+    }
+  });
+});
+
+describe('lz codec — isLossy', () => {
+  it('is always false (exact expansion of back-references)', () => {
+    const codec = CODEC_REGISTRY['lz'];
+    for (const dtype of ['int8', 'uint16', 'int32', 'float32', 'float64'] as const) {
+      expect(codec.isLossy(dtype)).toBe(false);
+    }
+  });
+});
+
 describe('delta codec', () => {
   const codec = CODEC_REGISTRY['delta'];
 

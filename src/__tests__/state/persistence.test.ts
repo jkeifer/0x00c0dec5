@@ -123,6 +123,46 @@ describe('loadState — default-merge for missing fields', () => {
     expect(result!.ui.showDiff).toBe(DEFAULT_STATE.ui.showDiff);
   });
 
+  // Phase 2 tasks 2.3/2.13 (D1/D3): a save from before these fields existed
+  // (or one that simply omits them) must default-merge cleanly rather than
+  // leaving `write.footerLocator`/`metadata.includeChunkIndex` undefined.
+  it('fills in missing write.footerLocator and metadata.includeChunkIndex with defaults', () => {
+    const partial = {
+      dataModel: 'tabular',
+      shape: [16],
+      chunkShape: [16],
+      interleaving: 'column',
+      variables: DEFAULT_STATE.variables,
+      fieldPipelines: DEFAULT_STATE.fieldPipelines,
+      chunkPipeline: [],
+      metadata: {
+        customEntries: [],
+        serialization: 'json',
+        // includeChunkIndex intentionally omitted
+      },
+      write: {
+        magicNumber: 'DEADBEEF',
+        partitioning: 'single',
+        metadataPlacement: 'footer',
+        chunkOrder: 'row-major',
+        includeMetadata: true,
+        // footerLocator intentionally omitted
+      },
+      ui: DEFAULT_STATE.ui,
+    };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(partial));
+
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.write.footerLocator).toBe(DEFAULT_STATE.write.footerLocator);
+    expect(result!.write.footerLocator).toBe('trailer');
+    expect(result!.metadata.includeChunkIndex).toBe(DEFAULT_STATE.metadata.includeChunkIndex);
+    expect(result!.metadata.includeChunkIndex).toBe(true);
+    // Sibling fields still preserved through the merge.
+    expect(result!.write.magicNumber).toBe('DEADBEEF');
+    expect(result!.write.metadataPlacement).toBe('footer');
+  });
+
   it('fills in an entirely missing top-level section (metadata)', () => {
     const partial: Record<string, unknown> = { ...DEFAULT_STATE };
     delete partial.metadata;

@@ -23,6 +23,19 @@ export function valuesToBytes(values: number[], dtype: DtypeKey): Uint8Array {
 export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): number[] {
   const info = getDtype(dtype);
   const count = bytes.length / info.size;
+  if (!Number.isInteger(count)) {
+    // A fractional element count means the byte slice being decoded doesn't
+    // line up with whole values of this dtype — e.g. a short tail slice from
+    // deinterleaving, or a chunk boundary that doesn't match the claimed
+    // geometry. Surface a descriptive error (caught upstream in read.ts and
+    // reported as a 'decode-error') instead of letting DataView throw a raw,
+    // unexplained RangeError once indexing runs past the buffer.
+    throw new Error(
+      `bytesToValues: ${bytes.length} bytes is not a whole number of ${dtype} values ` +
+      `(${info.size} bytes each) — got ${count} elements. The byte slice being decoded ` +
+      `doesn't match the expected layout for this dtype.`,
+    );
+  }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const values: number[] = new Array(count);
 

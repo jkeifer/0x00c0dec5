@@ -10,11 +10,18 @@ export interface MetadataEntry {
 /**
  * Collect all auto-generated metadata entries from the pipeline state.
  */
+export interface ChunkIndexEntry {
+  coords: number[];
+  offset: number;
+  size: number;
+  variableName?: string;
+}
+
 export function collectMetadata(
   state: AppState,
   _encodedChunks: { coords: number[]; bytes: Uint8Array }[],
   variableStats?: Map<string, VariableStats>,
-  chunkOffsets?: { coords: number[]; offset: number; size: number }[],
+  chunkOffsets?: ChunkIndexEntry[],
 ): MetadataEntry[] {
   const entries: MetadataEntry[] = [];
 
@@ -35,10 +42,18 @@ export function collectMetadata(
   const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
   entries.push({ key: 'chunk_grid', value: JSON.stringify(chunkGrid) });
 
-  // Chunk index (byte offsets)
-  if (chunkOffsets) {
+  // Chunk index (byte offsets) — D3: user-facing toggle. When off, the reader
+  // must compute offsets itself (possible only for size-preserving codec
+  // pipelines); see 'no-chunk-index' in ReadFailureReason.
+  if (chunkOffsets && state.metadata.includeChunkIndex) {
     entries.push({ key: 'chunk_index', value: JSON.stringify(chunkOffsets) });
   }
+
+  // Chunk order (spatial ordering of chunks within the file/index)
+  entries.push({ key: 'chunk_order', value: state.write.chunkOrder });
+
+  // Partitioning (single file vs one file per chunk)
+  entries.push({ key: 'partitioning', value: state.write.partitioning });
 
   // Codec pipelines
   if (state.interleaving === 'column') {
@@ -84,14 +99,39 @@ export function collectMetadata(
   // Byte order
   entries.push({ key: 'byte_order', value: 'little' });
 
-  // Append custom entries
+  // Append custom entries. DC-5: a custom entry whose key collides with one of
+  // the auto-generated keys above would otherwise silently shadow it once
+  // entries collapse into a key->value object at serialization (last write
+  // wins), corrupting the file's self-description (e.g. a custom `shape` key
+  // overwriting the real dataset shape). Deterministically rename any
+  // colliding custom key to `user_<key>` (re-prefixing again if the user's
+  // own key is literally already `user_<autoKey>`, so the rename itself can
+  // never introduce a new collision) — auto keys always win their name, and
+  // no information is lost. MetadataEditor surfaces a warning on these rows.
+  const autoKeys = new Set(entries.map((e) => e.key));
   for (const entry of state.metadata.customEntries) {
     if (entry.key) {
-      entries.push({ key: entry.key, value: entry.value });
+      entries.push({ key: dedupeCustomKey(entry.key, autoKeys), value: entry.value });
     }
   }
 
   return entries;
+}
+
+/**
+ * DC-5: rename `key` to avoid colliding with an auto-generated metadata key,
+ * by prefixing `user_` repeatedly until it no longer collides with anything
+ * already claimed (auto keys, or an earlier custom entry that already claimed
+ * the prefixed name). Exported so `MetadataEditor` can show the same
+ * resulting key in its collision warning.
+ */
+export function dedupeCustomKey(key: string, claimedKeys: Set<string>): string {
+  let candidate = key;
+  while (claimedKeys.has(candidate)) {
+    candidate = `user_${candidate}`;
+  }
+  claimedKeys.add(candidate);
+  return candidate;
 }
 
 /** Serialize metadata entries as pretty-printed JSON → UTF-8 bytes. */

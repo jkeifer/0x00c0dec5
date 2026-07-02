@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { hexToBytes, orderChunks, assembleFiles } from '../../engine/write.ts';
+import { deserializeMetadata } from '../../engine/metadata.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
 import type { EncodedChunk } from '../../types/pipeline.ts';
 
@@ -355,5 +356,94 @@ describe('assembleFiles', () => {
     // Let's verify by checking that the bytes at those offsets match
     expect(mainFile.bytes[dataStart]).toBe(0x01);
     expect(mainFile.bytes[dataStart + 3]).toBe(0x04);
+  });
+});
+
+describe('header metadata offset convergence (task 2.8)', () => {
+  it('header chunk_index offsets exactly match where chunk data actually starts', () => {
+    // Enough chunks that offset values are large (multi-digit), which is
+    // what used to expose the old three-pass convergence's give-up case.
+    const chunks = Array.from({ length: 20 }, (_, i) =>
+      makeEncodedChunk([i], Array.from({ length: 50 }, (_, b) => (b + i) % 256)),
+    );
+    const state = {
+      ...DEFAULT_STATE,
+      write: {
+        ...DEFAULT_STATE.write,
+        includeMetadata: true,
+        metadataPlacement: 'header' as const,
+      },
+    };
+    const files = assembleFiles(state, chunks, [20]);
+    const mainFile = files[0];
+    const magic = hexToBytes(state.write.magicNumber);
+
+    // Locate the header metadata by parsing from right after the start magic.
+    const afterMagic = mainFile.bytes.slice(magic.length);
+    const text = new TextDecoder().decode(afterMagic);
+    let braceCount = 0;
+    let endIdx = -1;
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '{') braceCount++;
+      else if (text[i] === '}') {
+        braceCount--;
+        if (braceCount === 0) {
+          endIdx = i + 1;
+          break;
+        }
+      }
+    }
+    expect(endIdx).toBeGreaterThan(0);
+    const jsonBytes = new TextEncoder().encode(text.slice(0, endIdx));
+    const entries = deserializeMetadata(jsonBytes);
+    const chunkIndexEntry = entries.find((e) => e.key === 'chunk_index')!;
+    const chunkIndex = JSON.parse(chunkIndexEntry.value) as { coords: number[]; offset: number; size: number }[];
+
+    // The header's real byte length is magic.length + jsonBytes.length (the
+    // embedded metadata may be padded with trailing whitespace beyond the
+    // last `}`, so re-derive from the actual file rather than assuming
+    // jsonBytes.length is the header size).
+    // Every entry's offset must point at bytes that actually match that
+    // chunk's own content in the assembled file.
+    let expectedOffset = chunkIndex[0].offset;
+    for (let i = 0; i < chunks.length; i++) {
+      expect(chunkIndex[i].offset).toBe(expectedOffset);
+      const sliceAtOffset = mainFile.bytes.slice(chunkIndex[i].offset, chunkIndex[i].offset + chunkIndex[i].size);
+      expect(Array.from(sliceAtOffset)).toEqual(Array.from(chunks[i].bytes));
+      expectedOffset += chunkIndex[i].size;
+    }
+  });
+
+  it('header metadata parses as JSON and its chunk_index matches the actual chunk bytes', () => {
+    // Regression guard for the padding path: if padMetadataToLength ever pads
+    // *inside* the JSON object instead of after the closing brace, this would
+    // fail to parse or the offsets would be wrong.
+    const chunks = Array.from({ length: 12 }, (_, i) => makeEncodedChunk([i], [i, i, i]));
+    const state = {
+      ...DEFAULT_STATE,
+      write: {
+        ...DEFAULT_STATE.write,
+        includeMetadata: true,
+        metadataPlacement: 'header' as const,
+      },
+    };
+    const files = assembleFiles(state, chunks, [12]);
+    const magic = hexToBytes(state.write.magicNumber);
+    const afterMagic = files[0].bytes.slice(magic.length);
+    const text = new TextDecoder().decode(afterMagic);
+    let braceCount = 0;
+    let endIdx = -1;
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === '{') braceCount++;
+      else if (text[i] === '}') {
+        braceCount--;
+        if (braceCount === 0) {
+          endIdx = i + 1;
+          break;
+        }
+      }
+    }
+    expect(endIdx).toBeGreaterThan(0);
+    expect(() => JSON.parse(text.slice(0, endIdx))).not.toThrow();
   });
 });

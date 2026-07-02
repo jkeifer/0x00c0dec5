@@ -15,6 +15,7 @@ import { valuesToBytes } from '../engine/elements.ts';
 import { formatValue, formatLogicalValue } from '../engine/elements.ts';
 import { isChunkLevelTrace } from '../engine/trace.ts';
 import { readFile } from '../engine/read.ts';
+import { hexToBytes } from '../engine/bytes.ts';
 
 function concatBytes(arrays: Uint8Array[]): Uint8Array {
   const totalLength = arrays.reduce((acc, a) => acc + a.length, 0);
@@ -217,8 +218,10 @@ export function computePipelineStages(state: AppState): PipelineResult {
   const writeTraces = files.flatMap((f) => f.traces);
   stages.push(makeStage('Write', writeBytes, writeTraces));
 
-  // 7. Read (reconstruct from file bytes)
-  const readResult = readFile(files, state.write.magicNumber);
+  // 7. Read (reconstruct from file bytes). Per D2, the reader is given the
+  // format's magic number as bytes (not the raw hex-string config) and
+  // verifies it rather than blindly stripping it.
+  const readResult = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
   if (readResult.success) {
     // Build a Values-like stage with reconstructed values

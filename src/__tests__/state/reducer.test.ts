@@ -357,7 +357,7 @@ describe('SET_METADATA_SERIALIZATION', () => {
 
   it('sets serialization to json', () => {
     const state = makeState({
-      metadata: { customEntries: [], serialization: 'binary' },
+      metadata: { customEntries: [], serialization: 'binary', includeChunkIndex: true },
     });
     const result = reducer(state, { type: 'SET_METADATA_SERIALIZATION', serialization: 'json' });
     expect(result.metadata.serialization).toBe('json');
@@ -377,6 +377,7 @@ describe('ADD_METADATA_ENTRY', () => {
       metadata: {
         customEntries: [{ key: 'a', value: 'b' }],
         serialization: 'json',
+        includeChunkIndex: true,
       },
     });
     const result = reducer(state, { type: 'ADD_METADATA_ENTRY' });
@@ -393,6 +394,7 @@ describe('REMOVE_METADATA_ENTRY', () => {
           { key: 'b', value: '2' },
         ],
         serialization: 'json',
+        includeChunkIndex: true,
       },
     });
     const result = reducer(state, { type: 'REMOVE_METADATA_ENTRY', index: 0 });
@@ -407,6 +409,7 @@ describe('UPDATE_METADATA_ENTRY', () => {
       metadata: {
         customEntries: [{ key: '', value: 'v' }],
         serialization: 'json',
+        includeChunkIndex: true,
       },
     });
     const result = reducer(state, { type: 'UPDATE_METADATA_ENTRY', index: 0, key: 'mykey' });
@@ -419,6 +422,7 @@ describe('UPDATE_METADATA_ENTRY', () => {
       metadata: {
         customEntries: [{ key: 'k', value: '' }],
         serialization: 'json',
+        includeChunkIndex: true,
       },
     });
     const result = reducer(state, { type: 'UPDATE_METADATA_ENTRY', index: 0, value: 'myval' });
@@ -431,6 +435,7 @@ describe('UPDATE_METADATA_ENTRY', () => {
       metadata: {
         customEntries: [{ key: '', value: '' }],
         serialization: 'json',
+        includeChunkIndex: true,
       },
     });
     const result = reducer(state, {
@@ -446,6 +451,24 @@ describe('UPDATE_METADATA_ENTRY', () => {
     const state = makeState();
     const result = reducer(state, { type: 'UPDATE_METADATA_ENTRY', index: 99, key: 'x' });
     expect(result.metadata.customEntries).toEqual(state.metadata.customEntries);
+  });
+});
+
+// ─── SET_INCLUDE_CHUNK_INDEX (D3) ───────────────────────────────────
+
+describe('SET_INCLUDE_CHUNK_INDEX', () => {
+  it('sets includeChunkIndex to false', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'SET_INCLUDE_CHUNK_INDEX', includeChunkIndex: false });
+    expect(result.metadata.includeChunkIndex).toBe(false);
+  });
+
+  it('sets includeChunkIndex back to true', () => {
+    const state = makeState({
+      metadata: { ...DEFAULT_STATE.metadata, includeChunkIndex: false },
+    });
+    const result = reducer(state, { type: 'SET_INCLUDE_CHUNK_INDEX', includeChunkIndex: true });
+    expect(result.metadata.includeChunkIndex).toBe(true);
   });
 });
 
@@ -486,6 +509,24 @@ describe('SET_WRITE_CHUNK_ORDER', () => {
     const state = makeState();
     const result = reducer(state, { type: 'SET_WRITE_CHUNK_ORDER', chunkOrder: 'column-major' });
     expect(result.write.chunkOrder).toBe('column-major');
+  });
+});
+
+// ─── SET_WRITE_FOOTER_LOCATOR (D1) ─────────────────────────────────
+
+describe('SET_WRITE_FOOTER_LOCATOR', () => {
+  it('sets footerLocator to "none"', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'SET_WRITE_FOOTER_LOCATOR', footerLocator: 'none' });
+    expect(result.write.footerLocator).toBe('none');
+  });
+
+  it('sets footerLocator back to "trailer"', () => {
+    const state = makeState({
+      write: { ...DEFAULT_STATE.write, footerLocator: 'none' },
+    });
+    const result = reducer(state, { type: 'SET_WRITE_FOOTER_LOCATOR', footerLocator: 'trailer' });
+    expect(result.write.footerLocator).toBe('trailer');
   });
 });
 

@@ -16,6 +16,7 @@ import { readFile } from '../../engine/read.ts';
 import { computePipelineStages } from '../../hooks/usePipeline.ts';
 import { DEFAULT_STATE, type AppState } from '../../types/state.ts';
 import { generateValues } from '../../engine/generate.ts';
+import { hexToBytes } from '../../engine/bytes.ts';
 
 function stateWithCustomEntries(
   customEntries: { key: string; value: string }[],
@@ -37,19 +38,15 @@ function stateWithCustomEntries(
 }
 
 describe('metadata adversarial — brace in custom value (RP-2)', () => {
-  // KNOWN BUG RP-2 — `tryParseEmbeddedMetadata`'s header JSON locator
-  // (`src/engine/read.ts`) counts `{`/`}` characters without tracking whether it is
-  // inside a JSON string literal. A custom entry like `note = "weird { value"` embeds
-  // a literal, unescaped `{` inside a JSON string value (JSON.stringify does not
-  // escape `{`), which throws the brace counter off and the locator either slices at
-  // the wrong offset or never finds a balanced end, causing JSON.parse to fail and
-  // the whole read to report the generic "no metadata" failure — even though valid
-  // metadata IS present in the file. Verified live. flip to it() when Phase 2 lands
-  // (task 2.4: string-literal-aware brace scanning).
-  it.fails('reads successfully when a custom value contains an unbalanced brace', () => {
+  // FIXED RP-2 (Phase 2 task 2.4) — `findJsonObjectEnd`/`findJsonObjectStart`
+  // in `src/engine/read.ts` now track JSON string-literal/escape state while
+  // counting braces, so an unescaped `{` inside a custom metadata string
+  // value (e.g. `note = "weird { value"`) no longer perturbs the brace
+  // counter. The header and footer scans both use these helpers.
+  it('reads successfully when a custom value contains an unbalanced brace', () => {
     const state = stateWithCustomEntries([{ key: 'note', value: 'weird { value' }]);
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -65,35 +62,31 @@ describe('metadata adversarial — brace in custom value (RP-2)', () => {
     }
   });
 
-  // Same root cause, footer placement — the backward brace scan is equally
-  // string-literal-blind.
-  it.fails('reads successfully with footer placement when a custom value contains an unbalanced brace', () => {
+  // Same fix, footer placement — the backward brace scan (`findJsonObjectStart`)
+  // is equally string-literal-aware now.
+  it('reads successfully with footer placement when a custom value contains an unbalanced brace', () => {
     const state = stateWithCustomEntries(
       [{ key: 'note', value: 'weird { value' }],
       { metadataPlacement: 'footer' },
     );
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
   });
 });
 
 describe('metadata adversarial — custom key shadows an auto key (DC-5)', () => {
-  // KNOWN BUG DC-5 — `collectMetadata` appends custom entries after the
-  // auto-generated ones, and `serializeMetadataJSON` collapses entries into a plain
-  // object keyed by `entry.key` with last-write-wins. A custom entry keyed `shape`
-  // overwrites the real shape JSON with the user's arbitrary string, so
-  // `JSON.parse(shapeStr)` throws in `readFile` and the read fails outright (with no
-  // warning distinguishing this from "no metadata at all" — see RP-3). The plan's
-  // contract (task 1.2) asks for EITHER a successful read with correct values OR an
-  // explicit warning; today there is neither. Verified live: read fails with the
-  // generic "no metadata" message despite metadata being present and mostly intact.
-  // flip to it() when Phase 2 lands (task 2.11: warn/rename/reject on key collision).
-  it.fails('either reads successfully with correct values or surfaces an explicit shadow warning', () => {
+  // FIXED DC-5 (Phase 2 task 2.11) — `collectMetadata` (`src/engine/metadata.ts`)
+  // now deterministically renames a custom entry whose key collides with an
+  // auto-generated key to `user_<key>` (via `dedupeCustomKey`, re-prefixing
+  // again if needed to avoid a secondary collision) before appending it, so a
+  // custom entry keyed `shape` no longer overwrites the real shape JSON.
+  // `MetadataEditor` shows a matching warning on the affected row.
+  it('either reads successfully with correct values or surfaces an explicit shadow warning', () => {
     const state = stateWithCustomEntries([{ key: 'shape', value: 'not-json-shape' }]);
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     // Per the task's contract: assert read succeeds with correct values (the
     // stronger, desired outcome) rather than accepting silent corruption.
@@ -111,11 +104,12 @@ describe('metadata adversarial — custom key shadows an auto key (DC-5)', () =>
     }
   });
 
-  // Shadowing `schema` corrupts dtype/variable-name info in the same way.
-  it.fails('shadowing the schema key does not silently corrupt the read', () => {
+  // Shadowing `schema` is renamed the same way, so dtype/variable-name info
+  // survives intact.
+  it('shadowing the schema key does not silently corrupt the read', () => {
     const state = stateWithCustomEntries([{ key: 'schema', value: 'not-a-schema' }]);
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
   });
@@ -127,7 +121,7 @@ describe('metadata adversarial — unicode keys and values', () => {
       { key: 'ünïcödé_key_日本語', value: 'válüé emoji 🎉 日本語テキスト' },
     ]);
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -149,7 +143,7 @@ describe('metadata adversarial — unicode keys and values', () => {
       { metadataPlacement: 'sidecar' },
     );
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
   });
@@ -160,10 +154,11 @@ describe('metadata adversarial — unicode keys and values', () => {
       metadata: {
         customEntries: [{ key: 'キー', value: 'значение' }],
         serialization: 'binary',
+        includeChunkIndex: true,
       },
     };
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
     expect(result.success).toBe(true);
   });
@@ -181,7 +176,7 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
     };
     expect(() => {
       const { files } = computePipelineStages(state);
-      readFile(files, state.write.magicNumber);
+      readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     }).not.toThrow();
   });
 
@@ -192,7 +187,7 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
     };
     expect(() => {
       const { files } = computePipelineStages(state);
-      readFile(files, state.write.magicNumber);
+      readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     }).not.toThrow();
   });
 
@@ -203,7 +198,7 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
     };
     expect(() => {
       const { files } = computePipelineStages(state);
-      readFile(files, state.write.magicNumber);
+      readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     }).not.toThrow();
   });
 
@@ -213,7 +208,7 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
       write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header', magicNumber: '0' },
     };
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(true);
   });
 
@@ -223,7 +218,7 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
       write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header', magicNumber: 'GG' },
     };
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(true);
   });
 
@@ -233,7 +228,7 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
       write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header', magicNumber: '' },
     };
     const { files } = computePipelineStages(state);
-    const result = readFile(files, state.write.magicNumber);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(true);
   });
 
@@ -244,7 +239,7 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
     };
     expect(() => {
       const { files } = computePipelineStages(state);
-      readFile(files, state.write.magicNumber);
+      readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     }).not.toThrow();
   });
 });

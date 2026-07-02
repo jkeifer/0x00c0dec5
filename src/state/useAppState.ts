@@ -36,12 +36,14 @@ export type AppAction =
   | { type: 'ADD_METADATA_ENTRY' }
   | { type: 'REMOVE_METADATA_ENTRY'; index: number }
   | { type: 'UPDATE_METADATA_ENTRY'; index: number; key?: string; value?: string }
+  | { type: 'SET_INCLUDE_CHUNK_INDEX'; includeChunkIndex: boolean }
   // Write
   | { type: 'SET_WRITE_MAGIC'; magicNumber: string }
   | { type: 'SET_WRITE_PARTITIONING'; partitioning: 'single' | 'per-chunk' }
   | { type: 'SET_WRITE_METADATA_PLACEMENT'; metadataPlacement: 'header' | 'footer' | 'sidecar' }
   | { type: 'SET_WRITE_CHUNK_ORDER'; chunkOrder: 'row-major' | 'column-major' }
   | { type: 'SET_WRITE_INCLUDE_METADATA'; includeMetadata: boolean }
+  | { type: 'SET_WRITE_FOOTER_LOCATOR'; footerLocator: 'trailer' | 'none' }
   // UI
   | { type: 'SET_SHOW_DIFF'; showDiff: boolean };
 
@@ -191,6 +193,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
         if (action.value !== undefined) entry.value = action.value;
       });
 
+    case 'SET_INCLUDE_CHUNK_INDEX':
+      return produce(state, (draft) => {
+        draft.metadata.includeChunkIndex = action.includeChunkIndex;
+      });
+
     // ─── Write ───────────────────────────────────────────────────────
     case 'SET_WRITE_MAGIC':
       return produce(state, (draft) => {
@@ -215,6 +222,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case 'SET_WRITE_INCLUDE_METADATA':
       return produce(state, (draft) => {
         draft.write.includeMetadata = action.includeMetadata;
+      });
+
+    case 'SET_WRITE_FOOTER_LOCATOR':
+      return produce(state, (draft) => {
+        draft.write.footerLocator = action.footerLocator;
       });
 
     case 'SET_SHOW_DIFF':

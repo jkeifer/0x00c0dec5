@@ -9,6 +9,7 @@ interface WriteConfigProps {
   onMetadataPlacementChange: (placement: 'header' | 'footer' | 'sidecar') => void;
   onChunkOrderChange: (order: 'row-major' | 'column-major') => void;
   onIncludeMetadataChange: (includeMetadata: boolean) => void;
+  onFooterLocatorChange: (footerLocator: 'trailer' | 'none') => void;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -38,6 +39,7 @@ export function WriteConfig({
   onMetadataPlacementChange,
   onChunkOrderChange,
   onIncludeMetadataChange,
+  onFooterLocatorChange,
 }: WriteConfigProps) {
   const hexValid = isValidHex(write.magicNumber);
 
@@ -110,6 +112,29 @@ export function WriteConfig({
           size="sm"
         />
       </div>
+
+      {/* Footer locator — only meaningful when placement is footer */}
+      {write.metadataPlacement === 'footer' && (
+        <div data-testid="footer-locator-toggle" style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+          <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Footer Locator</span>
+          <Radio
+            options={[
+              { value: 'trailer', label: 'Length trailer' },
+              { value: 'none', label: 'None (reader must scan)' },
+            ]}
+            value={write.footerLocator}
+            onChange={(v) => onFooterLocatorChange(v as 'trailer' | 'none')}
+            size="sm"
+          />
+          <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
+            How the reader finds footer metadata with no separate index to consult.
+            "Length trailer" appends a 4-byte length before the closing magic, exactly
+            like Parquet ([footer][len][&quot;PAR1&quot;]) — the reader seeks straight to it.
+            "None" leaves the reader to scan backward for metadata, which can fail —
+            that failure is itself the lesson: real formats use a trailer so they never have to guess.
+          </span>
+        </div>
+      )}
 
       {/* Chunk ordering */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>

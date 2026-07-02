@@ -72,6 +72,10 @@ export interface VariableStats {
   clipped: number;   // values clamped to dtype range
   rounded: number;   // values rounded during conversion
   isLossy: boolean;  // true if clipped > 0 || rounded > 0
+  nanCount: number;  // count of NaN input values (always present; 0 when none).
+                      // For integer storage dtypes, NaN silently becomes 0 on write
+                      // (DataView.setIntN(NaN) => 0) — nanCount is what lets the UI
+                      // / metadata distinguish that from a legitimate zero.
 }
 
 export interface ReadSuccess {
@@ -80,9 +84,34 @@ export interface ReadSuccess {
   lossyVariables: Set<string>;
 }
 
+/**
+ * Read failure taxonomy (remediation-plan.md decision D4). Each reason has
+ * its own educational message — `ReadStatus` and the pane failure display
+ * render `message` verbatim rather than hardcoding pedagogical text.
+ *
+ * - 'no-metadata': metadata genuinely absent (includeMetadata = false).
+ * - 'metadata-not-found': metadata present but the locator/scanner failed
+ *   (D1 footerLocator='none'). Wired up by a later agent (tasks 2.3/2.4).
+ * - 'bad-magic': leading (or trailing, with a trailer) magic mismatch (D2).
+ * - 'corrupt-metadata': metadata was located but failed to parse.
+ * - 'no-chunk-index': variable-size chunks with no chunk index to locate
+ *   them (D3). Wired up by a later agent (task 2.13).
+ * - 'decode-error': codec reversal / deinterleave / reassembly failed after
+ *   metadata was found and parsed successfully.
+ */
+export type ReadFailureReason =
+  | 'no-metadata'
+  | 'metadata-not-found'
+  | 'bad-magic'
+  | 'corrupt-metadata'
+  | 'no-chunk-index'
+  | 'decode-error';
+
 export interface ReadFailure {
   success: false;
-  errorMessage: string;
+  reason: ReadFailureReason;
+  message: string;
+  byteCount: number;
 }
 
 export type ReadFileResult = ReadSuccess | ReadFailure;

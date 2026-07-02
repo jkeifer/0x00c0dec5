@@ -24,7 +24,7 @@ export function ReadStatus({ readResult, showDiff, onShowDiffChange }: ReadStatu
             whiteSpace: 'pre-wrap',
           }}
         >
-          {readResult.errorMessage}
+          {readResult.message}
         </div>
       </div>
     );

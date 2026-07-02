@@ -134,7 +134,7 @@ export function StagePane({
               Cannot read file
             </div>
             <div style={{ color: colors.textSecondary, fontSize: fontSizes.sm, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-              {readResult.errorMessage}
+              {readResult.message}
             </div>
           </div>
         </div>

@@ -37,15 +37,14 @@ describe('assignType — float64 bitround (keepBits)', () => {
     expect(result.stats.isLossy).toBe(true);
   });
 
-  // KNOWN BUG DC-6 — `src/engine/typeAssign.ts` computes
+  // FIXED (DC-6, task 2.7) — `src/engine/typeAssign.ts` used to compute
   // `maskLow = keepBits >= 20 ? 0xffffffff << (52 - keepBits) : 0`. At keepBits=20,
   // `52 - 20 = 32`, and `0xffffffff << 32` wraps to `<< 0` in JS (shift amounts are
-  // taken mod 32 for 32-bit operands), producing an all-ones mask that keeps every
+  // taken mod 32 for 32-bit operands), producing an all-ones mask that kept every
   // low mantissa bit instead of truncating. Verified live: readback for keepBits=20
-  // equals Math.PI exactly, i.e. NO truncation occurs despite keepBits < 52.
-  // The fix (task 2.7) changes the boundary from `>= 20` to `> 20`.
-  // flip to it() when Phase 2 lands.
-  it.fails('keepBits=20 truncates low mantissa bits (currently keeps all of them)', () => {
+  // equaled Math.PI exactly, i.e. NO truncation occurred despite keepBits < 52.
+  // The fix changed the boundary from `>= 20` to `> 20`.
+  it('keepBits=20 truncates low mantissa bits (currently keeps all of them)', () => {
     const values = [Math.PI];
     const assignment: TypeAssignment = { storageDtype: 'float64', keepBits: 20 };
     const result = assignType(values, continuousType, assignment);
@@ -73,18 +72,16 @@ describe('assignType — float64 bitround (keepBits)', () => {
 });
 
 describe('assignType — NaN input', () => {
-  // NEW FINDING (not in remediation-plan.md Part 1): `assignType`'s min/max/mean
-  // tracking is silently broken by NaN inputs. The loop does `if (original < min) ...`
-  // / `if (original > max) ...`, but `NaN < x` and `NaN > x` are always `false` in
-  // JS, so `min` stays at its `Infinity` sentinel and `max` stays at `-Infinity`
-  // instead of reflecting the NaN input. `mean` becomes NaN (sum poisoned by NaN).
-  // Verified live: for a single-value input of `[NaN]`, `stats.min === Infinity` and
-  // `stats.max === -Infinity` (not NaN, not close to correct in any sense), and
-  // `stats.mean` is `NaN`. This corrupts the variable-statistics metadata written to
-  // the file (see `engine/metadata.ts` `variable_statistics` entry) for any dataset
-  // containing NaN. Marked it.fails to assert the CORRECT behavior (min/max should
-  // reflect/propagate NaN, not silently keep sentinel values) until this is fixed.
-  it.fails('tracks NaN in min/max instead of leaving sentinel Infinity/-Infinity values', () => {
+  // FIXED (NF-2, task 2.14) — `assignType`'s min/max/mean tracking used to be
+  // silently broken by NaN inputs. The loop did `if (original < min) ...` /
+  // `if (original > max) ...`, but `NaN < x` and `NaN > x` are always `false` in
+  // JS, so `min` stayed at its `Infinity` sentinel and `max` stayed at `-Infinity`
+  // instead of reflecting the NaN input, while `mean` went NaN (sum poisoned).
+  // Verified live (pre-fix): for a single-value input of `[NaN]`, `stats.min ===
+  // Infinity` and `stats.max === -Infinity`. Fix: NaN values are now skipped in
+  // min/max/mean accumulation and counted separately in `nanCount`; an all-NaN
+  // input reports min/max/mean as NaN instead of leaking the sentinels.
+  it('tracks NaN in min/max instead of leaving sentinel Infinity/-Infinity values', () => {
     const assignment: TypeAssignment = { storageDtype: 'int32' };
     const result = assignType([NaN], { type: 'integer', min: 0, max: 10 }, assignment);
 
@@ -92,38 +89,86 @@ describe('assignType — NaN input', () => {
     // sentinel min/max that were never touched by real data.
     expect(Number.isFinite(result.stats.min)).toBe(false);
     expect(Number.isNaN(result.stats.min)).toBe(true);
+    expect(result.stats.nanCount).toBe(1);
   });
 
-  // For float storage, NaN survives the round trip (IEEE-754 NaN is representable
-  // in float32/float64), but the rounding detector flags it as "rounded" because
-  // `NaN !== NaN` in the readback comparison (`typeAssign.ts`'s `readBack[i] !== expected`
-  // check). This makes NaN values on float dtypes register as spuriously lossy.
-  // Verified live: `stats.rounded === 1` and `stats.isLossy === true` for a single
-  // NaN value stored as float32, even though float32 represents NaN exactly.
-  it.fails('does not flag NaN as "rounded" when stored in a float dtype that represents it exactly', () => {
+  // FIXED (NF-3, task 2.14) — for float storage, NaN survives the round trip
+  // (IEEE-754 NaN is representable in float32/float64), but the rounding detector
+  // used to flag it as "rounded" because `NaN !== NaN` in the readback comparison
+  // (`typeAssign.ts`'s `readBack[i] !== expected` check). This made NaN values on
+  // float dtypes register as spuriously lossy. Verified live (pre-fix):
+  // `stats.rounded === 1` and `stats.isLossy === true` for a single NaN value
+  // stored as float32. Fix: NaN-aware comparison (Object.is/Number.isNaN on both
+  // sides) so a losslessly-stored NaN no longer counts as rounded.
+  it('does not flag NaN as "rounded" when stored in a float dtype that represents it exactly', () => {
     const assignment: TypeAssignment = { storageDtype: 'float32' };
     const result = assignType([NaN], { type: 'continuous', min: 0, max: 10, significantFigures: 6 }, assignment);
 
     expect(result.stats.rounded).toBe(0);
     expect(result.stats.isLossy).toBe(false);
+    expect(result.stats.nanCount).toBe(1);
   });
 
-  // Integer storage: Math.round(NaN) is NaN, and Math.max(min, Math.min(max, NaN))
-  // is NaN (any comparison with NaN is false, so Math.min/Math.max propagate NaN
-  // through as their "not less/greater" fallback). Writing NaN into an int32 typed
-  // array via DataView.setInt32 does not throw — verified live it silently becomes 0
-  // on readback. Documented here as a NEW FINDING: NaN silently becomes 0 for
-  // integer-backed variables with no clipped/rounded signal a user could act on
-  // (rounded is incremented, but the resulting value (0) bears no relation to NaN).
-  it.fails('does not silently coerce NaN to 0 for integer storage dtypes', () => {
+  // FIXED (NF-4, task 2.14) — integer storage: Math.round(NaN) is NaN, and
+  // Math.max(min, Math.min(max, NaN)) is NaN (any comparison with NaN is false, so
+  // Math.min/Math.max propagate NaN through as their "not less/greater" fallback).
+  // Writing NaN into an int32 typed array via DataView.setInt32 does not throw —
+  // it silently becomes 0 on readback, indistinguishable from a real zero. Per the
+  // task's pinned design: the stored-value behavior (NaN -> 0) is acceptable and
+  // unchanged; the fix is that `stats.nanCount` now explicitly records that this
+  // happened, so the UI/metadata can surface it instead of a silent, ambiguous 0.
+  it('records nanCount instead of silently coercing NaN to 0 without a signal', () => {
     const assignment: TypeAssignment = { storageDtype: 'int32' };
     const result = assignType([NaN], { type: 'integer', min: 0, max: 10 }, assignment);
     const view = new DataView(result.bytes.buffer, result.bytes.byteOffset, result.bytes.byteLength);
     const readBack = view.getInt32(0, true);
 
-    // Correct behavior per the task's contract: this should NOT silently succeed as
-    // a plain 0 — either the value should be flagged unambiguously (e.g. clipped)
-    // or the pipeline should reject/mark it distinctly from a legitimate zero.
-    expect(readBack).not.toBe(0);
+    // Storage behavior is unchanged (NaN -> 0 for integer dtypes is acceptable) —
+    // but it must never pass silently: nanCount is the explicit signal.
+    expect(readBack).toBe(0);
+    expect(result.stats.nanCount).toBe(1);
+  });
+
+  it('nanCount is 0 (always present) when there are no NaN values', () => {
+    const assignment: TypeAssignment = { storageDtype: 'int32' };
+    const result = assignType([1, 2, 3], { type: 'integer', min: 0, max: 10 }, assignment);
+
+    expect(result.stats.nanCount).toBe(0);
+  });
+
+  it('all-NaN input reports min/max/mean as NaN, not ±Infinity sentinels', () => {
+    const assignment: TypeAssignment = { storageDtype: 'float64' };
+    const result = assignType([NaN, NaN, NaN], { type: 'continuous', min: 0, max: 10, significantFigures: 6 }, assignment);
+
+    expect(result.stats.count).toBe(3);
+    expect(result.stats.nanCount).toBe(3);
+    expect(Number.isNaN(result.stats.min)).toBe(true);
+    expect(Number.isNaN(result.stats.max)).toBe(true);
+    expect(Number.isNaN(result.stats.mean)).toBe(true);
+    // Losslessly-stored NaN should not be flagged as rounded/lossy.
+    expect(result.stats.rounded).toBe(0);
+    expect(result.stats.isLossy).toBe(false);
+
+    // The all-NaN stats must remain valid JSON when serialized (as
+    // engine/metadata.ts does for the `variable_statistics` entry):
+    // JSON.stringify(NaN) becomes `null`, which does not throw and round-trips
+    // through JSON.parse as `null` rather than corrupting the document.
+    const json = JSON.stringify(result.stats);
+    expect(() => JSON.parse(json)).not.toThrow();
+    const parsed = JSON.parse(json);
+    expect(parsed.min).toBe(null);
+    expect(parsed.max).toBe(null);
+    expect(parsed.mean).toBe(null);
+  });
+
+  it('mixed NaN and real values excludes NaN from min/max/mean but counts it', () => {
+    const assignment: TypeAssignment = { storageDtype: 'float64' };
+    const result = assignType([1, NaN, 5, NaN, 3], { type: 'continuous', min: 0, max: 10, significantFigures: 6 }, assignment);
+
+    expect(result.stats.count).toBe(5);
+    expect(result.stats.nanCount).toBe(2);
+    expect(result.stats.min).toBe(1);
+    expect(result.stats.max).toBe(5);
+    expect(result.stats.mean).toBe(3);
   });
 });

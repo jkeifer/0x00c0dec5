@@ -159,6 +159,36 @@ describe('collectMetadata', () => {
     expect(keys).toContain('byte_order');
     expect(keys).toContain('interleaving');
     expect(keys).toContain('metadata_format');
+    expect(keys).toContain('chunk_order');
+    expect(keys).toContain('partitioning');
+  });
+
+  it('chunk_order reflects state.write.chunkOrder (task 2.2)', () => {
+    const state = {
+      ...DEFAULT_STATE,
+      write: { ...DEFAULT_STATE.write, chunkOrder: 'column-major' as const },
+    };
+    const entries = collectMetadata(state, [], undefined);
+    const entry = entries.find((e) => e.key === 'chunk_order');
+    expect(entry?.value).toBe('column-major');
+  });
+
+  it('partitioning reflects state.write.partitioning (task 2.2)', () => {
+    const state = {
+      ...DEFAULT_STATE,
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
+    };
+    const entries = collectMetadata(state, [], undefined);
+    const entry = entries.find((e) => e.key === 'partitioning');
+    expect(entry?.value).toBe('per-chunk');
+  });
+
+  it('chunk_index entries carry variableName when the chunk has one (task 2.1/2.2 schema)', () => {
+    const offsets = [{ coords: [0], offset: 4, size: 128, variableName: 'temperature' }];
+    const entries = collectMetadata(DEFAULT_STATE, [], undefined, offsets);
+    const entry = entries.find((e) => e.key === 'chunk_index');
+    const parsed = JSON.parse(entry!.value);
+    expect(parsed[0].variableName).toBe('temperature');
   });
 
   it('includes custom entries', () => {

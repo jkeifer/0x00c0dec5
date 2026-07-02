@@ -16,26 +16,30 @@ const delta: CodecDefinition = {
     order: { label: 'Order', type: 'number', default: 1, min: 1, max: 3, step: 1 },
   },
   applicableTo: () => true,
+  // Task 2.6 deviation from the extension spec's plain `lossy: boolean`: delta is
+  // exact for integer dtypes (post-2.5, typed-array writes wrap mod 2^N so encode
+  // and decode are perfect inverses) but lossy for float dtypes (diffs are
+  // re-rounded to the float dtype's precision). A single boolean cannot express
+  // that distinction, so `isLossy` is a predicate over the input dtype instead.
+  isLossy: (inputDtype) => getDtype(inputDtype).float,
   encode(bytes, inputDtype, params) {
     const order = Number(params.order ?? 1);
     const dtype = inputDtype as DtypeKey;
-    let values = bytesToValues(bytes, dtype);
+    const values = bytesToValues(bytes, dtype);
 
+    // Integer dtypes: diffs of integers are integers, so no rounding is needed.
+    // Typed-array writes below wrap mod 2^N (DataView setters perform ToInt32 /
+    // modulo semantics), which is what makes the round-trip exact for unsigned
+    // dtypes — do NOT clamp to the dtype range here (that was DC-2: clamping a
+    // negative diff on an unsigned dtype to 0 made the transform irreversible).
+    // Float dtypes: values are stored back at the same float precision, which is
+    // inherently lossy (see `isLossy` above) — no clamping applies to floats either.
     for (let o = 0; o < order; o++) {
       const prev = [...values];
       for (let i = values.length - 1; i >= 1; i--) {
         values[i] = values[i] - prev[i - 1];
       }
       // values[0] remains unchanged
-    }
-
-    // Clamp integer values to type range
-    const info = getDtype(dtype);
-    if (!info.float) {
-      values = values.map((v) => {
-        v = Math.round(v);
-        return Math.max(info.min, Math.min(info.max, v));
-      });
     }
 
     return { bytes: valuesToBytes(values, dtype), outputDtype: inputDtype };
@@ -45,19 +49,12 @@ const delta: CodecDefinition = {
     const dtype = encodedDtype as DtypeKey;
     const values = bytesToValues(bytes, dtype);
 
-    // Cumulative sum (prefix sum), applied `order` times
+    // Cumulative sum (prefix sum), applied `order` times. No clamping — see the
+    // encode-side comment above. The typed-array write in valuesToBytes wraps
+    // mod 2^N for integer dtypes, undoing encode's wrap exactly.
     for (let o = 0; o < order; o++) {
       for (let i = 1; i < values.length; i++) {
         values[i] = values[i] + values[i - 1];
-      }
-    }
-
-    // Clamp integer values to type range
-    const info = getDtype(dtype);
-    if (!info.float) {
-      for (let i = 0; i < values.length; i++) {
-        values[i] = Math.round(values[i]);
-        values[i] = Math.max(info.min, Math.min(info.max, values[i]));
       }
     }
 
@@ -76,6 +73,7 @@ const byteShuffle: CodecDefinition = {
     elementSize: { label: 'Element Size', type: 'number', default: 4, min: 1, max: 8, step: 1 },
   },
   applicableTo: () => true,
+  isLossy: () => false,
   encode(bytes, inputDtype, params) {
     const elementSize = Number(params.elementSize ?? 4);
     if (elementSize <= 1 || bytes.length === 0) {
@@ -135,6 +133,7 @@ const rle: CodecDefinition = {
   description: 'Run-length encoding: (count, value) byte pairs',
   params: {},
   applicableTo: () => true,
+  isLossy: () => false,
   encode(bytes, _inputDtype) {
     if (bytes.length === 0) {
       return { bytes: new Uint8Array(0), outputDtype: 'uint8' };
@@ -183,6 +182,7 @@ const lz: CodecDefinition = {
     windowSize: { label: 'Window Size', type: 'number', default: 256, min: 3, max: 32768, step: 1 },
   },
   applicableTo: () => true,
+  isLossy: () => false,
   encode(bytes, _inputDtype, params) {
     const windowSize = Number(params.windowSize ?? 256);
     if (bytes.length === 0) {
