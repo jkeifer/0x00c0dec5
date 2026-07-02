@@ -72,8 +72,8 @@ function migrateState(raw: Record<string, unknown>): AppState | null {
           const dtype = (oldVar.dtype ?? 'float32') as DtypeKey;
           const dtypeInfo = getDtype(dtype);
           const logicalType: LogicalTypeConfig = dtypeInfo.float
-            ? { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 }
-            : { type: 'integer', min: dtypeInfo.min, max: dtypeInfo.max };
+            ? { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' }
+            : { type: 'integer', min: dtypeInfo.min, max: dtypeInfo.max, generation: 'random' };
           const typeAssignment: TypeAssignment = { storageDtype: dtype };
 
           return {
@@ -174,6 +174,25 @@ function isValidVariable(v: unknown): v is Variable {
   return true;
 }
 
+const GENERATION_MODES = new Set(['random', 'smooth', 'sorted', 'stepped']);
+
+/**
+ * D9 (remediation-plan.md, Phase 6.1) migration: persisted variables from
+ * before generation modes existed have no `logicalType.generation` field
+ * (and a corrupt/hand-edited save could have an invalid one). Rather than
+ * rejecting the whole variable (isValidVariable intentionally doesn't check
+ * this field), default it to `'random'` — the pre-D9 behavior — in place.
+ */
+function normalizeGeneration(variables: Variable[]): Variable[] {
+  return variables.map((v) => {
+    const generation = (v.logicalType as unknown as Record<string, unknown>).generation;
+    if (typeof generation === 'string' && GENERATION_MODES.has(generation)) {
+      return v;
+    }
+    return { ...v, logicalType: { ...v.logicalType, generation: 'random' as const } };
+  });
+}
+
 /**
  * Validate structural invariants on an already-merged state, dropping/clamping/resetting
  * anything malformed. Mutates and returns `state` in place.
@@ -183,7 +202,7 @@ function validateState(state: AppState): AppState {
   if (!Array.isArray(state.variables)) {
     state.variables = structuredClone(DEFAULT_STATE.variables);
   } else {
-    state.variables = state.variables.filter(isValidVariable);
+    state.variables = normalizeGeneration(state.variables.filter(isValidVariable));
   }
 
   // shape: must be an array of positive integers, else fall back to defaults entirely
@@ -250,6 +269,29 @@ function validateState(state: AppState): AppState {
   return state;
 }
 
+/**
+ * Shared core of `loadState`/`validateExternalState`: migrate -> default-merge
+ * -> structurally validate a raw parsed object, forcing `dataModel` to
+ * `model` on the result. Returns `null` on anything unrecoverable.
+ */
+function loadFromRaw(parsed: unknown, model: AppState['dataModel']): AppState | null {
+  if (!isPlainObject(parsed)) return null;
+
+  const migrated = migrateState(parsed);
+  if (migrated === null) return null;
+  if (!isPlainObject(migrated)) return null;
+
+  // Clone the defaults so nothing default-derived in the returned state aliases
+  // DEFAULT_STATE's own arrays/objects — callers may mutate the loaded state.
+  const merged = deepMergeDefaults(structuredClone(DEFAULT_STATE), migrated, TOP_LEVEL_DICT_KEYS);
+  const validated = validateState(merged);
+
+  // The requested model always wins, regardless of what was persisted.
+  validated.dataModel = model;
+
+  return validated;
+}
+
 export function loadState(model: AppState['dataModel']): AppState | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS[model]);
@@ -262,21 +304,27 @@ export function loadState(model: AppState['dataModel']): AppState | null {
       return null;
     }
 
-    if (!isPlainObject(parsed)) return null;
+    return loadFromRaw(parsed, model);
+  } catch {
+    return null;
+  }
+}
 
-    const migrated = migrateState(parsed);
-    if (migrated === null) return null;
-    if (!isPlainObject(migrated)) return null;
-
-    // Clone the defaults so nothing default-derived in the returned state aliases
-    // DEFAULT_STATE's own arrays/objects — callers may mutate the loaded state.
-    const merged = deepMergeDefaults(structuredClone(DEFAULT_STATE), migrated, TOP_LEVEL_DICT_KEYS);
-    const validated = validateState(merged);
-
-    // The requested model always wins, regardless of what was persisted.
-    validated.dataModel = model;
-
-    return validated;
+/**
+ * D10 (remediation-plan.md, Phase 6.2): validate a raw external state object
+ * (a built-in preset's parsed JSON, or any other out-of-band source) through
+ * the exact same migrate -> default-merge -> validate pipeline `loadState`
+ * uses for localStorage, rather than trusting the shape or duplicating the
+ * checks. `model` is forced onto the result exactly as `loadState` forces
+ * the requested storage-key model — this is what lets a preset switch data
+ * models on load (e.g. loading a 2-D "Basically GeoTIFF" preset while the
+ * app is on the tabular model): the caller passes the preset's own
+ * `dataModel` (or any other explicit target) and gets that model back.
+ * Returns `null` if `raw` isn't even a plain object, or if migration fails.
+ */
+export function validateExternalState(raw: unknown, model: AppState['dataModel']): AppState | null {
+  try {
+    return loadFromRaw(raw, model);
   } catch {
     return null;
   }

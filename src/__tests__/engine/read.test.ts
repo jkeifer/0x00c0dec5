@@ -156,7 +156,7 @@ describe('readFile — lossy roundtrip (type assignment with float32 storage)', 
       variables: [
         {
           id: 'temp', name: 'temperature', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
           typeAssignment: { storageDtype: 'float32' },
         },
       ],
@@ -192,7 +192,7 @@ describe('readFile — lossless roundtrip with scale/offset type assignment', ()
       variables: [
         {
           id: 'temp', name: 'temperature', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
           typeAssignment: { storageDtype: 'int16', scale: 10, offset: 0 },
         },
       ],
@@ -229,7 +229,7 @@ describe('readFile — per-chunk partitioning with sidecar', () => {
       variables: [
         {
           id: 'temp', name: 'temperature', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
           typeAssignment: { storageDtype: 'float32' },
         },
       ],
@@ -290,7 +290,7 @@ describe('readFile — 2-D multi-chunk reassembly (task 2.1)', () => {
       variables: [
         {
           id: 'humidity', name: 'humidity', color: '#98c379',
-          logicalType: { type: 'integer', min: 0, max: 100 },
+          logicalType: { type: 'integer', min: 0, max: 100, generation: 'random' },
           typeAssignment: { storageDtype: 'uint16' },
         },
       ],
@@ -316,7 +316,7 @@ describe('readFile — 2-D multi-chunk reassembly (task 2.1)', () => {
       variables: [
         {
           id: 'humidity', name: 'humidity', color: '#98c379',
-          logicalType: { type: 'integer', min: 0, max: 100 },
+          logicalType: { type: 'integer', min: 0, max: 100, generation: 'random' },
           typeAssignment: { storageDtype: 'uint16' },
         },
       ],

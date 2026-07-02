@@ -115,7 +115,7 @@ describe('Values stage traceId alignment with Linearized stage', () => {
       variables: [
         {
           id: 'temp', name: 'temperature', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
           typeAssignment: { storageDtype: 'float32' },
         },
       ],
@@ -144,7 +144,7 @@ describe('Values stage traceId alignment with Linearized stage', () => {
       variables: [
         {
           id: 'v', name: 'value', color: '#e06c75',
-          logicalType: { type: 'integer', min: 0, max: 255 },
+          logicalType: { type: 'integer', min: 0, max: 255, generation: 'random' },
           typeAssignment: { storageDtype: 'uint8' },
         },
       ],
@@ -176,12 +176,12 @@ describe('row-mode codec pipeline', () => {
       variables: [
         {
           id: 'a', name: 'a', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
           typeAssignment: { storageDtype: 'float32' },
         },
         {
           id: 'b', name: 'b', color: '#61afef',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
           typeAssignment: { storageDtype: 'float32' },
         },
       ],
@@ -213,12 +213,12 @@ describe('column-mode codec pipeline', () => {
       variables: [
         {
           id: 'a', name: 'temperature', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
           typeAssignment: { storageDtype: 'float32' },
         },
         {
           id: 'b', name: 'pressure', color: '#61afef',
-          logicalType: { type: 'decimal', min: 900, max: 1100, decimalPlaces: 1 },
+          logicalType: { type: 'decimal', min: 900, max: 1100, decimalPlaces: 1, generation: 'random' },
           typeAssignment: { storageDtype: 'float32' },
         },
       ],
@@ -243,7 +243,7 @@ describe('column-mode codec pipeline', () => {
       variables: [
         {
           id: 'a', name: 'temperature', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
           typeAssignment: { storageDtype: 'float32' },
         },
       ],

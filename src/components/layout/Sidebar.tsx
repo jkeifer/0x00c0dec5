@@ -67,7 +67,7 @@ export function Sidebar() {
                 variable: {
                   id: `var_${Date.now()}`,
                   name: '',
-                  logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+                  logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
                   typeAssignment: { storageDtype: 'float32' },
                   color,
                 },

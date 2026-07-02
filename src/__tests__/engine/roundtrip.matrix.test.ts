@@ -79,7 +79,7 @@ const FLOAT64_VAR: Variable = {
   id: 'reading',
   name: 'reading',
   color: '#8899ff',
-  logicalType: { type: 'continuous', min: -1000, max: 1000, significantFigures: 10 },
+  logicalType: { type: 'continuous', min: -1000, max: 1000, significantFigures: 10, generation: 'random' },
   typeAssignment: { storageDtype: 'float64' },
 };
 
@@ -89,7 +89,7 @@ function uintVar(name: string): Variable {
     id: name,
     name,
     color: '#98c379',
-    logicalType: { type: 'integer', min: 0, max: 100 },
+    logicalType: { type: 'integer', min: 0, max: 100, generation: 'random' },
     typeAssignment: { storageDtype: 'uint16' },
   };
 }
@@ -317,7 +317,7 @@ describe('roundtrip matrix — codec pipelines (1-D single chunk, lossless dtype
   // "delta codec on unsigned dtype (DC-2)" describe block below.
   const signedVar: Variable = {
     id: 'x', name: 'x', color: '#fff',
-    logicalType: { type: 'integer', min: -500, max: 500 },
+    logicalType: { type: 'integer', min: -500, max: 500, generation: 'random' },
     typeAssignment: { storageDtype: 'int16' },
   };
 
@@ -885,7 +885,7 @@ describe('roundtrip matrix — D3 includeChunkIndex', () => {
 describe('roundtrip matrix — codec lossiness surfaced in lossyVariables (task 2.6)', () => {
   const float32Var: Variable = {
     id: 'reading', name: 'reading', color: '#e06c75',
-    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
     typeAssignment: { storageDtype: 'float32' },
   };
 

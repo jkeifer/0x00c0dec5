@@ -4,7 +4,7 @@ import type { LogicalTypeConfig, TypeAssignment } from '../../types/state.ts';
 
 describe('assignType', () => {
   describe('integer logical type', () => {
-    const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100 };
+    const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100, generation: 'random' };
 
     it('stores integers in uint16 losslessly', () => {
       const values = [0, 50, 100];
@@ -29,7 +29,7 @@ describe('assignType', () => {
     });
 
     it('stores integers in int8 with clipping for negative overflow', () => {
-      const negType: LogicalTypeConfig = { type: 'integer', min: -200, max: 200 };
+      const negType: LogicalTypeConfig = { type: 'integer', min: -200, max: 200, generation: 'random' };
       const values = [-200, 0, 200]; // -200 and 200 exceed int8 range [-128, 127]
       const assignment: TypeAssignment = { storageDtype: 'int8' };
       const result = assignType(values, negType, assignment);
@@ -40,7 +40,7 @@ describe('assignType', () => {
   });
 
   describe('decimal logical type', () => {
-    const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 };
+    const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' };
 
     it('stores decimal values in float32 (may round)', () => {
       const values = [23.4, -12.7, 0.0];
@@ -89,7 +89,7 @@ describe('assignType', () => {
   });
 
   describe('continuous logical type', () => {
-    const contType: LogicalTypeConfig = { type: 'continuous', min: -1000, max: 1000, significantFigures: 6 };
+    const contType: LogicalTypeConfig = { type: 'continuous', min: -1000, max: 1000, significantFigures: 6, generation: 'random' };
 
     it('stores continuous values in float64 losslessly', () => {
       const values = [123.456, -789.012, 0.001];
@@ -113,7 +113,7 @@ describe('assignType', () => {
   describe('keepBits (mantissa truncation)', () => {
     it('applies bitround to float32 output', () => {
       const values = [3.14159265];
-      const contType: LogicalTypeConfig = { type: 'continuous', min: 0, max: 10, significantFigures: 9 };
+      const contType: LogicalTypeConfig = { type: 'continuous', min: 0, max: 10, significantFigures: 9, generation: 'random' };
       const assignment: TypeAssignment = { storageDtype: 'float32', keepBits: 5 };
       const result = assignType(values, contType, assignment);
 
@@ -125,7 +125,7 @@ describe('assignType', () => {
   describe('statistics', () => {
     it('computes min, max, mean correctly', () => {
       const values = [10, 20, 30];
-      const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100 };
+      const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100, generation: 'random' };
       const assignment: TypeAssignment = { storageDtype: 'int32' };
       const result = assignType(values, intType, assignment);
 
@@ -136,7 +136,7 @@ describe('assignType', () => {
     });
 
     it('handles empty values', () => {
-      const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100 };
+      const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100, generation: 'random' };
       const assignment: TypeAssignment = { storageDtype: 'int32' };
       const result = assignType([], intType, assignment);
 
@@ -152,7 +152,7 @@ describe('assignType', () => {
 describe('reverseTypeAssignment', () => {
   it('reverses identity assignment (no scale/offset)', () => {
     const values = [10, 20, 30];
-    const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100 };
+    const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100, generation: 'random' };
     const assignment: TypeAssignment = { storageDtype: 'int32' };
     const { bytes } = assignType(values, intType, assignment);
 
@@ -162,7 +162,7 @@ describe('reverseTypeAssignment', () => {
 
   it('reverses scale/offset assignment', () => {
     const values = [23.4, -12.7, 0.0];
-    const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 };
+    const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' };
     const assignment: TypeAssignment = { storageDtype: 'int16', scale: 10, offset: 0 };
     const { bytes } = assignType(values, decType, assignment);
 
@@ -174,7 +174,7 @@ describe('reverseTypeAssignment', () => {
 
   it('reverses scale/offset with non-zero offset', () => {
     const values = [900, 1000, 1100];
-    const decType: LogicalTypeConfig = { type: 'decimal', min: 900, max: 1100, decimalPlaces: 0 };
+    const decType: LogicalTypeConfig = { type: 'decimal', min: 900, max: 1100, decimalPlaces: 0, generation: 'random' };
     const assignment: TypeAssignment = { storageDtype: 'int16', scale: 1, offset: 900 };
     const { bytes } = assignType(values, decType, assignment);
 
@@ -185,7 +185,7 @@ describe('reverseTypeAssignment', () => {
   it('reversal is approximate for lossy assignments', () => {
     // float32 storage of decimal value — some precision lost
     const values = [23.4];
-    const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 };
+    const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' };
     const assignment: TypeAssignment = { storageDtype: 'float32' };
     const { bytes } = assignType(values, decType, assignment);
 

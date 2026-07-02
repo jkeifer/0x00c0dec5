@@ -30,7 +30,7 @@ function makeVariable(overrides: Partial<Variable> = {}): Variable {
   return {
     id: 'v1',
     name: 'temp',
-    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
     typeAssignment: { storageDtype: 'float32' },
     color: '#e06c75',
     ...overrides,
@@ -251,6 +251,69 @@ describe('loadState — variable validation', () => {
     const result = loadState('tabular');
     expect(result).not.toBeNull();
     expect(result!.variables).toEqual(DEFAULT_STATE.variables);
+  });
+});
+
+// D9 (Phase 6.1): logicalType.generation postdates the field's introduction —
+// persisted variables from before it existed have no `generation` key at all
+// (and a hand-edited save could have an invalid one). Neither case should
+// reject the variable outright (isValidVariable doesn't check this field);
+// both should default the field to 'random', the pre-D9 behavior.
+describe('loadState — generation mode migration (D9)', () => {
+  it('defaults a variable with no logicalType.generation field to "random"', () => {
+    const legacyVar = makeVariable({ id: 'v1', name: 'temp' });
+    // Simulate a pre-D9 save: strip the field entirely.
+    const logicalTypeWithoutGeneration = { ...legacyVar.logicalType } as Record<string, unknown>;
+    delete logicalTypeWithoutGeneration.generation;
+    const raw = {
+      ...DEFAULT_STATE,
+      variables: [{ ...legacyVar, logicalType: logicalTypeWithoutGeneration }],
+    };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(raw));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.variables).toHaveLength(1);
+    expect(result!.variables[0].logicalType.generation).toBe('random');
+  });
+
+  it('defaults a variable with an invalid logicalType.generation value to "random"', () => {
+    const badVar = makeVariable({
+      id: 'v1',
+      name: 'temp',
+      logicalType: { ...makeVariable().logicalType, generation: 'not-a-mode' as never },
+    });
+    const raw = { ...DEFAULT_STATE, variables: [badVar] };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(raw));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.variables[0].logicalType.generation).toBe('random');
+  });
+
+  it('preserves a valid non-default generation mode across load', () => {
+    const sortedVar = makeVariable({
+      id: 'v1',
+      name: 'temp',
+      logicalType: { ...makeVariable().logicalType, generation: 'sorted' },
+    });
+    const raw = { ...DEFAULT_STATE, variables: [sortedVar] };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(raw));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.variables[0].logicalType.generation).toBe('sorted');
+  });
+
+  it('does not drop the variable just because generation is missing', () => {
+    const legacyVar = makeVariable({ id: 'v1', name: 'temp' });
+    const logicalTypeWithoutGeneration = { ...legacyVar.logicalType } as Record<string, unknown>;
+    delete logicalTypeWithoutGeneration.generation;
+    const raw = {
+      ...DEFAULT_STATE,
+      variables: [{ ...legacyVar, logicalType: logicalTypeWithoutGeneration }],
+    };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(raw));
+    const result = loadState('tabular');
+    expect(result!.variables).toHaveLength(1);
+    expect(result!.variables[0].id).toBe('v1');
   });
 });
 

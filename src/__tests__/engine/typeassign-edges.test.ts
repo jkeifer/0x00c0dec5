@@ -10,7 +10,7 @@ import { describe, it, expect } from 'vitest';
 import { assignType } from '../../engine/typeAssign.ts';
 import type { LogicalTypeConfig, TypeAssignment } from '../../types/state.ts';
 
-const continuousType: LogicalTypeConfig = { type: 'continuous', min: 0, max: 10, significantFigures: 15 };
+const continuousType: LogicalTypeConfig = { type: 'continuous', min: 0, max: 10, significantFigures: 15, generation: 'random' };
 
 /** Read the low/high 32-bit words of the first float64 element (little-endian). */
 function readFloat64Words(bytes: Uint8Array): { low: number; high: number; value: number } {
@@ -83,7 +83,7 @@ describe('assignType — NaN input', () => {
   // input reports min/max/mean as NaN instead of leaking the sentinels.
   it('tracks NaN in min/max instead of leaving sentinel Infinity/-Infinity values', () => {
     const assignment: TypeAssignment = { storageDtype: 'int32' };
-    const result = assignType([NaN], { type: 'integer', min: 0, max: 10 }, assignment);
+    const result = assignType([NaN], { type: 'integer', min: 0, max: 10, generation: 'random' }, assignment);
 
     // Correct behavior: a NaN-containing dataset should not report finite-looking
     // sentinel min/max that were never touched by real data.
@@ -102,7 +102,7 @@ describe('assignType — NaN input', () => {
   // sides) so a losslessly-stored NaN no longer counts as rounded.
   it('does not flag NaN as "rounded" when stored in a float dtype that represents it exactly', () => {
     const assignment: TypeAssignment = { storageDtype: 'float32' };
-    const result = assignType([NaN], { type: 'continuous', min: 0, max: 10, significantFigures: 6 }, assignment);
+    const result = assignType([NaN], { type: 'continuous', min: 0, max: 10, significantFigures: 6, generation: 'random' }, assignment);
 
     expect(result.stats.rounded).toBe(0);
     expect(result.stats.isLossy).toBe(false);
@@ -119,7 +119,7 @@ describe('assignType — NaN input', () => {
   // happened, so the UI/metadata can surface it instead of a silent, ambiguous 0.
   it('records nanCount instead of silently coercing NaN to 0 without a signal', () => {
     const assignment: TypeAssignment = { storageDtype: 'int32' };
-    const result = assignType([NaN], { type: 'integer', min: 0, max: 10 }, assignment);
+    const result = assignType([NaN], { type: 'integer', min: 0, max: 10, generation: 'random' }, assignment);
     const view = new DataView(result.bytes.buffer, result.bytes.byteOffset, result.bytes.byteLength);
     const readBack = view.getInt32(0, true);
 
@@ -131,14 +131,14 @@ describe('assignType — NaN input', () => {
 
   it('nanCount is 0 (always present) when there are no NaN values', () => {
     const assignment: TypeAssignment = { storageDtype: 'int32' };
-    const result = assignType([1, 2, 3], { type: 'integer', min: 0, max: 10 }, assignment);
+    const result = assignType([1, 2, 3], { type: 'integer', min: 0, max: 10, generation: 'random' }, assignment);
 
     expect(result.stats.nanCount).toBe(0);
   });
 
   it('all-NaN input reports min/max/mean as NaN, not ±Infinity sentinels', () => {
     const assignment: TypeAssignment = { storageDtype: 'float64' };
-    const result = assignType([NaN, NaN, NaN], { type: 'continuous', min: 0, max: 10, significantFigures: 6 }, assignment);
+    const result = assignType([NaN, NaN, NaN], { type: 'continuous', min: 0, max: 10, significantFigures: 6, generation: 'random' }, assignment);
 
     expect(result.stats.count).toBe(3);
     expect(result.stats.nanCount).toBe(3);
@@ -163,7 +163,7 @@ describe('assignType — NaN input', () => {
 
   it('mixed NaN and real values excludes NaN from min/max/mean but counts it', () => {
     const assignment: TypeAssignment = { storageDtype: 'float64' };
-    const result = assignType([1, NaN, 5, NaN, 3], { type: 'continuous', min: 0, max: 10, significantFigures: 6 }, assignment);
+    const result = assignType([1, NaN, 5, NaN, 3], { type: 'continuous', min: 0, max: 10, significantFigures: 6, generation: 'random' }, assignment);
 
     expect(result.stats.count).toBe(5);
     expect(result.stats.nanCount).toBe(2);

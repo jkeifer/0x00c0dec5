@@ -1,0 +1,77 @@
+{
+  "dataModel": "array",
+  "shape": [
+    16,
+    16
+  ],
+  "chunkShape": [
+    8,
+    8
+  ],
+  "interleaving": "column",
+  "variables": [
+    {
+      "id": "elevation",
+      "name": "elevation",
+      "color": "#61afef",
+      "logicalType": {
+        "type": "continuous",
+        "min": 0,
+        "max": 3000,
+        "significantFigures": 6,
+        "generation": "smooth"
+      },
+      "typeAssignment": {
+        "storageDtype": "float32"
+      }
+    },
+    {
+      "id": "landcover",
+      "name": "landcover",
+      "color": "#98c379",
+      "logicalType": {
+        "type": "integer",
+        "min": 0,
+        "max": 20,
+        "generation": "stepped"
+      },
+      "typeAssignment": {
+        "storageDtype": "uint8"
+      }
+    }
+  ],
+  "fieldPipelines": {
+    "elevation": [],
+    "landcover": []
+  },
+  "chunkPipeline": [],
+  "metadata": {
+    "customEntries": [
+      {
+        "key": "crs",
+        "value": "EPSG:4326"
+      },
+      {
+        "key": "transform",
+        "value": "[0.1, 0.0, -180.0, 0.0, -0.1, 90.0]"
+      }
+    ],
+    "serialization": "json",
+    "includeChunkIndex": true
+  },
+  "write": {
+    "includeMetadata": true,
+    "magicNumber": "00C0DEC5",
+    "partitioning": "single",
+    "metadataPlacement": "header",
+    "chunkOrder": "row-major",
+    "footerLocator": "trailer"
+  },
+  "ui": {
+    "leftPaneStage": "values",
+    "rightPaneStage": "write",
+    "leftPaneView": "grid",
+    "rightPaneView": "hex",
+    "showDiff": false
+  }
+}

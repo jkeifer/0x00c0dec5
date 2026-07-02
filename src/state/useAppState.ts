@@ -12,6 +12,8 @@ import { produce } from 'immer';
 import { DEFAULT_STATE, type AppState, type Variable } from '../types/state.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import { loadState, saveState, loadActiveModel, saveActiveModel } from './persistence.ts';
+import { type PresetKey, resolvePreset, saveCustomPreset, loadCustomPreset } from './presets.ts';
+import { consumeShareHash, loadCheckpoint } from './share.ts';
 
 export type AppAction =
   // SET_DATA_MODEL only sets `state.dataModel` — it is intentionally pure
@@ -198,11 +200,52 @@ interface AppStateContextValue {
    * the only caller that should ever dispatch REPLACE_STATE.
    */
   switchDataModel: (model: AppState['dataModel']) => void;
+  /**
+   * D10 (remediation-plan.md, Phase 6.2): load a built-in preset (or the
+   * 'custom' restore slot) wholesale, per the Header dropdown. Mirrors
+   * `switchDataModel`'s shape — resolve a full `AppState` out-of-band, force
+   * the resolved `dataModel`, dispatch a single `REPLACE_STATE` — but with
+   * its own snapshot step: loading any built-in preset first saves the
+   * CURRENT state (whichever model it belongs to) to the dedicated custom
+   * slot, so 'Custom (restore)' always gets back to "what I had right before
+   * I loaded a preset," regardless of how many presets were loaded since.
+   * Loading 'custom' does NOT re-snapshot (that would overwrite the very
+   * thing being restored). Per D10, this never touches the OTHER data
+   * model's own saved localStorage slot — the current model's live state is
+   * only ever written to the custom-preset key, never to
+   * `0x00c0dec5-state-{tabular,array}` here (that still only happens via the
+   * debounced autosave / `switchDataModel`).
+   */
+  loadPreset: (key: PresetKey | 'custom') => void;
+  /**
+   * Task 6.4 (remediation-plan.md, Phase 6): restore the single checkpoint
+   * slot. Mirrors `loadPreset('custom')`'s shape — resolve a full `AppState`
+   * out-of-band via `loadCheckpoint` (already routed through
+   * `validateExternalState`), force/record the resolved `dataModel` exactly
+   * like switching data models does, then dispatch one `REPLACE_STATE`.
+   * Unlike the preset custom slot, restoring does NOT clear or re-snapshot
+   * the checkpoint — it's meant to be restored repeatedly during a live
+   * talk. A no-op (does not dispatch) if no checkpoint exists or it fails
+   * validation.
+   */
+  restoreCheckpoint: () => void;
 }
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
 
 function getInitialState(): AppState {
+  // Task 6.5 (remediation-plan.md, Phase 6): a `#s=` share-state hash in the
+  // URL wins over everything else, including localStorage — it's the
+  // presenter's explicit "load exactly this" link. `consumeShareHash`
+  // strips the hash unconditionally (success or failure) so a later reload
+  // falls through to the normal load instead of resurrecting stale shared
+  // state from the address bar.
+  const shared = consumeShareHash();
+  if (shared) {
+    saveActiveModel(shared.dataModel);
+    return shared;
+  }
+
   // SW-5: restore whichever model was last active, not always the default
   // model's slot.
   const activeModel = loadActiveModel() ?? DEFAULT_STATE.dataModel;
@@ -278,9 +321,56 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const loadPreset = useCallback(
+    (key: PresetKey | 'custom') => {
+      const currentState = stateRef.current;
+
+      if (key === 'custom') {
+        // Restore the snapshot taken before the most recent preset load.
+        // Deliberately does NOT re-snapshot currentState — that would
+        // overwrite the very thing being restored.
+        const restored = loadCustomPreset();
+        if (!restored) return;
+        saveActiveModel(restored.dataModel);
+        dispatch({ type: 'REPLACE_STATE', state: restored });
+        return;
+      }
+
+      const preset = resolvePreset(key);
+      if (!preset) return;
+
+      // D10: snapshot current state to the custom slot FIRST, before
+      // replacing it — regardless of whether the preset switches data
+      // models. This never writes to the OTHER model's own
+      // `0x00c0dec5-state-{model}` key, only to the dedicated custom-preset
+      // key, so the other model's saved state (from the normal debounced
+      // autosave) is left completely untouched.
+      saveCustomPreset(currentState);
+
+      saveActiveModel(preset.dataModel);
+      dispatch({ type: 'REPLACE_STATE', state: preset });
+    },
+    [],
+  );
+
+  const restoreCheckpoint = useCallback(() => {
+    // Task 6.4: handle a checkpoint saved from the OTHER dataModel exactly
+    // like loadPreset('custom') handles a cross-model custom snapshot —
+    // force the resolved state's dataModel to win and record it as active
+    // (SW-5) so a fresh page load restores the same model, then persist
+    // under that model's own key (mirrors switchDataModel's "save the
+    // resolved state" behavior) so the restore isn't lost if the debounced
+    // autosave hasn't fired yet before e.g. a demo reload.
+    const restored = loadCheckpoint();
+    if (!restored) return;
+    saveActiveModel(restored.dataModel);
+    saveState(restored);
+    dispatch({ type: 'REPLACE_STATE', state: restored });
+  }, []);
+
   return createElement(
     AppStateContext.Provider,
-    { value: { state, dispatch, switchDataModel } },
+    { value: { state, dispatch, switchDataModel, loadPreset, restoreCheckpoint } },
     children,
   );
 }

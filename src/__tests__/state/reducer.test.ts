@@ -37,7 +37,7 @@ function makeVariable(overrides: Partial<Variable> = {}): Variable {
   return {
     id: 'v1',
     name: 'temp',
-    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
     typeAssignment: { storageDtype: 'float32' },
     color: '#e06c75',
     ...overrides,
@@ -171,7 +171,7 @@ describe('UPDATE_VARIABLE', () => {
     const result = reducer(state, {
       type: 'UPDATE_VARIABLE',
       id: 'v1',
-      changes: { logicalType: { type: 'integer', min: 0, max: 100 } },
+      changes: { logicalType: { type: 'integer', min: 0, max: 100, generation: 'random' } },
     });
     expect(result.variables[0].logicalType.type).toBe('integer');
     expect(result.variables[0].name).toBe('temp');

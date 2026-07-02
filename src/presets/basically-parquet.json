@@ -1,0 +1,98 @@
+{
+  "dataModel": "tabular",
+  "shape": [
+    64
+  ],
+  "chunkShape": [
+    16
+  ],
+  "interleaving": "column",
+  "variables": [
+    {
+      "id": "temperature",
+      "name": "temperature",
+      "color": "#e06c75",
+      "logicalType": {
+        "type": "decimal",
+        "min": -50,
+        "max": 50,
+        "decimalPlaces": 1,
+        "generation": "smooth"
+      },
+      "typeAssignment": {
+        "storageDtype": "float32"
+      }
+    },
+    {
+      "id": "pressure",
+      "name": "pressure",
+      "color": "#61afef",
+      "logicalType": {
+        "type": "decimal",
+        "min": 900,
+        "max": 1100,
+        "decimalPlaces": 1,
+        "generation": "sorted"
+      },
+      "typeAssignment": {
+        "storageDtype": "float32"
+      }
+    },
+    {
+      "id": "humidity",
+      "name": "humidity",
+      "color": "#98c379",
+      "logicalType": {
+        "type": "integer",
+        "min": 0,
+        "max": 100,
+        "generation": "stepped"
+      },
+      "typeAssignment": {
+        "storageDtype": "uint16"
+      }
+    }
+  ],
+  "fieldPipelines": {
+    "temperature": [],
+    "pressure": [],
+    "humidity": [
+      {
+        "codec": "delta",
+        "params": {
+          "order": 1
+        }
+      },
+      {
+        "codec": "rle",
+        "params": {}
+      }
+    ]
+  },
+  "chunkPipeline": [],
+  "metadata": {
+    "customEntries": [
+      {
+        "key": "created_by",
+        "value": "0x00C0DEC5"
+      }
+    ],
+    "serialization": "json",
+    "includeChunkIndex": true
+  },
+  "write": {
+    "includeMetadata": true,
+    "magicNumber": "00C0DEC5",
+    "partitioning": "single",
+    "metadataPlacement": "footer",
+    "chunkOrder": "row-major",
+    "footerLocator": "trailer"
+  },
+  "ui": {
+    "leftPaneStage": "values",
+    "rightPaneStage": "write",
+    "leftPaneView": "table",
+    "rightPaneView": "hex",
+    "showDiff": false
+  }
+}

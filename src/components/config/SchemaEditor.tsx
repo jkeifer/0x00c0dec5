@@ -18,6 +18,22 @@ const LOGICAL_TYPES: { value: LogicalType; label: string }[] = [
   { value: 'continuous', label: 'Continuous' },
 ];
 
+// D9 (remediation-plan.md, Phase 6.1): one-line descriptions shown next to
+// the generation-mode select and as its tooltip.
+const GENERATION_DESCRIPTIONS: Record<LogicalTypeConfig['generation'], string> = {
+  smooth: 'smooth — like temperature over time',
+  sorted: 'sorted — like timestamps or IDs',
+  stepped: 'stepped — constant regions, occasional jumps',
+  random: 'random — noise; watch compression fail',
+};
+
+const GENERATION_MODES: { value: LogicalTypeConfig['generation']; label: string }[] = [
+  { value: 'random', label: 'Random' },
+  { value: 'smooth', label: 'Smooth' },
+  { value: 'sorted', label: 'Sorted' },
+  { value: 'stepped', label: 'Stepped' },
+];
+
 export function SchemaEditor({
   variables,
   shape,
@@ -204,7 +220,12 @@ export function SchemaEditor({
                     value={v.logicalType.type}
                     onChange={(e) => {
                       const newType = e.target.value as LogicalType;
-                      const base: LogicalTypeConfig = { type: newType, min: v.logicalType.min, max: v.logicalType.max };
+                      const base: LogicalTypeConfig = {
+                        type: newType,
+                        min: v.logicalType.min,
+                        max: v.logicalType.max,
+                        generation: v.logicalType.generation,
+                      };
                       if (newType === 'decimal') base.decimalPlaces = 1;
                       if (newType === 'continuous') base.significantFigures = 6;
                       onUpdateVariable(v.id, { logicalType: base });
@@ -258,6 +279,38 @@ export function SchemaEditor({
                       />
                     </>
                   )}
+                </div>
+
+                {/* Generation mode row (D9) */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
+                  <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>gen</span>
+                  <select
+                    value={v.logicalType.generation}
+                    onChange={(e) =>
+                      updateLogicalType(v, { generation: e.target.value as LogicalTypeConfig['generation'] })
+                    }
+                    data-testid={`generation-mode-${varIdx}`}
+                    title={GENERATION_DESCRIPTIONS[v.logicalType.generation]}
+                    style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
+                  >
+                    {GENERATION_MODES.map((gm) => (
+                      <option key={gm.value} value={gm.value}>{gm.label}</option>
+                    ))}
+                  </select>
+                  <span
+                    style={{
+                      fontSize: fontSizes.xs,
+                      color: colors.textTertiary,
+                      fontStyle: 'italic',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
+                    {GENERATION_DESCRIPTIONS[v.logicalType.generation]}
+                  </span>
                 </div>
               </div>
             );

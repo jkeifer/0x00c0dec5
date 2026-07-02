@@ -1,14 +1,88 @@
+import { useState } from 'react';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 import { Radio } from '../shared/Radio.tsx';
 import { useAppState } from '../../state/useAppState.ts';
+import { PRESET_OPTIONS, type PresetKey } from '../../state/presets.ts';
+import { saveCheckpoint, hasCheckpoint, buildShareUrl } from '../../state/share.ts';
 
 const MODEL_OPTIONS = [
   { value: 'tabular', label: 'Tabular' },
   { value: 'array', label: 'N-d Array' },
 ];
 
+/** Sentinel placeholder value for the preset `<select>` — never a real
+ * option, so the select always shows 'Presets…' after firing a load (D10:
+ * "it's an action menu, not persistent state," not a control bound to any
+ * piece of AppState). */
+const PRESET_PLACEHOLDER = '';
+
+/** Compact header-button style shared by the checkpoint/restore/share
+ * controls — matches the preset `<select>`'s sizing/border/font so the three
+ * new controls read as one cohesive group. */
+const headerButtonStyle: React.CSSProperties = {
+  background: colors.surfaceInput,
+  color: colors.textPrimary,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 3,
+  padding: `${spacing.xs - 1}px ${spacing.xs}px`,
+  fontSize: fontSizes.sm,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+};
+
+/** Copy `text` to the clipboard, preferring the async Clipboard API and
+ * falling back to a hidden-textarea + `execCommand('copy')` for contexts
+ * where `navigator.clipboard` is unavailable (e.g. insecure/non-HTTPS
+ * origins, some embedded browsers, or when clipboard-write permission is
+ * denied but a synchronous user-gesture copy is still allowed). */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to the execCommand fallback below
+  }
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 export function Header() {
-  const { state, switchDataModel } = useAppState();
+  const { state, switchDataModel, loadPreset, restoreCheckpoint } = useAppState();
+  const [checkpointLabel, setCheckpointLabel] = useState('Save checkpoint');
+  const [canRestore, setCanRestore] = useState(() => hasCheckpoint());
+  const [shareLabel, setShareLabel] = useState('Share');
+
+  function handleSaveCheckpoint() {
+    saveCheckpoint(state);
+    setCanRestore(true);
+    setCheckpointLabel('Saved ✓');
+    setTimeout(() => setCheckpointLabel('Save checkpoint'), 1200);
+  }
+
+  function handleRestoreCheckpoint() {
+    restoreCheckpoint();
+  }
+
+  async function handleShare() {
+    const url = buildShareUrl(state);
+    const copied = await copyToClipboard(url);
+    setShareLabel(copied ? 'Copied ✓' : 'Copy failed');
+    setTimeout(() => setShareLabel('Share'), 1200);
+  }
 
   return (
     <div
@@ -23,17 +97,83 @@ export function Header() {
         flexShrink: 0,
       }}
     >
-      <span
-        style={{
-          fontFamily: fonts.mono,
-          fontSize: fontSizes.lg,
-          color: colors.textPrimary,
-          fontWeight: 600,
-          letterSpacing: '0.5px',
-        }}
-      >
-        0x00C0DEC5
-      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: spacing.md }}>
+        <span
+          style={{
+            fontFamily: fonts.mono,
+            fontSize: fontSizes.lg,
+            color: colors.textPrimary,
+            fontWeight: 600,
+            letterSpacing: '0.5px',
+          }}
+        >
+          0x00C0DEC5
+        </span>
+        <select
+          value={PRESET_PLACEHOLDER}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value === PRESET_PLACEHOLDER) return;
+            loadPreset(value as PresetKey | 'custom');
+            // Action menu, not persistent state (D10) — the select always
+            // shows the placeholder again after firing a load, achieved here
+            // by controlling `value` to the placeholder unconditionally
+            // rather than tracking the selection in component state.
+            e.target.blur();
+          }}
+          data-testid="preset-select"
+          style={{
+            background: colors.surfaceInput,
+            color: colors.textPrimary,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 3,
+            padding: `${spacing.xs - 1}px ${spacing.xs}px`,
+            fontSize: fontSizes.sm,
+            fontFamily: 'inherit',
+            cursor: 'pointer',
+            outline: 'none',
+          }}
+        >
+          <option value={PRESET_PLACEHOLDER} disabled hidden>
+            Presets…
+          </option>
+          {PRESET_OPTIONS.map((opt) => (
+            <option key={opt.key} value={opt.key}>
+              {opt.label}
+            </option>
+          ))}
+          <option value="custom">Custom (restore)</option>
+        </select>
+        <button
+          type="button"
+          onClick={handleSaveCheckpoint}
+          data-testid="save-checkpoint"
+          style={headerButtonStyle}
+        >
+          {checkpointLabel}
+        </button>
+        <button
+          type="button"
+          onClick={handleRestoreCheckpoint}
+          disabled={!canRestore}
+          data-testid="restore-checkpoint"
+          style={{
+            ...headerButtonStyle,
+            opacity: canRestore ? 1 : 0.4,
+            cursor: canRestore ? 'pointer' : 'default',
+          }}
+        >
+          Restore
+        </button>
+        <button
+          type="button"
+          onClick={handleShare}
+          data-testid="share-state"
+          style={headerButtonStyle}
+        >
+          {shareLabel}
+        </button>
+      </div>
       <Radio
         options={MODEL_OPTIONS}
         value={state.dataModel}

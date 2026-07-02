@@ -4,12 +4,27 @@ import type { StageName } from './pipeline.ts';
 
 export type LogicalType = 'integer' | 'decimal' | 'continuous';
 
+/**
+ * D9 (remediation-plan.md, Phase 6.1): how raw values are generated before
+ * logicalType rounding is applied. `generate.ts`'s `generateValues` reads
+ * this to pick an algorithm; all four are deterministic from the existing
+ * variable-name + global-seed scheme.
+ * - 'random': current uniform behavior — incompressible by construction, the
+ *   deliberate "why won't this compress?" contrast case.
+ * - 'smooth': a bounded random walk — like a sensor reading drifting over time.
+ * - 'sorted': monotonic non-decreasing — like timestamps or IDs.
+ * - 'stepped': piecewise-constant with occasional jumps — like a control state.
+ */
+export type GenerationMode = 'random' | 'smooth' | 'sorted' | 'stepped';
+
 export interface LogicalTypeConfig {
   type: LogicalType;
   min: number;
   max: number;
   decimalPlaces?: number;       // decimal only
   significantFigures?: number;  // continuous only
+  /** D9: generation algorithm. Missing on migrated saves defaults to 'random'. */
+  generation: GenerationMode;
 }
 
 export interface TypeAssignment {
@@ -83,17 +98,17 @@ export interface AppState {
 export const DEFAULT_VARIABLES: Variable[] = [
   {
     id: 'temperature', name: 'temperature', color: '#e06c75',
-    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 },
+    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'smooth' },
     typeAssignment: { storageDtype: 'float32' },
   },
   {
     id: 'pressure', name: 'pressure', color: '#61afef',
-    logicalType: { type: 'decimal', min: 900, max: 1100, decimalPlaces: 1 },
+    logicalType: { type: 'decimal', min: 900, max: 1100, decimalPlaces: 1, generation: 'sorted' },
     typeAssignment: { storageDtype: 'float32' },
   },
   {
     id: 'humidity', name: 'humidity', color: '#98c379',
-    logicalType: { type: 'integer', min: 0, max: 100 },
+    logicalType: { type: 'integer', min: 0, max: 100, generation: 'stepped' },
     typeAssignment: { storageDtype: 'uint16' },
   },
 ];

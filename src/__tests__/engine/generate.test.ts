@@ -47,9 +47,9 @@ describe('hashSeed', () => {
 });
 
 describe('generateValues', () => {
-  const floatType: LogicalTypeConfig = { type: 'continuous', min: -1000, max: 1000, significantFigures: 6 };
-  const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100 };
-  const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1 };
+  const floatType: LogicalTypeConfig = { type: 'continuous', min: -1000, max: 1000, significantFigures: 6, generation: 'random' };
+  const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100, generation: 'random' };
+  const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' };
 
   it('produces the correct number of values', () => {
     const values = generateValues('test', floatType, 100);

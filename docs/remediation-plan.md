@@ -659,6 +659,11 @@ shipped model (spot-check: design.md contains "Type Assignment", "footer locator
 
 ### Phase 5 (optional) — Performance headroom
 
+**SKIPPED (measured 2026-07-01)**: full `computePipelineStages` at the 10K-element warning
+limit (3 variables, delta+shuffle+rle pipeline, metadata on) benchmarks at **~75ms**; with the
+Phase 3.2 memo split, interactive edits recompute only a stage suffix. No user-visible jank at
+the tool's design limits — the items below stay on file in case future features change the math.
+
 Only if the tool still feels janky at large element counts after 3.2:
 
 - [ ] Replace per-byte `ByteTrace` objects with columnar/interval representations
@@ -670,7 +675,7 @@ Only if the tool still feels janky at large element counts after 3.2:
 Phases 0–4 produce a *correct* app. This phase produces the app the design doc's Talk Workflow
 actually needs. These are not bugs — they are missing substance, ordered by pedagogical leverage.
 
-- [ ] **6.1 Data generation modes (D9 — highest leverage, do this first).** Uniform random
+- [x] **6.1 Data generation modes (D9 — highest leverage, do this first).** Uniform random
       data is incompressible by construction: delta *widens* the distribution, RLE inflates,
       LZ finds no matches, entropy stays pinned near 8 bits/byte. The tool's core dramatic
       arc — watch structure get exploited into fewer bytes — cannot happen with the current
@@ -678,21 +683,21 @@ actually needs. These are not bugs — they are missing substance, ordered by pe
       starter-variable defaults, migration, and compressibility-signature tests exactly per
       D9, plus a per-variable mode selector in SchemaEditor (with one-line descriptions —
       "smooth: like temperature over time").
-- [ ] **6.2 Presets (D10).** The Talk Workflow depends on them twice: recovery when audience
+- [x] **6.2 Presets (D10).** The Talk Workflow depends on them twice: recovery when audience
       choices go sideways, and the payoff moments ("what you just built is basically Parquet").
       Implement storage/loading per D10, with a Header dropdown UI. Built-ins:
       **"Basically Parquet"** (1-D, column-oriented, per-column codecs, footer metadata with
       the D1 trailer — the punchline writes itself), **"Basically GeoTIFF"** (2-D, tiled
       chunks, header metadata, CRS custom entries), **"Basically Zarr"** (2-D, per-chunk
       files, sidecar JSON metadata). Loading a built-in never destroys the custom slot.
-- [ ] **6.3 Export/download.** A "Download" button per file in the FileExplorer (Blob +
+- [x] **6.3 Export/download.** A "Download" button per file in the FileExplorer (Blob +
       object URL; zip via a tiny lib or sequential downloads for per-chunk mode). The audience
       watches bytes evolve and then *opens the actual file in a hex editor* — the credibility
       moment the whole tool builds toward. Small effort, disproportionate payoff.
-- [ ] **6.4 Checkpoint/restore (undo-lite).** Full undo/redo is v2; a live talk needs a safety
+- [x] **6.4 Checkpoint/restore (undo-lite).** Full undo/redo is v2; a live talk needs a safety
       net now. "Save checkpoint" / "Restore checkpoint" buttons (one slot, in-memory +
       localStorage). Combined with presets this covers demo recovery for ~10% of undo's cost.
-- [ ] **6.5 Shareable state URLs (optional).** Encode `AppState` into the URL hash
+- [x] **6.5 Shareable state URLs (optional).** Encode `AppState` into the URL hash
       (`persistence.ts` was explicitly designed for swappable backends). The presenter's final
       config becomes a link the audience takes home. Cheap; also makes bug reports reproducible.
 
@@ -701,12 +706,16 @@ with worktree isolation (6.2 and 6.4 both touch the Header UI and persistence �
 carefully or serialize those two).
 
 **Acceptance gate**: a new `tests/ui/scenario-talk-arc.mjs` that walks the full talk arc —
-load defaults → add delta+RLE to the sorted variable and assert the Encoded byte count
-*drops* below Typed and strip entropy decreases → load "Basically Parquet" and assert footer
-placement + trailer active → download a file and assert the blob's first bytes are the magic
-→ toggle include-metadata off/on and assert Read fail/success → save checkpoint, make three
-config changes, restore, assert state round-trips — all without touching localStorage
+load defaults → add delta+RLE to **humidity (stepped uint16)** and assert the Encoded byte
+count *drops* below Typed and strip entropy decreases → load "Basically Parquet" and assert
+footer placement + trailer active → download a file and assert the blob's first bytes are the
+magic → toggle include-metadata off/on and assert Read fail/success → save checkpoint, make
+three config changes, restore, assert state round-trips — all without touching localStorage
 devtools or reloading. Plus D9's compressibility-signature engine tests green.
+*(Amended during execution: the original text said "the sorted variable", but pressure —
+sorted per D9 — is float32-stored, and delta+RLE on IEEE-754 float diffs inflates rather than
+compresses (verified at the engine level). That inflation is itself a documented lesson: floats
+don't compress until quantized via type assignment. The clean compression beat uses humidity.)*
 
 ---
 
