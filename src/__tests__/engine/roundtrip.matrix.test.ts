@@ -114,13 +114,13 @@ function runRoundTrip(state: AppState): RunResult {
 
   const expectedByVar = new Map<string, number[]>();
   for (const v of state.variables) {
-    expectedByVar.set(v.name, generateValues(v.name, v.logicalType, totalElements));
+    expectedByVar.set(v.name, generateValues(v.name, v.logicalType, totalElements) as number[]);
   }
 
   const actualByVar = new Map<string, number[]>();
   if (readResult.success) {
     for (const v of state.variables) {
-      actualByVar.set(v.name, readResult.reconstructedValues.get(v.name) ?? []);
+      actualByVar.set(v.name, (readResult.reconstructedValues.get(v.name) ?? []) as number[]);
     }
   }
 
@@ -434,8 +434,8 @@ describe('roundtrip matrix — variable dtype coverage', () => {
     if (!readResult.success) return;
     const totalElements = state.shape.reduce((a, b) => a * b, 1);
     for (const v of state.variables) {
-      const expected = generateValues(v.name, v.logicalType, totalElements);
-      const actual = readResult.reconstructedValues.get(v.name)!;
+      const expected = generateValues(v.name, v.logicalType, totalElements) as number[];
+      const actual = readResult.reconstructedValues.get(v.name)! as number[];
       expect(actual.length).toBe(expected.length);
       const isLossy = variableStats.get(v.name)?.isLossy ?? false;
       const tol = isLossy ? 0.01 : 1e-9;
@@ -469,8 +469,8 @@ describe('roundtrip matrix — variable dtype coverage', () => {
     if (!readResult.success) return;
     const totalElements = state.shape.reduce((a, b) => a * b, 1);
     for (const v of variables) {
-      const expected = generateValues(v.name, v.logicalType, totalElements);
-      const actual = readResult.reconstructedValues.get(v.name)!;
+      const expected = generateValues(v.name, v.logicalType, totalElements) as number[];
+      const actual = readResult.reconstructedValues.get(v.name)! as number[];
       const isLossy = variableStats.get(v.name)?.isLossy ?? false;
       const tol = isLossy ? 0.01 : 1e-9;
       for (let i = 0; i < expected.length; i++) {
@@ -517,8 +517,8 @@ describe('roundtrip matrix — metadata serialization x placement', () => {
         if (!readResult.success) return;
         const totalElements = state.shape.reduce((a, b) => a * b, 1);
         for (const v of state.variables) {
-          const expected = generateValues(v.name, v.logicalType, totalElements);
-          const actual = readResult.reconstructedValues.get(v.name)!;
+          const expected = generateValues(v.name, v.logicalType, totalElements) as number[];
+          const actual = readResult.reconstructedValues.get(v.name)! as number[];
           const isLossy = variableStats.get(v.name)?.isLossy ?? false;
           const tol = isLossy ? 0.01 : 1e-9;
           for (let i = 0; i < expected.length; i++) {
@@ -789,8 +789,8 @@ describe('roundtrip matrix — D1 footerLocator', () => {
       if (!readResult.success) return;
       const totalElements = state.shape.reduce((a, b) => a * b, 1);
       for (const v of state.variables) {
-        const expected = generateValues(v.name, v.logicalType, totalElements);
-        const actual = readResult.reconstructedValues.get(v.name)!;
+        const expected = generateValues(v.name, v.logicalType, totalElements) as number[];
+        const actual = readResult.reconstructedValues.get(v.name)! as number[];
         const isLossy = variableStats.get(v.name)?.isLossy ?? false;
         const tol = isLossy ? 0.01 : 1e-9;
         for (let i = 0; i < expected.length; i++) {

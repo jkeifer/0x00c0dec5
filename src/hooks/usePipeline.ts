@@ -12,7 +12,7 @@ import type {
   VariableStats,
 } from '../types/pipeline.ts';
 import { buildChunkRegions } from '../components/viewers/viewerUtils.ts';
-import type { DtypeKey } from '../types/dtypes.ts';
+import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
 import { getDtype } from '../types/dtypes.ts';
 import { generateValues } from '../engine/generate.ts';
 import { assignType } from '../engine/typeAssign.ts';
@@ -21,7 +21,7 @@ import { linearizeChunk } from '../engine/linearize.ts';
 import { runCodecPipeline, shannonEntropy } from '../engine/codecs.ts';
 import { collectMetadata, serializeMetadata } from '../engine/metadata.ts';
 import { assembleFiles } from '../engine/write.ts';
-import { valuesToBytes } from '../engine/elements.ts';
+import { valuesToBytes, bytesToValues } from '../engine/elements.ts';
 import { formatValue, formatLogicalValue } from '../engine/elements.ts';
 import { isChunkLevelTrace, makeTraceId } from '../engine/trace.ts';
 import { readFile } from '../engine/read.ts';
@@ -48,12 +48,46 @@ function makeStage(name: string, bytes: Uint8Array, traces: ByteTrace[]): Pipeli
 function buildLogicalValuesStage(
   variables: Pick<Variable, 'name' | 'color'>[],
   shape: number[],
-  valuesByName: Map<string, number[]>,
+  valuesByName: Map<string, LogicalValue[]>,
 ): { bytes: Uint8Array; traces: ByteTrace[] } {
   const partBytes: Uint8Array[] = [];
   const traces: ByteTrace[] = [];
   for (const v of variables) {
     const vals = valuesByName.get(v.name) ?? [];
+
+    if (vals.some((x) => typeof x === 'string')) {
+      // Text variables: at the Values stage each FULL, untruncated string is
+      // encoded as raw ASCII with byteCount = str.length — variable stride
+      // here vs. the fixed charN stride at Typed IS the lesson. Both
+      // HexView/FlatView are trace-driven, so variable stride is safe.
+      for (let i = 0; i < vals.length; i++) {
+        const str = String(vals[i]);
+        const strBytes = new Uint8Array(str.length);
+        for (let c = 0; c < str.length; c++) {
+          const code = str.charCodeAt(c);
+          strBytes[c] = code <= 0x7f ? code : 0x3f; // '?'
+        }
+        partBytes.push(strBytes);
+
+        const coords = flatIndexToCoords(i, shape);
+        const traceId = makeTraceId(v.name, coords);
+        for (let b = 0; b < str.length; b++) {
+          traces.push({
+            traceId,
+            variableName: v.name,
+            variableColor: v.color,
+            coords,
+            displayValue: str,
+            dtype: 'text',
+            chunkId: '',
+            byteInValue: b,
+            byteCount: str.length,
+          });
+        }
+      }
+      continue;
+    }
+
     const bytes = valuesToBytes(vals, 'float64');
     partBytes.push(bytes);
 
@@ -87,7 +121,7 @@ function buildLogicalValuesStage(
 
 export interface ValuesStageResult {
   stage: PipelineStage;
-  variableValues: Map<string, number[]>;
+  variableValues: Map<string, LogicalValue[]>;
 }
 
 export function computeValuesStage(
@@ -96,7 +130,7 @@ export function computeValuesStage(
 ): ValuesStageResult {
   const totalElements = shape.reduce((a, b) => a * b, 1);
 
-  const variableValues = new Map<string, number[]>();
+  const variableValues = new Map<string, LogicalValue[]>();
   for (const v of variables) {
     variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }
@@ -113,19 +147,19 @@ export function computeValuesStage(
 
 export interface TypedStageResult {
   stage: PipelineStage;
-  typedVariableValues: Map<string, number[]>;
+  typedVariableValues: Map<string, LogicalValue[]>;
   variableStats: Map<string, VariableStats>;
 }
 
 export function computeTypedStage(
   shape: number[],
   variables: Variable[],
-  variableValues: Map<string, number[]>,
+  variableValues: Map<string, LogicalValue[]>,
 ): TypedStageResult {
   const typedPartBytes: Uint8Array[] = [];
   const typedTraces: ByteTrace[] = [];
   const variableStats = new Map<string, VariableStats>();
-  const typedVariableValues = new Map<string, number[]>();
+  const typedVariableValues = new Map<string, LogicalValue[]>();
 
   for (const v of variables) {
     const vals = variableValues.get(v.name) ?? [];
@@ -136,10 +170,10 @@ export function computeTypedStage(
     typedPartBytes.push(result.bytes);
     variableStats.set(v.name, result.stats);
 
-    // Read back the typed values for use in chunking
-    const typedVals = Array.from(
-      new (dtypeInfo.TypedArray)(result.bytes.buffer as ArrayBuffer, result.bytes.byteOffset, vals.length),
-    );
+    // Read back the typed values for use in chunking — bytesToValues has the
+    // same LE semantics as the TypedArray view it replaced, and handles char
+    // dtypes (strings) through the same single code path.
+    const typedVals = bytesToValues(result.bytes, storageDtype);
     typedVariableValues.set(v.name, typedVals);
 
     for (let i = 0; i < vals.length; i++) {
@@ -188,7 +222,7 @@ export function computeLinearizedStage(
   chunkShape: number[],
   interleaving: 'row' | 'column',
   variables: Variable[],
-  typedVariableValues: Map<string, number[]>,
+  typedVariableValues: Map<string, LogicalValue[]>,
 ): LinearizedStageResult {
   const chunkVariables = variables.map((v) => ({
     ...v,
@@ -348,7 +382,7 @@ export function computeFilesStage(
 export interface ReadStageResult {
   stage: PipelineStage;
   readResult: ReadFileResult;
-  logicalValues: Map<string, number[]>;
+  logicalValues: Map<string, LogicalValue[]>;
 }
 
 export function computeReadStage(
@@ -362,7 +396,7 @@ export function computeReadStage(
   const readResult = readFile(files, { magic: hexToBytes(magicNumber) });
 
   if (readResult.success) {
-    const logicalValues = new Map<string, number[]>();
+    const logicalValues = new Map<string, LogicalValue[]>();
     for (const v of variables) {
       logicalValues.set(v.name, readResult.reconstructedValues.get(v.name) ?? []);
     }
@@ -389,9 +423,9 @@ export interface PipelineResult {
    * consume this instead of re-decoding `stages[0].bytes` themselves — fixes
    * UI-9 and the two other byte-slicing copies in TableView/GridView.
    */
-  logicalValues: Map<string, number[]>;
+  logicalValues: Map<string, LogicalValue[]>;
   /** D6: Typed-stage source arrays, keyed by variable NAME. */
-  typedValues: Map<string, number[]>;
+  typedValues: Map<string, LogicalValue[]>;
 }
 
 export function computePipelineStages(state: AppState): PipelineResult {

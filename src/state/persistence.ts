@@ -1,7 +1,7 @@
 import type { AppState, Variable, LogicalTypeConfig, TypeAssignment } from '../types/state.ts';
 import { DEFAULT_STATE } from '../types/state.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
-import { getDtype, DTYPE_KEYS } from '../types/dtypes.ts';
+import { getDtype, DTYPE_KEYS, isCharDtype } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import type { StageName } from '../types/pipeline.ts';
 import { STAGE_ORDER } from '../types/pipeline.ts';
@@ -193,6 +193,30 @@ function normalizeGeneration(variables: Variable[]): Variable[] {
   });
 }
 
+const WORD_SET_KEYS = new Set(['names', 'cities', 'countries', 'stations']);
+
+/**
+ * Text-variable normalization (additive, no migration): a text variable from
+ * a hand-edited or partial save gets `wordSet` defaulted to 'names', and a
+ * non-char `storageDtype` coerced to 'char8' (the engine's text branches key
+ * on `isCharDtype(storageDtype)`, so a text variable with numeric storage
+ * would silently stringify numbers). Non-text variables pass through.
+ */
+function normalizeText(variables: Variable[]): Variable[] {
+  return variables.map((v) => {
+    if (v.logicalType.type !== 'text') return v;
+    let out = v;
+    const wordSet = (v.logicalType as unknown as Record<string, unknown>).wordSet;
+    if (typeof wordSet !== 'string' || !WORD_SET_KEYS.has(wordSet)) {
+      out = { ...out, logicalType: { ...out.logicalType, wordSet: 'names' as const } };
+    }
+    if (!isCharDtype(out.typeAssignment.storageDtype)) {
+      out = { ...out, typeAssignment: { ...out.typeAssignment, storageDtype: 'char8' as const } };
+    }
+    return out;
+  });
+}
+
 /**
  * Validate structural invariants on an already-merged state, dropping/clamping/resetting
  * anything malformed. Mutates and returns `state` in place.
@@ -202,7 +226,7 @@ function validateState(state: AppState): AppState {
   if (!Array.isArray(state.variables)) {
     state.variables = structuredClone(DEFAULT_STATE.variables);
   } else {
-    state.variables = normalizeGeneration(state.variables.filter(isValidVariable));
+    state.variables = normalizeText(normalizeGeneration(state.variables.filter(isValidVariable)));
   }
 
   // shape: must be an array of positive integers, else fall back to defaults entirely

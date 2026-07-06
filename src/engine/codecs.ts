@@ -1,7 +1,7 @@
 import type { CodecDefinition, CodecStep } from '../types/codecs.ts';
 import type { ByteTrace } from '../types/pipeline.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
-import { getDtype } from '../types/dtypes.ts';
+import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import { bytesToValues, valuesToBytes } from './elements.ts';
 import { propagateTracesValuePreserving, degradeTracesToChunkLevel } from './trace.ts';
 
@@ -20,7 +20,13 @@ const delta: CodecDefinition = {
   // perfect inverses, including on uint8. Only float dtypes warrant the
   // applicability warning: taking a difference and storing it back at the
   // same float precision re-rounds the value (see `isLossy` below).
-  applicableTo: (dtype) => !getDtype(dtype as DtypeKey).float,
+  // Char dtypes also warn: "differences between words" is meaningless, so
+  // encode/decode below fall back to byte-wise (uint8) delta — still a
+  // lossless roundtrip (warnings never block), just not a useful transform.
+  applicableTo: (dtype) => {
+    const key = dtype as DtypeKey;
+    return !getDtype(key).float && !isCharDtype(key);
+  },
   // Task 2.6 deviation from the extension spec's plain `lossy: boolean`: delta is
   // exact for integer dtypes (post-2.5, typed-array writes wrap mod 2^N so encode
   // and decode are perfect inverses) but lossy for float dtypes (diffs are
@@ -29,8 +35,11 @@ const delta: CodecDefinition = {
   isLossy: (inputDtype) => getDtype(inputDtype).float,
   encode(bytes, inputDtype, params) {
     const order = Number(params.order ?? 1);
-    const dtype = inputDtype as DtypeKey;
-    const values = bytesToValues(bytes, dtype);
+    // Char guard (symmetric with decode): bytesToValues on a char dtype
+    // returns strings, and string arithmetic is NaN garbage. Treat char
+    // input as raw uint8 bytes instead — byte-wise delta, lossless.
+    const dtype = isCharDtype(inputDtype as DtypeKey) ? 'uint8' : inputDtype as DtypeKey;
+    const values = bytesToValues(bytes, dtype) as number[];
 
     // Integer dtypes: diffs of integers are integers, so no rounding is needed.
     // Typed-array writes below wrap mod 2^N (DataView setters perform ToInt32 /
@@ -51,8 +60,9 @@ const delta: CodecDefinition = {
   },
   decode(bytes, encodedDtype, params) {
     const order = Number(params.order ?? 1);
-    const dtype = encodedDtype as DtypeKey;
-    const values = bytesToValues(bytes, dtype);
+    // Symmetric char guard — see encode above.
+    const dtype = isCharDtype(encodedDtype as DtypeKey) ? 'uint8' : encodedDtype as DtypeKey;
+    const values = bytesToValues(bytes, dtype) as number[];
 
     // Cumulative sum (prefix sum), applied `order` times. No clamping — see the
     // encode-side comment above. The typed-array write in valuesToBytes wraps
@@ -75,7 +85,7 @@ const byteShuffle: CodecDefinition = {
   category: 'reordering',
   description: 'Transpose bytes by position within each element',
   params: {
-    elementSize: { label: 'Element Size', type: 'number', default: 4, min: 1, max: 8, step: 1 },
+    elementSize: { label: 'Element Size', type: 'number', default: 4, min: 1, max: 16, step: 1 },
   },
   // Task 4.3 (UI-4): `applicableTo` only receives the input dtype, not the
   // step's `elementSize` param, so this can only judge dtype-level
@@ -345,7 +355,11 @@ export function stepWarnings(steps: CodecStep[], inputDtype: DtypeKey): string[]
     const dtypeInfo = getDtype(dtype);
 
     if (!codec.applicableTo(dtype)) {
-      if (step.codec === 'delta') {
+      if (step.codec === 'delta' && dtypeInfo.char) {
+        warnings.push(
+          `Delta on ${dtypeInfo.label} has no numeric meaning — it falls back to byte-wise differences (lossless, but rarely useful for text).`,
+        );
+      } else if (step.codec === 'delta') {
         warnings.push(
           `Delta on ${dtypeInfo.label} is lossy — differences are re-rounded to float precision each step (integer dtypes round-trip exactly; this is why).`,
         );

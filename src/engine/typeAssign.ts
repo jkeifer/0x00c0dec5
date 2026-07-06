@@ -1,7 +1,7 @@
-import type { DtypeKey } from '../types/dtypes.ts';
+import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
 import type { LogicalTypeConfig, TypeAssignment } from '../types/state.ts';
 import type { VariableStats } from '../types/pipeline.ts';
-import { getDtype } from '../types/dtypes.ts';
+import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import { valuesToBytes, bytesToValues } from './elements.ts';
 
 export interface TypeAssignResult {
@@ -20,12 +20,38 @@ export interface TypeAssignResult {
  * 4. Track statistics: clipped/rounded counts
  */
 export function assignType(
-  values: number[],
+  values: LogicalValue[],
   _logicalType: LogicalTypeConfig,
   assignment: TypeAssignment,
 ): TypeAssignResult {
   const outDtype = assignment.storageDtype;
   const outInfo = getDtype(outDtype);
+
+  // Text branch: charN storage stringifies, truncates to width, and
+  // space-pads (see valuesToBytes). Numeric stats don't apply; the one lossy
+  // signal is truncation — a value longer than the dtype's width loses its
+  // tail irrecoverably.
+  if (isCharDtype(outDtype)) {
+    let truncated = 0;
+    for (const v of values) {
+      if (String(v).length > outInfo.size) truncated++;
+    }
+    return {
+      bytes: valuesToBytes(values, outDtype),
+      stats: {
+        min: 0,
+        max: 0,
+        mean: 0,
+        count: values.length,
+        clipped: 0,
+        rounded: 0,
+        nanCount: 0,
+        truncated,
+        isLossy: truncated > 0,
+      },
+      outputDtype: outDtype,
+    };
+  }
   const hasScaleOffset = (assignment.scale !== undefined && assignment.scale !== 1) ||
     (assignment.offset !== undefined && assignment.offset !== 0);
   const scale = assignment.scale ?? 1;
@@ -42,7 +68,7 @@ export function assignType(
   const transformed: number[] = new Array(values.length);
 
   for (let i = 0; i < values.length; i++) {
-    const original = values[i];
+    const original = values[i] as number; // numeric path (char handled above)
     // NF-2: skip NaN in min/max/mean accumulation — `NaN < x` / `NaN > x` are always
     // false, so leaving NaN in the comparisons silently keeps the ±Infinity sentinels
     // while `sum` gets poisoned to NaN. Count NaN separately instead.
@@ -104,9 +130,9 @@ export function assignType(
 
   // For float types, detect rounding by reading back
   if (outInfo.float) {
-    const readBack = bytesToValues(bytes, outDtype);
+    const readBack = bytesToValues(bytes, outDtype) as number[];
     for (let i = 0; i < values.length; i++) {
-      let expected = values[i];
+      let expected = values[i] as number;
       if (hasScaleOffset) {
         expected = (expected - offset) * scale;
       }
@@ -157,12 +183,18 @@ export function assignType(
 export function reverseTypeAssignment(
   bytes: Uint8Array,
   assignment: TypeAssignment,
-): number[] {
+): LogicalValue[] {
   let dtype = assignment.storageDtype;
 
   // keepBits is irrecoverable (like bitround), so no reversal needed for it
   // Just read the values and reverse scale/offset
   const values = bytesToValues(bytes, dtype);
+
+  // Char storage: bytesToValues already produced right-trimmed strings, and
+  // there is no scale/offset to reverse for text.
+  if (isCharDtype(dtype)) {
+    return values;
+  }
 
   const hasScaleOffset = (assignment.scale !== undefined && assignment.scale !== 1) ||
     (assignment.offset !== undefined && assignment.offset !== 0);
@@ -174,7 +206,7 @@ export function reverseTypeAssignment(
   const scale = assignment.scale ?? 1;
   const offset = assignment.offset ?? 0;
 
-  return values.map((v) => v / scale + offset);
+  return (values as number[]).map((v) => v / scale + offset);
 }
 
 /** Apply mantissa bit truncation to float bytes. */

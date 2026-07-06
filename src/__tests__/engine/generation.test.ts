@@ -129,7 +129,7 @@ describe('generation modes — compressibility signatures', () => {
       const logicalType: LogicalTypeConfig = {
         type: 'decimal', min: -10, max: 10, decimalPlaces: 2, generation: mode,
       };
-      const values = generateValues('dec-var', logicalType, COUNT);
+      const values = generateValues('dec-var', logicalType, COUNT) as number[];
       for (const v of values) {
         expect(v).toBeGreaterThanOrEqual(-10);
         expect(v).toBeLessThanOrEqual(10);
@@ -152,7 +152,7 @@ describe('generation modes — compressibility signatures', () => {
   describe('mode-specific shape invariants', () => {
     it('sorted produces a monotonic non-decreasing sequence', () => {
       const logicalType = makeLogicalType('sorted', { type: 'continuous', significantFigures: 10 });
-      const values = generateValues('sorted-shape', logicalType, COUNT);
+      const values = generateValues('sorted-shape', logicalType, COUNT) as number[];
       for (let i = 1; i < values.length; i++) {
         expect(values[i]).toBeGreaterThanOrEqual(values[i - 1]);
       }
@@ -176,7 +176,7 @@ describe('generation modes — compressibility signatures', () => {
 
     it('smooth produces small step-to-step deltas relative to the full range', () => {
       const logicalType = makeLogicalType('smooth', { type: 'continuous', min: 0, max: 1000, significantFigures: 10 });
-      const values = generateValues('smooth-shape', logicalType, COUNT);
+      const values = generateValues('smooth-shape', logicalType, COUNT) as number[];
       const maxStep = Math.max(...values.slice(1).map((v, i) => Math.abs(v - values[i])));
       // Step size is bounded by range/16 (~62.5); allow slack for the
       // logicalType rounding pass, still far below a uniform-random jump.

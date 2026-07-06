@@ -11,6 +11,8 @@
  * so state.ts importing `StageName` from here cannot create a cycle; the
  * reverse (this file importing from state.ts) is never needed.
  */
+import type { LogicalValue } from './dtypes.ts';
+
 export type StageName =
   | 'values'
   | 'typed'
@@ -70,7 +72,7 @@ export interface ChunkVariable {
   variableName: string;
   variableColor: string;
   dtype: string;
-  values: number[];
+  values: LogicalValue[];
   sourceCoords: number[][];
 }
 
@@ -108,11 +110,13 @@ export interface VariableStats {
                       // For integer storage dtypes, NaN silently becomes 0 on write
                       // (DataView.setIntN(NaN) => 0) — nanCount is what lets the UI
                       // / metadata distinguish that from a legitimate zero.
+  truncated?: number; // text (charN) storage only: count of values longer than
+                      // the dtype's width, cut to fit. truncated > 0 => isLossy.
 }
 
 export interface ReadSuccess {
   success: true;
-  reconstructedValues: Map<string, number[]>;
+  reconstructedValues: Map<string, LogicalValue[]>;
   lossyVariables: Set<string>;
 }
 

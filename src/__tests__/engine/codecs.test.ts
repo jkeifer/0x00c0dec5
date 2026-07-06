@@ -585,3 +585,91 @@ describe('shannonEntropy', () => {
     expect(e).toBeLessThanOrEqual(8);
   });
 });
+
+describe('codecs on charN input', () => {
+  const words = ['Nairobi', 'Nairobi', 'Nairobi', 'Osaka', 'Osaka', 'Lima'];
+  const charBytes = valuesToBytes(words, 'char8');
+
+  it('RLE roundtrips char8 bytes exactly', () => {
+    const rle = CODEC_REGISTRY['rle'];
+    const encoded = rle.encode(charBytes, 'char8', {});
+    expect(encoded.outputDtype).toBe('uint8');
+    const decoded = rle.decode(encoded.bytes, 'uint8', {});
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(charBytes));
+    expect(bytesToValues(decoded.bytes, 'char8')).toEqual(words);
+  });
+
+  it('RLE shrinks padding-dominated text chunks (short words in a wide char dtype)', () => {
+    // Byte-level RLE can't exploit repeated multi-byte words (no same-byte
+    // runs — that's LZ's win); its text payoff is runs of space padding.
+    const repeated = valuesToBytes(new Array(32).fill('Lima'), 'char16');
+    const encoded = CODEC_REGISTRY['rle'].encode(repeated, 'char16', {});
+    expect(encoded.bytes.length).toBeLessThan(repeated.length);
+  });
+
+  it('LZ shrinks repeated-word (stepped text) chunks', () => {
+    const repeated = valuesToBytes(new Array(32).fill('Nairobi'), 'char8');
+    const encoded = CODEC_REGISTRY['lz'].encode(repeated, 'char8', { windowSize: 256 });
+    expect(encoded.bytes.length).toBeLessThan(repeated.length);
+  });
+
+  it('LZ roundtrips char8 bytes exactly (prefix-heavy station IDs)', () => {
+    const stations = valuesToBytes(['WX-0007-A', 'WX-0007-B', 'WX-0014-A', 'WX-0014-B'], 'char16');
+    const lz = CODEC_REGISTRY['lz'];
+    const encoded = lz.encode(stations, 'char16', { windowSize: 256 });
+    const decoded = lz.decode(encoded.bytes, 'uint8', { windowSize: 256 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(stations));
+  });
+
+  it('delta on char input falls back to byte-wise delta and roundtrips exactly (symmetric guard)', () => {
+    const delta = CODEC_REGISTRY['delta'];
+    const encoded = delta.encode(charBytes, 'char8', { order: 1 });
+    // Dtype is preserved (delta is not an entropy codec)...
+    expect(encoded.outputDtype).toBe('char8');
+    // ...and the encoded bytes are NOT the input (the transform actually ran).
+    expect(Array.from(encoded.bytes)).not.toEqual(Array.from(charBytes));
+    const decoded = delta.decode(encoded.bytes, 'char8', { order: 1 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(charBytes));
+    expect(bytesToValues(decoded.bytes, 'char8')).toEqual(words);
+  });
+
+  it('delta-on-char roundtrips through runCodecPipeline + reverseCodecPipeline dtype flow', () => {
+    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    const result = runCodecPipeline(charBytes, makeSimpleTraces(charBytes.length), steps, 'char8');
+    expect(result.outputDtype).toBe('char8');
+    const decoded = CODEC_REGISTRY['delta'].decode(result.bytes, 'char8', { order: 1 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(charBytes));
+  });
+
+  it('byte-shuffle accepts elementSize 16 (char16) and roundtrips', () => {
+    expect(CODEC_REGISTRY['byte-shuffle'].params.elementSize.max).toBe(16);
+    const bytes = valuesToBytes(['Dar es Salaam', 'Kuala Lumpur'], 'char16');
+    const shuffle = CODEC_REGISTRY['byte-shuffle'];
+    const encoded = shuffle.encode(bytes, 'char16', { elementSize: 16 });
+    const decoded = shuffle.decode(encoded.bytes, 'char16', { elementSize: 16 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(bytes));
+  });
+
+  it('stepWarnings flags delta-on-char with the byte-wise fallback message', () => {
+    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    const warnings = stepWarnings(steps, 'char8');
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatch(/byte-wise/);
+  });
+
+  it('stepWarnings flags byte-shuffle elementSize mismatch against char16', () => {
+    const steps: CodecStep[] = [{ codec: 'byte-shuffle', params: { elementSize: 8 } }];
+    const warnings = stepWarnings(steps, 'char16');
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatch(/doesn't match dtype size 16/);
+  });
+
+  it('stepWarnings is clean for RLE/LZ/matched-shuffle on char dtypes', () => {
+    const steps: CodecStep[] = [
+      { codec: 'byte-shuffle', params: { elementSize: 8 } },
+      { codec: 'rle', params: {} },
+      { codec: 'lz', params: { windowSize: 256 } },
+    ];
+    expect(stepWarnings(steps, 'char8')).toEqual([]);
+  });
+});

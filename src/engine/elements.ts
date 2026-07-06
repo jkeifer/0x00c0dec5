@@ -1,26 +1,52 @@
-import { getDtype } from '../types/dtypes.ts';
-import type { DtypeKey } from '../types/dtypes.ts';
+import { getDtype, isCharDtype } from '../types/dtypes.ts';
+import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
 
 type DataViewSetter = (byteOffset: number, value: number, littleEndian?: boolean) => void;
 type DataViewGetter = (byteOffset: number, littleEndian?: boolean) => number;
 
-/** Convert an array of typed values to little-endian bytes. */
-export function valuesToBytes(values: number[], dtype: DtypeKey): Uint8Array {
+/**
+ * Convert an array of typed values to little-endian bytes.
+ *
+ * charN dtypes: each value is stringified, non-ASCII chars replaced with '?',
+ * truncated to N chars, and space-padded to exactly N bytes. (ASCII-only this
+ * phase — UTF-8 truncation mid-codepoint is a great future lesson, out of scope.)
+ */
+export function valuesToBytes(values: LogicalValue[], dtype: DtypeKey): Uint8Array {
   const info = getDtype(dtype);
   const byteLength = values.length * info.size;
+
+  if (isCharDtype(dtype)) {
+    const out = new Uint8Array(byteLength);
+    out.fill(0x20); // space padding
+    for (let i = 0; i < values.length; i++) {
+      const str = String(values[i]);
+      const n = Math.min(str.length, info.size);
+      for (let c = 0; c < n; c++) {
+        const code = str.charCodeAt(c);
+        out[i * info.size + c] = code <= 0x7f ? code : 0x3f; // '?'
+      }
+    }
+    return out;
+  }
+
   const buffer = new ArrayBuffer(byteLength);
   const view = new DataView(buffer);
 
   const setter = getDataViewSetter(view, dtype);
   for (let i = 0; i < values.length; i++) {
-    setter(i * info.size, values[i], true);
+    setter(i * info.size, values[i] as number, true);
   }
 
   return new Uint8Array(buffer);
 }
 
-/** Convert little-endian bytes back to typed values. */
-export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): number[] {
+/**
+ * Convert little-endian bytes back to typed values.
+ *
+ * charN dtypes: each N-byte slice decodes to an ASCII string with trailing
+ * spaces (the padding) trimmed.
+ */
+export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): LogicalValue[] {
   const info = getDtype(dtype);
   const count = bytes.length / info.size;
   if (!Number.isInteger(count)) {
@@ -36,8 +62,20 @@ export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): number[] {
       `doesn't match the expected layout for this dtype.`,
     );
   }
+  if (isCharDtype(dtype)) {
+    const values: LogicalValue[] = new Array(count);
+    for (let i = 0; i < count; i++) {
+      let str = '';
+      for (let c = 0; c < info.size; c++) {
+        str += String.fromCharCode(bytes[i * info.size + c]);
+      }
+      values[i] = trimTrailingSpaces(str);
+    }
+    return values;
+  }
+
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const values: number[] = new Array(count);
+  const values: LogicalValue[] = new Array(count);
 
   const getter = getDataViewGetter(view, dtype);
   for (let i = 0; i < count; i++) {
@@ -47,8 +85,17 @@ export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): number[] {
   return values;
 }
 
-/** Format a numeric value for display based on dtype. */
-export function formatValue(value: number, dtype: DtypeKey): string {
+function trimTrailingSpaces(str: string): string {
+  let end = str.length;
+  while (end > 0 && str[end - 1] === ' ') end--;
+  return str.slice(0, end);
+}
+
+/** Format a typed value for display based on dtype. */
+export function formatValue(value: LogicalValue, dtype: DtypeKey): string {
+  if (typeof value === 'string') {
+    return trimTrailingSpaces(value);
+  }
   const info = getDtype(dtype);
   if (info.float) {
     return value.toPrecision(6);
@@ -57,11 +104,7 @@ export function formatValue(value: number, dtype: DtypeKey): string {
 }
 
 /** Format a logical value for display (exact, no binary dtype artifacts). */
-export function formatLogicalValue(value: number): string {
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
-  // Show exact decimal representation
+export function formatLogicalValue(value: LogicalValue): string {
   return String(value);
 }
 
@@ -83,6 +126,11 @@ function getDataViewSetter(view: DataView, dtype: DtypeKey): DataViewSetter {
       return view.setFloat32.bind(view);
     case 'float64':
       return view.setFloat64.bind(view);
+    case 'char4':
+    case 'char8':
+    case 'char16':
+      // Unreachable: valuesToBytes handles char dtypes before reaching here.
+      throw new Error(`char dtypes have no DataView setter (${dtype})`);
   }
 }
 
@@ -104,5 +152,10 @@ function getDataViewGetter(view: DataView, dtype: DtypeKey): DataViewGetter {
       return view.getFloat32.bind(view);
     case 'float64':
       return view.getFloat64.bind(view);
+    case 'char4':
+    case 'char8':
+    case 'char16':
+      // Unreachable: bytesToValues handles char dtypes before reaching here.
+      throw new Error(`char dtypes have no DataView getter (${dtype})`);
   }
 }

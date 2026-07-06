@@ -1,8 +1,8 @@
 import type { VirtualFile, ReadFileResult, ReadFailureReason } from '../types/pipeline.ts';
-import type { DtypeKey } from '../types/dtypes.ts';
+import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import type { TypeAssignment } from '../types/state.ts';
-import { getDtype } from '../types/dtypes.ts';
+import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import { bytesToValues, valuesToBytes } from './elements.ts';
 import {
   deserializeMetadata,
@@ -688,8 +688,8 @@ function chunkGeometry(coords: number[], chunkShape: number[], shape: number[]):
  * their global row-major positions — the exact inverse of `chunk.ts`'s
  * `extractChunkValues`. */
 function scatterChunkValues(
-  target: number[],
-  chunkValues: number[],
+  target: LogicalValue[],
+  chunkValues: LogicalValue[],
   coords: number[],
   chunkShape: number[],
   shape: number[],
@@ -756,8 +756,13 @@ function resolveChunkIndex(
     }
     const bytesPerElement = new Map(schema.map((v) => [v.name, getDtype(v.dtype).size]));
     const entries: ChunkIndexEntry[] = [];
+    // Offset accumulates ACROSS variables: write.ts lays out a column-mode
+    // single file variable-grouped (all of var A's chunks, then var B's), so
+    // each variable's chunks start where the previous variable's ended.
+    // (Resetting per variable was a latent bug only visible with 2+ variables
+    // and includeChunkIndex=false.)
+    let offset = magicLength;
     for (const varInfo of schema) {
-      let offset = magicLength;
       const elemSize = bytesPerElement.get(varInfo.name)!;
       for (const coords of coordsList) {
         const size = chunkGeometry(coords, chunkShape, shape).elementCount * elemSize;
@@ -796,16 +801,19 @@ function hasSizeChangingCodec(steps: CodecStep[]): boolean {
 function reconstructValues(
   ctx: ReassemblyContext,
   getChunkBytes: ChunkBytesReader,
-): Map<string, number[]> {
+): Map<string, LogicalValue[]> {
   const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, chunkIndex, totalElements } = ctx;
-  const result = new Map<string, number[]>();
+  const result = new Map<string, LogicalValue[]>();
 
   if (interleaving === 'column') {
     // Column mode: each chunk_index entry belongs to exactly one variable
     // (carries variableName); decode it with that variable's field pipeline
     // and scatter its chunk-local row-major values to global positions.
     for (const varInfo of schema) {
-      const values: number[] = new Array(totalElements).fill(0);
+      // Char variables reconstruct into '' (the text analogue of 0) so a
+      // missing chunk leaves an empty string, not a bogus numeric zero.
+      const fill: LogicalValue = isCharDtype(varInfo.dtype) ? '' : 0;
+      const values: LogicalValue[] = new Array(totalElements).fill(fill);
       const steps = fieldPipelines?.[varInfo.name] ?? [];
       const varEntries = (chunkIndex ?? []).filter((e) => e.variableName === varInfo.name);
 
@@ -827,7 +835,7 @@ function reconstructValues(
     const inputDtype = rowModeInputDtype(schema);
 
     for (const varInfo of schema) {
-      result.set(varInfo.name, new Array(totalElements).fill(0));
+      result.set(varInfo.name, new Array(totalElements).fill(isCharDtype(varInfo.dtype) ? '' : 0));
     }
 
     for (const entry of chunkIndex ?? []) {
@@ -863,9 +871,9 @@ function deinterleaveRowChunk(
   bytes: Uint8Array,
   schema: SchemaEntry[],
   chunkElementCount: number,
-): Map<string, number[]> {
+): Map<string, LogicalValue[]> {
   const bytesPerElement = schema.reduce((sum, v) => sum + getDtype(v.dtype).size, 0);
-  const result = new Map<string, number[]>();
+  const result = new Map<string, LogicalValue[]>();
   for (const varInfo of schema) {
     result.set(varInfo.name, []);
   }
@@ -890,7 +898,7 @@ function deinterleaveRowChunk(
 /** Reverse a type assignment on already-decoded numeric values: re-encode to
  * bytes and call the shared `reverseTypeAssignment` rather than
  * re-implementing scale/offset reversal inline here. */
-function reverseTypeAssignmentValues(values: number[], assignment: TypeAssignment): number[] {
+function reverseTypeAssignmentValues(values: LogicalValue[], assignment: TypeAssignment): LogicalValue[] {
   const bytes = valuesToBytes(values, assignment.storageDtype);
   return reverseTypeAssignment(bytes, assignment);
 }

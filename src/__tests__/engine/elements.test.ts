@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { valuesToBytes, bytesToValues, formatValue } from '../../engine/elements.ts';
 import { DTYPE_KEYS } from '../../types/dtypes.ts';
-import type { DtypeKey } from '../../types/dtypes.ts';
+import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
 
 describe('valuesToBytes / bytesToValues roundtrip', () => {
   it.each(DTYPE_KEYS)('roundtrips %s values correctly', (dtype) => {
@@ -12,7 +12,7 @@ describe('valuesToBytes / bytesToValues roundtrip', () => {
     if (dtype === 'float32' || dtype === 'float64') {
       expect(result.length).toBe(testValues.length);
       for (let i = 0; i < testValues.length; i++) {
-        expect(result[i]).toBeCloseTo(testValues[i], dtype === 'float32' ? 5 : 10);
+        expect(result[i]).toBeCloseTo(testValues[i] as number, dtype === 'float32' ? 5 : 10);
       }
     } else {
       expect(result).toEqual(testValues);
@@ -113,7 +113,7 @@ describe('formatValue', () => {
   });
 });
 
-function getTestValues(dtype: DtypeKey): number[] {
+function getTestValues(dtype: DtypeKey): LogicalValue[] {
   switch (dtype) {
     case 'int8':
       return [-128, -1, 0, 1, 127];
@@ -131,5 +131,60 @@ function getTestValues(dtype: DtypeKey): number[] {
       return [-1000, -1.5, 0, 1.5, 1000];
     case 'float64':
       return [-1e100, -1.5, 0, 1.5, 1e100];
+    // charN roundtrip values must fit the width exactly (longer values
+    // truncate) and carry no trailing spaces (padding trims on read).
+    case 'char4':
+      return ['a', 'ab', 'abc', 'abcd', ''];
+    case 'char8':
+      return ['Nairobi', 'Osaka', 'WX-01-A', ''];
+    case 'char16':
+      return ['Dar es Salaam', 'Ulaanbaatar', 'x', ''];
   }
 }
+
+describe('charN dtypes', () => {
+  it('truncates values longer than the width', () => {
+    const bytes = valuesToBytes(['Alexandria'], 'char4');
+    expect(bytes.length).toBe(4);
+    expect(bytesToValues(bytes, 'char4')).toEqual(['Alex']);
+  });
+
+  it('space-pads short values to exactly N bytes', () => {
+    const bytes = valuesToBytes(['Lima'], 'char8');
+    expect(bytes.length).toBe(8);
+    expect(Array.from(bytes.slice(4))).toEqual([0x20, 0x20, 0x20, 0x20]);
+    expect(bytesToValues(bytes, 'char8')).toEqual(['Lima']);
+  });
+
+  it('roundtrips exact-width values', () => {
+    expect(bytesToValues(valuesToBytes(['abcd'], 'char4'), 'char4')).toEqual(['abcd']);
+    expect(bytesToValues(valuesToBytes(['WX-0042-A'], 'char16'), 'char16')).toEqual(['WX-0042-A']);
+  });
+
+  it('roundtrips the empty string (all padding trims away)', () => {
+    const bytes = valuesToBytes([''], 'char8');
+    expect(bytes.length).toBe(8);
+    expect(bytesToValues(bytes, 'char8')).toEqual(['']);
+  });
+
+  it('preserves internal spaces while trimming only trailing padding', () => {
+    expect(bytesToValues(valuesToBytes(['Sao Paulo'], 'char16'), 'char16')).toEqual(['Sao Paulo']);
+  });
+
+  it("replaces non-ASCII characters with '?'", () => {
+    const bytes = valuesToBytes(['Zoë'], 'char4'); // 'Zoe' + combining diaeresis
+    expect(bytesToValues(bytes, 'char4')).toEqual(['Zoe?']);
+  });
+
+  it('stringifies numeric input (degenerate but never crashes)', () => {
+    expect(bytesToValues(valuesToBytes([42], 'char4'), 'char4')).toEqual(['42']);
+  });
+
+  it('still throws on a byte count that is not a whole number of values', () => {
+    expect(() => bytesToValues(new Uint8Array(5), 'char4')).toThrow(/not a whole number/);
+  });
+
+  it('formatValue trims trailing spaces on strings', () => {
+    expect(formatValue('Lima    ', 'char8')).toBe('Lima');
+  });
+});

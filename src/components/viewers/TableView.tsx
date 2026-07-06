@@ -1,7 +1,7 @@
 import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Variable } from '../../types/state.ts';
-import type { DtypeKey } from '../../types/dtypes.ts';
+import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
 import { formatValue, formatLogicalValue } from '../../engine/elements.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
@@ -21,10 +21,10 @@ interface TableViewProps {
    * here. TableView only ever renders the Values/Typed/Read stages (see
    * StagePane's view-mode gating), so this is always populated for it.
    */
-  values: Map<string, number[]>;
+  values: Map<string, LogicalValue[]>;
   chunkTraceMap?: Map<string, Set<string>>;
   traceChunkMap?: Map<string, string>;
-  diffValues?: Map<string, number[]>;
+  diffValues?: Map<string, LogicalValue[]>;
   showDiff?: boolean;
   isLogicalValues?: boolean; // true for Values/Read stage (float64 logical values) — controls display formatting only
 }
@@ -38,7 +38,7 @@ const HEADER_HEIGHT_WITH_DIFF = 42;
 
 interface ColumnData {
   variable: Variable;
-  values: number[];
+  values: LogicalValue[];
   dtype: DtypeKey;
 }
 
@@ -268,10 +268,14 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
                 // flagged a losslessly round-tripped NaN as a diff (NaN !==
                 // NaN in JS). `isDiffValue` treats NaN-vs-NaN as equal.
                 const hasDiff = showDiff && val !== undefined && origVal !== undefined && isDiffValue(val, origVal);
-                const diffDelta = hasDiff ? val - origVal! : 0;
+                // Δ math is number-only; string diffs (text variables) show
+                // "original → reconstructed" without a numeric delta.
+                const isNumericDiff = hasDiff && typeof val === 'number' && typeof origVal === 'number';
+                const diffDelta = isNumericDiff ? (val as number) - (origVal as number) : 0;
                 const diffBg = hasDiff ? colors.warningDim : undefined;
                 const diffTitle = hasDiff
-                  ? `Original: ${formatLogicalValue(origVal!)} → Reconstructed: ${formatLogicalValue(val)} (Δ = ${diffDelta >= 0 ? '+' : ''}${diffDelta.toPrecision(4)})`
+                  ? `Original: ${formatLogicalValue(origVal!)} → Reconstructed: ${formatLogicalValue(val!)}` +
+                    (isNumericDiff ? ` (Δ = ${diffDelta >= 0 ? '+' : ''}${diffDelta.toPrecision(4)})` : '')
                   : undefined;
 
                 // Format value based on whether this is logical or typed stage

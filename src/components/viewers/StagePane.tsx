@@ -4,6 +4,7 @@ import { Radio } from '../shared/Radio.tsx';
 import type { StageName } from '../../types/pipeline.ts';
 import { STAGE_ORDER } from '../../types/pipeline.ts';
 import type { Variable } from '../../types/state.ts';
+import type { LogicalValue } from '../../types/dtypes.ts';
 import { usePipelineContext } from '../../state/PipelineContext.tsx';
 import { HexView, type HexSection } from './HexView.tsx';
 import { FlatView } from './FlatView.tsx';
@@ -111,7 +112,7 @@ export function StagePane({
       ? typedValues
       : isReadStage && readResult.success
         ? readResult.reconstructedValues
-        : new Map<string, number[]>();
+        : new Map<string, LogicalValue[]>();
   // Task 4.4 (fixes UI-6): all non-Values/Typed/Read stages (Linearized,
   // Encoded, Metadata, Write) get the same Hex+Flat mode set.
   const viewModes = isValuesStage

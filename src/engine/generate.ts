@@ -1,6 +1,90 @@
-import type { LogicalTypeConfig, GenerationMode } from '../types/state.ts';
+import type { LogicalTypeConfig, GenerationMode, WordSetKey } from '../types/state.ts';
+import type { LogicalValue } from '../types/dtypes.ts';
 
 const DEFAULT_GLOBAL_SEED = 0xc0dec5;
+
+// ─── Word sets for text variables ───────────────────────────────────────────
+//
+// All four sets are ASCII-transliterated and sorted lexicographically (JS
+// default sort), with no trailing spaces (the charN write path space-pads to
+// width, so a trailing space would break the write→read roundtrip). Sorted
+// order is what makes every generation mode meaningful for free: random =
+// random draws, sorted = lexicographically non-decreasing, stepped =
+// constant categorical runs (the RLE payoff), smooth = drifting between
+// alphabetical neighbors.
+
+// 81 entries, longest 9 chars — given names spanning East/South Asian,
+// African, European, Latin American, Middle Eastern, and Pacific origins.
+const NAMES: string[] = [
+  'Aarav', 'Abebe', 'Adaeze', 'Aditi', 'Ahmed', 'Aiko', 'Akira', 'Alejandro', 'Amara', 'Amina',
+  'Ananya', 'Anders', 'Arjun', 'Aroha', 'Astrid', 'Ayo', 'Bjorn', 'Camila', 'Carlos', 'Chen',
+  'Chiara', 'Chinwe', 'Daiyu', 'Dev', 'Diego', 'Dmitri', 'Elena', 'Fatima', 'Femi', 'Freya',
+  'Gabriela', 'Giulia', 'Hana', 'Hans', 'Haruto', 'Hassan', 'Hiroshi', 'Ingrid', 'Isabela', 'Ivan',
+  'Jia', 'Jun', 'Katarzyna', 'Kavya', 'Keanu', 'Kofi', 'Kwame', 'Lakshmi', 'Lars', 'Layla', 'Luca',
+  'Magnus', 'Mateo', 'Mei', 'Minjun', 'Moana', 'Nadia', 'Nia', 'Nisha', 'Omar', 'Oskar', 'Priya',
+  'Rafael', 'Raj', 'Rohan', 'Sakura', 'Samira', 'Sanjay', 'Sekou', 'Sofia', 'Sven', 'Takeshi',
+  'Tariq', 'Thandiwe', 'Valentina', 'Wei', 'Ximena', 'Yasmin', 'Yuki', 'Zainab', 'Zuri',
+];
+
+// 100 entries, longest 13 chars — world cities.
+const CITIES: string[] = [
+  'Abidjan', 'Accra', 'Addis Ababa', 'Amsterdam', 'Athens', 'Auckland', 'Bangkok', 'Barcelona',
+  'Beijing', 'Beirut', 'Bengaluru', 'Berlin', 'Bogota', 'Brasilia', 'Bucharest', 'Buenos Aires',
+  'Cairo', 'Cape Town', 'Caracas', 'Casablanca', 'Chengdu', 'Chicago', 'Colombo', 'Copenhagen',
+  'Dakar', 'Dar es Salaam', 'Delhi', 'Dubai', 'Dublin', 'Fukuoka', 'Geneva', 'Hanoi', 'Harare',
+  'Havana', 'Helsinki', 'Ho Chi Minh', 'Honolulu', 'Istanbul', 'Jakarta', 'Johannesburg',
+  'Karachi', 'Kathmandu', 'Kigali', 'Kinshasa', 'Kolkata', 'Kuala Lumpur', 'Kyiv', 'Lagos', 'Lima',
+  'Lisbon', 'London', 'Los Angeles', 'Luanda', 'Lusaka', 'Madrid', 'Manila', 'Maputo', 'Melbourne',
+  'Mexico City', 'Mombasa', 'Montevideo', 'Montreal', 'Moscow', 'Mumbai', 'Nairobi', 'New York',
+  'Osaka', 'Oslo', 'Panama City', 'Paris', 'Prague', 'Quito', 'Reykjavik', 'Riyadh', 'Rome',
+  'Santiago', 'Sao Paulo', 'Sapporo', 'Seattle', 'Seoul', 'Shanghai', 'Singapore', 'Sofia',
+  'Stockholm', 'Sydney', 'Taipei', 'Tallinn', 'Tashkent', 'Tbilisi', 'Tehran', 'Tokyo', 'Toronto',
+  'Ulaanbaatar', 'Vancouver', 'Vienna', 'Warsaw', 'Wellington', 'Yerevan', 'Zagreb', 'Zurich',
+];
+
+// 100 entries, longest 12 chars — countries worldwide.
+const COUNTRIES: string[] = [
+  'Algeria', 'Angola', 'Argentina', 'Australia', 'Austria', 'Bangladesh', 'Belgium', 'Bolivia',
+  'Botswana', 'Brazil', 'Bulgaria', 'Cambodia', 'Cameroon', 'Canada', 'Chile', 'China', 'Colombia',
+  'Croatia', 'Czechia', 'Denmark', 'Ecuador', 'Egypt', 'Estonia', 'Ethiopia', 'Finland', 'France',
+  'Georgia', 'Germany', 'Ghana', 'Greece', 'Guatemala', 'Honduras', 'Hungary', 'Iceland', 'India',
+  'Indonesia', 'Iran', 'Iraq', 'Ireland', 'Israel', 'Italy', 'Jamaica', 'Japan', 'Jordan',
+  'Kazakhstan', 'Kenya', 'Latvia', 'Lebanon', 'Lithuania', 'Madagascar', 'Malaysia', 'Mexico',
+  'Mongolia', 'Morocco', 'Mozambique', 'Myanmar', 'Namibia', 'Nepal', 'Netherlands', 'New Zealand',
+  'Nicaragua', 'Nigeria', 'Norway', 'Pakistan', 'Panama', 'Paraguay', 'Peru', 'Philippines',
+  'Poland', 'Portugal', 'Romania', 'Rwanda', 'Saudi Arabia', 'Senegal', 'Serbia', 'Singapore',
+  'Slovakia', 'Slovenia', 'Somalia', 'South Africa', 'South Korea', 'Spain', 'Sri Lanka', 'Sudan',
+  'Sweden', 'Switzerland', 'Taiwan', 'Tanzania', 'Thailand', 'Tunisia', 'Turkey', 'Uganda',
+  'Ukraine', 'Uruguay', 'Uzbekistan', 'Venezuela', 'Vietnam', 'Yemen', 'Zambia', 'Zimbabwe',
+];
+
+// 64 entries, longest 9 chars — synthetic prefix-heavy station IDs (the LZ
+// demo: shared 'WX-0…' prefixes are exactly what back-references eat up).
+const STATIONS: string[] = [
+  'WX-0007-A', 'WX-0007-B', 'WX-0014-A', 'WX-0014-B', 'WX-0021-A', 'WX-0021-B', 'WX-0028-A',
+  'WX-0028-B', 'WX-0035-A', 'WX-0035-B', 'WX-0042-A', 'WX-0042-B', 'WX-0049-A', 'WX-0049-B',
+  'WX-0056-A', 'WX-0056-B', 'WX-0063-A', 'WX-0063-B', 'WX-0070-A', 'WX-0070-B', 'WX-0077-A',
+  'WX-0077-B', 'WX-0084-A', 'WX-0084-B', 'WX-0091-A', 'WX-0091-B', 'WX-0098-A', 'WX-0098-B',
+  'WX-0105-A', 'WX-0105-B', 'WX-0112-A', 'WX-0112-B', 'WX-0119-A', 'WX-0119-B', 'WX-0126-A',
+  'WX-0126-B', 'WX-0133-A', 'WX-0133-B', 'WX-0140-A', 'WX-0140-B', 'WX-0147-A', 'WX-0147-B',
+  'WX-0154-A', 'WX-0154-B', 'WX-0161-A', 'WX-0161-B', 'WX-0168-A', 'WX-0168-B', 'WX-0175-A',
+  'WX-0175-B', 'WX-0182-A', 'WX-0182-B', 'WX-0189-A', 'WX-0189-B', 'WX-0196-A', 'WX-0196-B',
+  'WX-0203-A', 'WX-0203-B', 'WX-0210-A', 'WX-0210-B', 'WX-0217-A', 'WX-0217-B', 'WX-0224-A',
+  'WX-0224-B',
+];
+
+export const WORD_SETS: Record<WordSetKey, string[]> = {
+  names: NAMES,
+  cities: CITIES,
+  countries: COUNTRIES,
+  stations: STATIONS,
+};
+
+/** Length of the longest word in a set — the SchemaEditor's "longest word: K
+ * chars" hint and the natural char-width guidance. */
+export function wordSetMaxLength(key: WordSetKey): number {
+  return WORD_SETS[key].reduce((max, w) => Math.max(max, w.length), 0);
+}
 
 /** FNV-1a hash producing a 32-bit unsigned integer. */
 export function hashSeed(str: string): number {
@@ -40,10 +124,10 @@ export function generateValues(
   logicalType: LogicalTypeConfig,
   count: number,
   globalSeed: number = DEFAULT_GLOBAL_SEED,
-): number[] {
+): LogicalValue[] {
   const seed = hashSeed(variableName + ':' + globalSeed);
   const rng = createPRNG(seed);
-  const values: number[] = new Array(count);
+  const values: LogicalValue[] = new Array(count);
   const mode = logicalType.generation ?? 'random';
 
   switch (logicalType.type) {
@@ -75,6 +159,17 @@ export function generateValues(
       for (let i = 0; i < count; i++) {
         const raw = uniform01[i] * range + logicalType.min;
         values[i] = Number(raw.toPrecision(sigFigs));
+      }
+      break;
+    }
+    case 'text': {
+      // Words drawn from a sorted set: the same [0, 1) sequence machinery
+      // maps every generation mode onto categorical data for free (see the
+      // WORD_SETS comment above). min/max are ignored for text.
+      const words = WORD_SETS[logicalType.wordSet ?? 'names'];
+      const uniform01 = generateUniform01(rng, mode, count);
+      for (let i = 0; i < count; i++) {
+        values[i] = words[Math.min(words.length - 1, Math.floor(uniform01[i] * words.length))];
       }
       break;
     }

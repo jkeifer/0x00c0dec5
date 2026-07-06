@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import type { Variable } from '../../types/state.ts';
+import type { LogicalValue } from '../../types/dtypes.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { formatLogicalValue } from '../../engine/elements.ts';
@@ -18,10 +19,10 @@ interface GridViewProps {
    * here. GridView only ever renders the Values/Typed/Read stages (see
    * StagePane's view-mode gating), so this is always populated for it.
    */
-  values: Map<string, number[]>;
+  values: Map<string, LogicalValue[]>;
   chunkTraceMap?: Map<string, Set<string>>;
   traceChunkMap?: Map<string, string>;
-  diffValues?: Map<string, number[]>;
+  diffValues?: Map<string, LogicalValue[]>;
   showDiff?: boolean;
 }
 
@@ -80,19 +81,37 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
   const origVarVals = showDiff && diffValues && selectedVar ? diffValues.get(selectedVar.name) : undefined;
 
   // Look up the selected variable's values from the pipeline-supplied map —
-  // no byte decoding here (D6, fixes UI-9).
-  const { values, min, max } = useMemo(() => {
-    if (!selectedVar) return { values: [] as number[], min: Infinity, max: -Infinity };
+  // no byte decoding here (D6, fixes UI-9). `colorValues` is what feeds the
+  // valueToColor lerp: identical to `values` for numeric variables, and an
+  // ordinal (sorted-unique word index) mapping for text variables — this
+  // branch fully replaces the numeric scan for string arrays, since
+  // `'abc' < Infinity` is false and the numeric path would yield rgb(NaN).
+  const { values, colorValues, min, max } = useMemo(() => {
+    if (!selectedVar) {
+      return { values: [] as LogicalValue[], colorValues: [] as number[], min: Infinity, max: -Infinity };
+    }
     const vals = valuesByName.get(selectedVar.name) ?? [];
 
+    if (vals.some((v) => typeof v === 'string')) {
+      const uniq = Array.from(new Set(vals.map((v) => String(v)))).sort();
+      const rank = new Map(uniq.map((w, i) => [w, i]));
+      return {
+        values: vals,
+        colorValues: vals.map((v) => rank.get(String(v)) ?? 0),
+        min: 0,
+        max: uniq.length - 1,
+      };
+    }
+
+    const nums = vals as number[];
     let mn = Infinity;
     let mx = -Infinity;
-    for (const v of vals) {
+    for (const v of nums) {
       if (v < mn) mn = v;
       if (v > mx) mx = v;
     }
 
-    return { values: vals, min: mn, max: mx };
+    return { values: vals, colorValues: nums, min: mn, max: mx };
   }, [valuesByName, selectedVar]);
 
   // Task 4.5 (remediation-plan.md, fixes UI-5): maxAbsDiff was previously
@@ -275,13 +294,16 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
             // tooltip is formatted via the shared value-formatting helper
             // (formatLogicalValue) instead of showing raw unformatted numbers.
             const origVal = origVarVals && i < origVarVals.length ? origVarVals[i] : undefined;
-            const diffActive = showDiff && origVal !== undefined;
+            // Diff coloring/Δ math is number-only; text variables fall back
+            // to the ordinal valueToColor ramp even with showDiff on (the
+            // diff summary line above still counts string mismatches).
+            const diffActive = showDiff && typeof val === 'number' && typeof origVal === 'number';
             const diff = diffActive ? val - origVal : 0;
             const cellColor = diffActive
               ? diffToColor(diff, maxAbsDiff)
-              : valueToColor(val, min, max, selectedVar.color);
+              : valueToColor(colorValues[i], min, max, selectedVar.color);
             const cellTitle = diffActive
-              ? `Original: ${formatLogicalValue(origVal)}, Reconstructed: ${formatLogicalValue(val)}, Δ = ${(diff >= 0 ? '+' : '') + diff.toPrecision(4)}`
+              ? `Original: ${formatLogicalValue(origVal!)}, Reconstructed: ${formatLogicalValue(val)}, Δ = ${(diff >= 0 ? '+' : '') + diff.toPrecision(4)}`
               : `${selectedVar.name}[${is1D ? i : `${row},${col}`}] = ${formatLogicalValue(val)}`;
 
             return (

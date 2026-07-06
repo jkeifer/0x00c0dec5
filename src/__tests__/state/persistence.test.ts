@@ -611,3 +611,53 @@ describe('loadState — must not share mutable references with DEFAULT_STATE', (
     expect(DEFAULT_STATE.fieldPipelines.temperature).toEqual(before);
   });
 });
+
+describe('text variable normalization', () => {
+  function makeTextVariable(overrides: Record<string, unknown> = {}): Variable {
+    return {
+      id: 'city', name: 'city', color: '#61afef',
+      logicalType: { type: 'text', min: 0, max: 0, wordSet: 'cities', generation: 'stepped' },
+      typeAssignment: { storageDtype: 'char8' },
+      ...overrides,
+    } as Variable;
+  }
+
+  it('accepts a well-formed text variable (charN passes registry-derived DTYPE_KEYS)', () => {
+    localStorage.setItem(TABULAR_KEY, JSON.stringify({ ...DEFAULT_STATE, variables: [makeTextVariable()] }));
+    const loaded = loadState('tabular')!;
+    expect(loaded.variables.length).toBe(1);
+    expect(loaded.variables[0].logicalType.type).toBe('text');
+    expect(loaded.variables[0].logicalType.wordSet).toBe('cities');
+    expect(loaded.variables[0].typeAssignment.storageDtype).toBe('char8');
+  });
+
+  it('defaults a missing wordSet to names', () => {
+    const v = makeTextVariable();
+    delete (v.logicalType as unknown as Record<string, unknown>).wordSet;
+    localStorage.setItem(TABULAR_KEY, JSON.stringify({ ...DEFAULT_STATE, variables: [v] }));
+    const loaded = loadState('tabular')!;
+    expect(loaded.variables[0].logicalType.wordSet).toBe('names');
+  });
+
+  it('defaults an unrecognized wordSet to names', () => {
+    const v = makeTextVariable();
+    (v.logicalType as unknown as Record<string, unknown>).wordSet = 'planets';
+    localStorage.setItem(TABULAR_KEY, JSON.stringify({ ...DEFAULT_STATE, variables: [v] }));
+    const loaded = loadState('tabular')!;
+    expect(loaded.variables[0].logicalType.wordSet).toBe('names');
+  });
+
+  it('coerces a numeric storageDtype on a text variable to char8', () => {
+    const v = makeTextVariable({ typeAssignment: { storageDtype: 'float32' } });
+    localStorage.setItem(TABULAR_KEY, JSON.stringify({ ...DEFAULT_STATE, variables: [v] }));
+    const loaded = loadState('tabular')!;
+    expect(loaded.variables[0].typeAssignment.storageDtype).toBe('char8');
+  });
+
+  it('leaves numeric variables untouched by text normalization', () => {
+    localStorage.setItem(TABULAR_KEY, JSON.stringify({ ...DEFAULT_STATE, variables: [makeVariable()] }));
+    const loaded = loadState('tabular')!;
+    expect(loaded.variables[0].typeAssignment.storageDtype).toBe('float32');
+    expect((loaded.variables[0].logicalType as unknown as Record<string, unknown>).wordSet).toBeUndefined();
+  });
+});

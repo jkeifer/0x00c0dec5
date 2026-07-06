@@ -2,7 +2,11 @@ import type { DtypeKey } from './dtypes.ts';
 import type { CodecStep } from './codecs.ts';
 import type { StageName } from './pipeline.ts';
 
-export type LogicalType = 'integer' | 'decimal' | 'continuous';
+export type LogicalType = 'integer' | 'decimal' | 'continuous' | 'text';
+
+/** Bundled word sets for text variables (see `engine/generate.ts`'s
+ * `WORD_SETS`): sorted, ASCII-transliterated, internationally diverse. */
+export type WordSetKey = 'names' | 'cities' | 'countries' | 'stations';
 
 /**
  * D9 (remediation-plan.md, Phase 6.1): how raw values are generated before
@@ -23,6 +27,9 @@ export interface LogicalTypeConfig {
   max: number;
   decimalPlaces?: number;       // decimal only
   significantFigures?: number;  // continuous only
+  /** text only: which bundled word set to draw values from. min/max are
+   * ignored (kept 0/0) for text variables. */
+  wordSet?: WordSetKey;
   /** D9: generation algorithm. Missing on migrated saves defaults to 'random'. */
   generation: GenerationMode;
 }

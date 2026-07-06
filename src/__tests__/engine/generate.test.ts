@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { createPRNG, hashSeed, generateValues } from '../../engine/generate.ts';
-import type { LogicalTypeConfig } from '../../types/state.ts';
+import { createPRNG, hashSeed, generateValues, WORD_SETS, wordSetMaxLength } from '../../engine/generate.ts';
+import type { LogicalTypeConfig, WordSetKey } from '../../types/state.ts';
 
 describe('createPRNG', () => {
   it('produces deterministic output for the same seed', () => {
@@ -92,7 +92,7 @@ describe('generateValues', () => {
   });
 
   it('produces decimal values with correct precision', () => {
-    const values = generateValues('test', decType, 1000);
+    const values = generateValues('test', decType, 1000) as number[];
     for (const v of values) {
       expect(v).toBeGreaterThanOrEqual(-50);
       expect(v).toBeLessThanOrEqual(50);
@@ -105,5 +105,75 @@ describe('generateValues', () => {
   it('handles count of 0', () => {
     const values = generateValues('test', intType, 0);
     expect(values).toHaveLength(0);
+  });
+});
+
+describe('text generation', () => {
+  function textType(wordSet: WordSetKey, generation: LogicalTypeConfig['generation']): LogicalTypeConfig {
+    return { type: 'text', min: 0, max: 0, wordSet, generation };
+  }
+
+  it('is deterministic for the same variable name', () => {
+    const a = generateValues('station', textType('cities', 'random'), 64);
+    const b = generateValues('station', textType('cities', 'random'), 64);
+    expect(a).toEqual(b);
+  });
+
+  it('draws every value from the configured word set', () => {
+    for (const key of Object.keys(WORD_SETS) as WordSetKey[]) {
+      const values = generateValues('v', textType(key, 'random'), 200);
+      const set = new Set(WORD_SETS[key]);
+      for (const v of values) {
+        expect(set.has(v as string)).toBe(true);
+      }
+    }
+  });
+
+  it('defaults to the names set when wordSet is missing', () => {
+    const values = generateValues('v', { type: 'text', min: 0, max: 0, generation: 'random' }, 50);
+    const set = new Set(WORD_SETS.names);
+    for (const v of values) expect(set.has(v as string)).toBe(true);
+  });
+
+  it('sorted mode yields lexicographically non-decreasing words', () => {
+    const values = generateValues('v', textType('countries', 'sorted'), 128) as string[];
+    for (let i = 1; i < values.length; i++) {
+      expect(values[i] >= values[i - 1]).toBe(true);
+    }
+  });
+
+  it('stepped mode yields constant categorical runs', () => {
+    const values = generateValues('v', textType('cities', 'stepped'), 256) as string[];
+    let runs = 1;
+    for (let i = 1; i < values.length; i++) {
+      if (values[i] !== values[i - 1]) runs++;
+    }
+    // k = max(3, floor(256/8)) = 32 segments => at most 32 runs.
+    expect(runs).toBeLessThanOrEqual(32);
+  });
+
+  it('handles count 0 and 1', () => {
+    expect(generateValues('v', textType('names', 'random'), 0)).toEqual([]);
+    const one = generateValues('v', textType('names', 'sorted'), 1);
+    expect(one.length).toBe(1);
+    expect(typeof one[0]).toBe('string');
+  });
+
+  it('bundled word sets are sorted, ASCII-only, and free of trailing spaces', () => {
+    for (const key of Object.keys(WORD_SETS) as WordSetKey[]) {
+      const words = WORD_SETS[key];
+      expect(words.length).toBeGreaterThanOrEqual(60);
+      for (let i = 0; i < words.length; i++) {
+        const w = words[i];
+        // Roundtrip invariant: charN padding is spaces, so a trailing space
+        // in a bundled word would not survive write -> read.
+        expect(w).toBe(w.trimEnd());
+        expect(/^[\x20-\x7e]+$/.test(w)).toBe(true);
+        if (i > 0) expect(words[i] >= words[i - 1]).toBe(true);
+      }
+      expect(wordSetMaxLength(key)).toBe(Math.max(...words.map((w) => w.length)));
+      // All bundled sets fit char16 losslessly.
+      expect(wordSetMaxLength(key)).toBeLessThanOrEqual(16);
+    }
   });
 });

@@ -52,7 +52,7 @@ describe('metadata adversarial — brace in custom value (RP-2)', () => {
     if (result.success) {
       const totalElements = state.shape.reduce((a, b) => a * b, 1);
       for (const v of state.variables) {
-        const expected = generateValues(v.name, v.logicalType, totalElements);
+        const expected = generateValues(v.name, v.logicalType, totalElements) as number[];
         const actual = result.reconstructedValues.get(v.name);
         expect(actual).toBeDefined();
         for (let i = 0; i < expected.length; i++) {
@@ -94,7 +94,7 @@ describe('metadata adversarial — custom key shadows an auto key (DC-5)', () =>
     if (result.success) {
       const totalElements = state.shape.reduce((a, b) => a * b, 1);
       for (const v of state.variables) {
-        const expected = generateValues(v.name, v.logicalType, totalElements);
+        const expected = generateValues(v.name, v.logicalType, totalElements) as number[];
         const actual = result.reconstructedValues.get(v.name);
         expect(actual).toBeDefined();
         for (let i = 0; i < expected.length; i++) {
@@ -127,7 +127,7 @@ describe('metadata adversarial — unicode keys and values', () => {
     if (result.success) {
       const totalElements = state.shape.reduce((a, b) => a * b, 1);
       for (const v of state.variables) {
-        const expected = generateValues(v.name, v.logicalType, totalElements);
+        const expected = generateValues(v.name, v.logicalType, totalElements) as number[];
         const actual = result.reconstructedValues.get(v.name);
         expect(actual).toBeDefined();
         for (let i = 0; i < expected.length; i++) {

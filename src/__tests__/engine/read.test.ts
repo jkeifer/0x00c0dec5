@@ -69,7 +69,7 @@ describe('readFile — lossless roundtrip (column mode, header metadata)', () =>
         expect(actual).toBeDefined();
         expect(actual!.length).toBe(expected.length);
         for (let i = 0; i < expected.length; i++) {
-          expect(actual![i]).toBeCloseTo(expected[i], 4);
+          expect(actual![i]).toBeCloseTo(expected[i] as number, 4);
         }
       }
     }
@@ -93,7 +93,7 @@ describe('readFile — lossless roundtrip (column mode, footer metadata)', () =>
         expect(actual).toBeDefined();
         expect(actual!.length).toBe(expected.length);
         for (let i = 0; i < expected.length; i++) {
-          expect(actual![i]).toBeCloseTo(expected[i], 4);
+          expect(actual![i]).toBeCloseTo(expected[i] as number, 4);
         }
       }
     }
@@ -117,7 +117,7 @@ describe('readFile — lossless roundtrip (column mode, sidecar metadata)', () =
         expect(actual).toBeDefined();
         expect(actual!.length).toBe(expected.length);
         for (let i = 0; i < expected.length; i++) {
-          expect(actual![i]).toBeCloseTo(expected[i], 4);
+          expect(actual![i]).toBeCloseTo(expected[i] as number, 4);
         }
       }
     }
@@ -142,7 +142,7 @@ describe('readFile — row mode roundtrip', () => {
         expect(actual).toBeDefined();
         expect(actual!.length).toBe(expected.length);
         for (let i = 0; i < expected.length; i++) {
-          expect(actual![i]).toBeCloseTo(expected[i], 4);
+          expect(actual![i]).toBeCloseTo(expected[i] as number, 4);
         }
       }
     }
@@ -175,8 +175,8 @@ describe('readFile — lossy roundtrip (type assignment with float32 storage)', 
     if (result.success) {
       expect(result.lossyVariables.has('temperature')).toBe(true);
       const totalElements = state.shape.reduce((a, b) => a * b, 1);
-      const expected = generateValues('temperature', state.variables[0].logicalType, totalElements);
-      const actual = result.reconstructedValues.get('temperature')!;
+      const expected = generateValues('temperature', state.variables[0].logicalType, totalElements) as number[];
+      const actual = result.reconstructedValues.get('temperature')! as number[];
       expect(actual.length).toBe(expected.length);
       for (let i = 0; i < expected.length; i++) {
         expect(Math.abs(actual[i] - expected[i])).toBeLessThan(0.01);
@@ -210,8 +210,8 @@ describe('readFile — lossless roundtrip with scale/offset type assignment', ()
     if (result.success) {
       expect(result.lossyVariables.has('temperature')).toBe(false);
       const totalElements = state.shape.reduce((a, b) => a * b, 1);
-      const expected = generateValues('temperature', state.variables[0].logicalType, totalElements);
-      const actual = result.reconstructedValues.get('temperature')!;
+      const expected = generateValues('temperature', state.variables[0].logicalType, totalElements) as number[];
+      const actual = result.reconstructedValues.get('temperature')! as number[];
       expect(actual.length).toBe(expected.length);
       for (let i = 0; i < expected.length; i++) {
         expect(actual[i]).toBeCloseTo(expected[i], 5);
@@ -246,8 +246,8 @@ describe('readFile — per-chunk partitioning with sidecar', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const totalElements = state.shape.reduce((a, b) => a * b, 1);
-      const expected = generateValues('temperature', state.variables[0].logicalType, totalElements);
-      const actual = result.reconstructedValues.get('temperature')!;
+      const expected = generateValues('temperature', state.variables[0].logicalType, totalElements) as number[];
+      const actual = result.reconstructedValues.get('temperature')! as number[];
       expect(actual.length).toBe(expected.length);
       for (let i = 0; i < expected.length; i++) {
         expect(actual[i]).toBeCloseTo(expected[i], 4);
@@ -274,7 +274,7 @@ describe('readFile — multiple chunks in single file', () => {
         expect(actual).toBeDefined();
         expect(actual!.length).toBe(expected.length);
         for (let i = 0; i < expected.length; i++) {
-          expect(actual![i]).toBeCloseTo(expected[i], 4);
+          expect(actual![i]).toBeCloseTo(expected[i] as number, 4);
         }
       }
     }

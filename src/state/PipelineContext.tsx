@@ -1,6 +1,7 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import type { PipelineResult } from '../hooks/usePipeline.ts';
 import type { PipelineStage, VirtualFile, ReadFileResult, VariableStats } from '../types/pipeline.ts';
+import type { LogicalValue } from '../types/dtypes.ts';
 
 /**
  * PipelineContext (remediation-plan.md, Phase 3.9): carries the pipeline's
@@ -26,9 +27,9 @@ export interface PipelineContextValue {
   readResult: ReadFileResult;
   variableStats: Map<string, VariableStats>;
   /** D6: Values-stage source arrays, keyed by variable name. */
-  logicalValues: Map<string, number[]>;
+  logicalValues: Map<string, LogicalValue[]>;
   /** D6: Typed-stage source arrays, keyed by variable name. */
-  typedValues: Map<string, number[]>;
+  typedValues: Map<string, LogicalValue[]>;
   showDiff: boolean;
   /**
    * Alias of `logicalValues` (see App.tsx's prior inline comment, D6 Phase
@@ -38,7 +39,7 @@ export interface PipelineContextValue {
    * computation) actually use it for — renaming call sites to `logicalValues`
    * there would obscure why the diff is being computed against it.
    */
-  originalValues: Map<string, number[]>;
+  originalValues: Map<string, LogicalValue[]>;
 }
 
 const PipelineContext = createContext<PipelineContextValue | null>(null);

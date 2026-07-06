@@ -1,4 +1,5 @@
 import type { PipelineStage, ByteTrace, ChunkRegion } from '../../types/pipeline.ts';
+import type { LogicalValue } from '../../types/dtypes.ts';
 import { isChunkLevelTrace } from '../../engine/trace.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
 
@@ -170,10 +171,15 @@ export function buildChunkIndex(traces: ByteTrace[]): Map<string, number> {
  * which is wrong for the pedagogical diff view: a losslessly round-tripped
  * NaN should not be highlighted as an error. `-0` vs `0` is also not a
  * meaningful diff for display, so plain `===` (which already treats them as
- * equal) covers that case without needing `Object.is`.
+ * equal) covers that case without needing `Object.is`. Strings (text
+ * variables) compare with plain `===` — `Number.isNaN` is false for them.
  */
-export function isDiffValue(val: number, origVal: number): boolean {
-  return !(val === origVal || (Number.isNaN(val) && Number.isNaN(origVal)));
+export function isDiffValue(val: LogicalValue, origVal: LogicalValue): boolean {
+  return !(
+    val === origVal ||
+    (typeof val === 'number' && typeof origVal === 'number' &&
+      Number.isNaN(val) && Number.isNaN(origVal))
+  );
 }
 
 export interface DiffSummary {
@@ -192,7 +198,7 @@ const EMPTY_DIFF_SUMMARY: DiffSummary = { count: 0, maxAbsError: 0, meanAbsError
  * reaches the result from an out-of-range read. Skips NaN-vs-NaN pairs per
  * `isDiffValue` so lossless NaN round-trips don't inflate the error stats.
  */
-export function computeDiffSummary(values: number[], origValues: number[]): DiffSummary {
+export function computeDiffSummary(values: LogicalValue[], origValues: LogicalValue[]): DiffSummary {
   const n = Math.min(values.length, origValues.length);
   let count = 0;
   let sumAbsError = 0;
@@ -201,8 +207,11 @@ export function computeDiffSummary(values: number[], origValues: number[]): Diff
     const val = values[i];
     const orig = origValues[i];
     if (!isDiffValue(val, orig)) continue;
-    const absError = Math.abs(val - orig);
     count++;
+    // String mismatches (text variables) count as diffs but have no numeric
+    // magnitude — only number pairs contribute to the abs-error stats.
+    if (typeof val !== 'number' || typeof orig !== 'number') continue;
+    const absError = Math.abs(val - orig);
     sumAbsError += absError;
     if (absError > maxAbsError) maxAbsError = absError;
   }
@@ -218,13 +227,15 @@ export function computeDiffSummary(values: number[], origValues: number[]): Diff
  * NaN, NaN)` in the cell color (UI-5). NaN-vs-NaN pairs are excluded too
  * (they are not diffs) so a NaN-heavy variable doesn't poison the scale.
  */
-export function computeMaxAbsDiff(values: number[], origValues: number[]): number {
+export function computeMaxAbsDiff(values: LogicalValue[], origValues: LogicalValue[]): number {
   const n = Math.min(values.length, origValues.length);
   let maxAbsDiff = 0;
   for (let i = 0; i < n; i++) {
     const val = values[i];
     const orig = origValues[i];
     if (!isDiffValue(val, orig)) continue;
+    // Number pairs only — string diffs have no numeric magnitude.
+    if (typeof val !== 'number' || typeof orig !== 'number') continue;
     const absDiff = Math.abs(val - orig);
     if (absDiff > maxAbsDiff) maxAbsDiff = absDiff;
   }

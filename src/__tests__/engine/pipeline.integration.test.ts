@@ -9,7 +9,7 @@ import { isChunkLevelTrace } from '../../engine/trace.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
 import type { AppState } from '../../types/state.ts';
 import type { EncodedChunk } from '../../types/pipeline.ts';
-import type { DtypeKey } from '../../types/dtypes.ts';
+import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
 
 /**
  * Helper: run the full pipeline from state to virtual files.
@@ -17,7 +17,7 @@ import type { DtypeKey } from '../../types/dtypes.ts';
 function runFullPipeline(state: AppState) {
   // 1. Generate logical values
   const totalElements = state.shape.reduce((a, b) => a * b, 1);
-  const variableValues = new Map<string, number[]>();
+  const variableValues = new Map<string, LogicalValue[]>();
   for (const v of state.variables) {
     variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }

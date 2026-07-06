@@ -1,4 +1,5 @@
 import type { Chunk, ChunkVariable } from '../types/pipeline.ts';
+import type { LogicalValue } from '../types/dtypes.ts';
 
 /** Minimal variable interface needed by chunking — decoupled from state.Variable. */
 export interface ChunkableVariable {
@@ -56,7 +57,7 @@ export function chunkData(
   shape: number[],
   chunkShape: number[],
   variables: ChunkableVariable[],
-  variableValues: Map<string, number[]>,
+  variableValues: Map<string, LogicalValue[]>,
 ): Chunk[] {
   const clampedChunkShape = chunkShape.map((cs, d) => Math.min(cs, shape[d]));
   const chunkGrid = computeChunkGrid(shape, chunkShape);
@@ -104,7 +105,7 @@ export function chunkDataPerVariable(
   shape: number[],
   chunkShape: number[],
   variables: ChunkableVariable[],
-  variableValues: Map<string, number[]>,
+  variableValues: Map<string, LogicalValue[]>,
 ): Chunk[] {
   const clampedChunkShape = chunkShape.map((cs, d) => Math.min(cs, shape[d]));
   const chunkGrid = computeChunkGrid(shape, chunkShape);
@@ -154,17 +155,17 @@ export function chunkDataPerVariable(
 
 /** Extract values belonging to a specific chunk, returning values and their source coordinates. */
 function extractChunkValues(
-  allValues: number[],
+  allValues: LogicalValue[],
   shape: number[],
   clampedChunkShape: number[],
   chunkCoords: number[],
-): { values: number[]; sourceCoords: number[][] } {
+): { values: LogicalValue[]; sourceCoords: number[][] } {
   const startIndices = chunkCoords.map((c, d) => c * clampedChunkShape[d]);
   const endIndices = startIndices.map((s, d) => Math.min(s + clampedChunkShape[d], shape[d]));
   const chunkExtent = endIndices.map((e, d) => e - startIndices[d]);
 
   const totalElements = chunkExtent.reduce((acc, e) => acc * e, 1);
-  const values: number[] = new Array(totalElements);
+  const values: LogicalValue[] = new Array(totalElements);
   const sourceCoords: number[][] = new Array(totalElements);
 
   for (let i = 0; i < totalElements; i++) {

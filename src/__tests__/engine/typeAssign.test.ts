@@ -193,3 +193,42 @@ describe('reverseTypeAssignment', () => {
     expect(reversed[0]).toBeCloseTo(23.4, 5);
   });
 });
+
+describe('text (charN) type assignment', () => {
+  const textType: LogicalTypeConfig = { type: 'text', min: 0, max: 0, wordSet: 'cities', generation: 'random' };
+
+  it('is lossless when every word fits the width', () => {
+    const values = ['Lima', 'Oslo', 'Nairobi', ''];
+    const assignment: TypeAssignment = { storageDtype: 'char8' };
+    const result = assignType(values, textType, assignment);
+
+    expect(result.outputDtype).toBe('char8');
+    expect(result.bytes.length).toBe(4 * 8);
+    expect(result.stats.truncated).toBe(0);
+    expect(result.stats.isLossy).toBe(false);
+    expect(result.stats.count).toBe(4);
+    expect(result.stats.clipped).toBe(0);
+    expect(result.stats.rounded).toBe(0);
+    expect(result.stats.nanCount).toBe(0);
+  });
+
+  it('counts truncated words and flags lossy', () => {
+    const values = ['Lima', 'Johannesburg', 'Ulaanbaatar'];
+    const result = assignType(values, textType, { storageDtype: 'char8' });
+    expect(result.stats.truncated).toBe(2);
+    expect(result.stats.isLossy).toBe(true);
+  });
+
+  it('roundtrips exactly through reverseTypeAssignment when nothing truncates', () => {
+    const values = ['Lima', 'Oslo', 'Sao Paulo', 'WX-0042-A'];
+    const assignment: TypeAssignment = { storageDtype: 'char16' };
+    const result = assignType(values, textType, assignment);
+    expect(reverseTypeAssignment(result.bytes, assignment)).toEqual(values);
+  });
+
+  it('reads a truncated word back as its width-limited prefix', () => {
+    const assignment: TypeAssignment = { storageDtype: 'char8' };
+    const result = assignType(['Alexandria'], textType, assignment);
+    expect(reverseTypeAssignment(result.bytes, assignment)).toEqual(['Alexandr']);
+  });
+});

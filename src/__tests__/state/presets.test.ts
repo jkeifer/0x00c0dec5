@@ -150,7 +150,7 @@ function expectedLogicalValues(state: AppState): Map<string, number[]> {
   const totalElements = state.shape.reduce((a, b) => a * b, 1);
   const expected = new Map<string, number[]>();
   for (const v of state.variables) {
-    expected.set(v.name, generateValues(v.name, v.logicalType, totalElements));
+    expected.set(v.name, generateValues(v.name, v.logicalType, totalElements) as number[]);
   }
   return expected;
 }
@@ -179,7 +179,7 @@ describe('preset round-trip — computePipelineStages', () => {
 
     for (const name of ['temperature', 'pressure']) {
       const exp = expected.get(name)!;
-      const act = readResult.reconstructedValues.get(name)!;
+      const act = readResult.reconstructedValues.get(name)! as number[];
       expect(act.length).toBe(exp.length);
       for (let i = 0; i < exp.length; i++) {
         expect(Math.abs(act[i] - exp[i])).toBeLessThanOrEqual(0.01);
@@ -199,7 +199,7 @@ describe('preset round-trip — computePipelineStages', () => {
     expect(readResult.lossyVariables.has('landcover')).toBe(false);
 
     const exp = expected.get('elevation')!;
-    const act = readResult.reconstructedValues.get('elevation')!;
+    const act = readResult.reconstructedValues.get('elevation')! as number[];
     expect(act.length).toBe(exp.length);
     // continuous/float32: bounded by float32 precision relative to a [0,3000] range.
     for (let i = 0; i < exp.length; i++) {
@@ -218,7 +218,7 @@ describe('preset round-trip — computePipelineStages', () => {
     const expected = expectedLogicalValues(state);
     for (const name of ['temperature', 'precipitation']) {
       const exp = expected.get(name)!;
-      const act = readResult.reconstructedValues.get(name)!;
+      const act = readResult.reconstructedValues.get(name)! as number[];
       expect(act.length).toBe(exp.length);
       for (let i = 0; i < exp.length; i++) {
         expect(Math.abs(act[i] - exp[i])).toBeLessThanOrEqual(0.01);
