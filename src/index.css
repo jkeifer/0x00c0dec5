@@ -15,6 +15,25 @@
 
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, Consolas, monospace;
+
+  --hover-brightness: 1.25;
+}
+
+/* Hover/cursor affordances. `filter` is used because no component sets it
+   inline, so this can't lose the inline-style specificity fight the way
+   background/color rules would. */
+button:not(:disabled):hover,
+select:hover {
+  filter: brightness(var(--hover-brightness));
+}
+
+button,
+select {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
 }
 
 *,

@@ -85,7 +85,7 @@ export function Header() {
   }
 
   return (
-    <div
+    <header
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -180,6 +180,6 @@ export function Header() {
         onChange={(model) => switchDataModel(model as 'tabular' | 'array')}
         size="sm"
       />
-    </div>
+    </header>
   );
 }

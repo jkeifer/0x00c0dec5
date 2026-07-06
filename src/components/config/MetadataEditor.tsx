@@ -200,6 +200,7 @@ export function MetadataEditor({
               />
               <button
                 onClick={() => onRemoveEntry(i)}
+                aria-label={entry.key ? `Remove metadata entry ${entry.key}` : 'Remove metadata entry'}
                 style={{
                   background: 'transparent',
                   border: 'none',

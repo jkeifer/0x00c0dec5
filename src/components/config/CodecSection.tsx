@@ -93,7 +93,16 @@ export function CodecSection({
         Row mode: a single codec pipeline is applied to all interleaved data.
       </div>
       {mixedDtypes && (
-        <div style={{ fontSize: fontSizes.xs, color: colors.warning }}>
+        <div
+          style={{
+            background: colors.warningDim,
+            borderLeft: `2px solid ${colors.warning}`,
+            borderRadius: radii.sm,
+            padding: spacing.xs,
+            fontSize: fontSizes.xs,
+            color: colors.textSecondary,
+          }}
+        >
           Mixed dtypes are interleaved — codecs like Byte Shuffle and Delta that assume uniform
           element size will produce garbled output.
         </div>

@@ -105,7 +105,7 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
         <div style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
-          No codecs applied
+          No codecs applied — data passes through unchanged
         </div>
         <AddCodecSelect onAdd={addCodec} />
       </div>
@@ -169,6 +169,7 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
               <button
                 onClick={() => moveStep(i, -1)}
                 disabled={i === 0}
+                aria-label={`Move ${codec.label} up`}
                 style={{ ...btnStyle, opacity: i === 0 ? 0.3 : 1 }}
               >
                 ^
@@ -176,11 +177,12 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
               <button
                 onClick={() => moveStep(i, 1)}
                 disabled={i === steps.length - 1}
+                aria-label={`Move ${codec.label} down`}
                 style={{ ...btnStyle, opacity: i === steps.length - 1 ? 0.3 : 1 }}
               >
                 v
               </button>
-              <button onClick={() => removeStep(i)} style={btnStyle}>
+              <button onClick={() => removeStep(i)} aria-label={`Remove ${codec.label}`} style={btnStyle}>
                 x
               </button>
             </div>

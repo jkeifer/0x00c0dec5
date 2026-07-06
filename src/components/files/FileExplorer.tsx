@@ -113,6 +113,7 @@ export function FileExplorer({ files }: FileExplorerProps) {
               type="button"
               data-testid={`download-file-${i}`}
               title={`Download ${normalizeDownloadFilename(file.name)}`}
+              aria-label={`Download ${normalizeDownloadFilename(file.name)}`}
               onClick={() => downloadBytes(file.bytes, normalizeDownloadFilename(file.name))}
               style={downloadButtonStyle}
             >

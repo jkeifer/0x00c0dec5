@@ -200,6 +200,7 @@ export function SchemaEditor({
                   />
                   <button
                     onClick={() => onRemoveVariable(v.id)}
+                    aria-label={v.name ? `Remove variable ${v.name}` : 'Remove variable'}
                     style={{
                       background: 'transparent',
                       border: 'none',

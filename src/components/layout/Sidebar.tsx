@@ -30,17 +30,17 @@ const SECTION_TESTIDS: Record<(typeof SECTIONS)[number], string> = {
 
 const sectionLabelStyle: React.CSSProperties = {
   fontSize: fontSizes.sm,
-  color: colors.textSecondary,
+  color: colors.textPrimary,
   textTransform: 'uppercase',
   letterSpacing: '0.8px',
   fontWeight: 600,
-  marginBottom: spacing.xs,
+  margin: `0 0 ${spacing.xs}px`,
 };
 
 const dividerStyle: React.CSSProperties = {
   height: 1,
   background: colors.borderSubtle,
-  marginBottom: 14,
+  marginBottom: spacing.lg,
 };
 
 // Task 3.9 (remediation-plan.md, Phase 3): files/readResult/variableStats
@@ -188,24 +188,25 @@ export function Sidebar() {
   }
 
   return (
-    <div
+    <aside
+      aria-label="Pipeline configuration"
       style={{
         background: colors.surface,
         overflowY: 'auto',
         padding: spacing.md,
         display: 'flex',
         flexDirection: 'column',
-        gap: 14,
+        gap: 20,
         height: '100%',
       }}
     >
       {SECTIONS.map((section, i) => (
         <div key={section} data-testid={`sidebar-section-${SECTION_TESTIDS[section]}`}>
           {i > 0 && <div style={dividerStyle} />}
-          <div style={sectionLabelStyle}>{section}</div>
+          <h2 style={sectionLabelStyle}>{section}</h2>
           {renderSection(section)}
         </div>
       ))}
-    </div>
+    </aside>
   );
 }

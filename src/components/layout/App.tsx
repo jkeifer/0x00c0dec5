@@ -38,7 +38,7 @@ function MainLayout() {
         </Panel>
         <Separator className="resize-handle" />
         <Panel id="main" minSize="30%">
-          <div
+          <main
             style={{
               display: 'flex',
               flexDirection: 'column',
@@ -93,7 +93,7 @@ function MainLayout() {
                 />
               </Panel>
             </Group>
-          </div>
+          </main>
         </Panel>
       </Group>
     </PipelineProvider>
