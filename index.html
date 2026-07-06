@@ -4,7 +4,25 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
     <title>0x00c0dec5</title>
+    <!-- Blocking theme init: set the resolved theme before first paint so
+         there is no flash of the wrong theme. Keep in sync with
+         src/state/uiPrefs.ts (same key, same resolution rules). -->
+    <script>
+      (function () {
+        try {
+          var t = JSON.parse(localStorage.getItem('0x00c0dec5-ui-prefs') || 'null');
+          t = t && (t.theme === 'dark' || t.theme === 'light') ? t.theme : null;
+          if (!t) {
+            t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+          }
+          document.documentElement.dataset.theme = t;
+        } catch (e) {
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

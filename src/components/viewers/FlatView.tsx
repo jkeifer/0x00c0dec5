@@ -3,7 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { groupBytesByTrace, byteToHex, type TraceGroup } from './viewerUtils.ts';
-import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
+import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 
 interface FlatViewProps {
   stage: PipelineStage;
@@ -144,7 +144,7 @@ export function FlatView({ stage, paneId, chunkTraceMap, traceChunkMap }: FlatVi
                 alignItems: 'center',
                 gap: spacing.sm,
                 padding: `0 ${spacing.sm}px`,
-                backgroundColor: isValueHovered ? 'rgba(255,255,255,0.14)' : isChunkHovered ? 'rgba(255,255,255,0.06)' : undefined,
+                backgroundColor: isValueHovered ? 'var(--hover-strong)' : isChunkHovered ? 'var(--hover-weak)' : undefined,
                 borderTop: showBoundary ? `1px solid ${colors.borderSubtle}` : undefined,
                 cursor: 'default',
                 transition: 'background-color 0.1s ease',
@@ -156,7 +156,7 @@ export function FlatView({ stage, paneId, chunkTraceMap, traceChunkMap }: FlatVi
                   width: 8,
                   height: 8,
                   borderRadius: '50%',
-                  backgroundColor: group.variableColor || colors.textTertiary,
+                  backgroundColor: group.variableColor ? displayColor(group.variableColor) : colors.textTertiary,
                   flexShrink: 0,
                 }}
               />
@@ -164,7 +164,7 @@ export function FlatView({ stage, paneId, chunkTraceMap, traceChunkMap }: FlatVi
               {/* Label */}
               <span
                 style={{
-                  color: group.variableColor || colors.textSecondary,
+                  color: group.variableColor ? displayColor(group.variableColor) : colors.textSecondary,
                   minWidth: 120,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',

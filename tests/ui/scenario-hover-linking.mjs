@@ -18,10 +18,14 @@ import { launch, shot, createHarness } from './scenario-helpers.mjs';
 
 const h = createHarness('scenario-hover-linking');
 
+// Hover highlights are theme-aware CSS vars since plan Phase 4 (was
+// hardcoded white-alpha rgba literals): value-level = var(--hover-strong),
+// chunk-level = var(--hover-weak). Inline style attributes preserve the var()
+// text, so match on the var names.
 async function highlightCounts(page, paneSelector) {
   return page.locator(`${paneSelector} [data-testid^="hex-byte-"]`).evaluateAll((els) => ({
-    valueLevel: els.filter((e) => (e.style.backgroundColor || '').includes('0.18')).length,
-    chunkLevel: els.filter((e) => (e.style.backgroundColor || '').includes('0.08')).length,
+    valueLevel: els.filter((e) => (e.style.backgroundColor || '').includes('hover-strong')).length,
+    chunkLevel: els.filter((e) => (e.style.backgroundColor || '').includes('hover-weak')).length,
   }));
 }
 
@@ -29,7 +33,7 @@ async function tableHighlightCount(page, paneSelector) {
   return page.locator(`${paneSelector} [data-testid^="table-cell-"]`).evaluateAll(
     (els) => els.filter((e) => {
       const bg = e.style.backgroundColor || '';
-      return bg.includes('0.16') || bg.includes('0.18') || bg.includes('0.07') || bg.includes('0.08');
+      return bg.includes('hover-strong') || bg.includes('hover-weak');
     }).length,
   );
 }

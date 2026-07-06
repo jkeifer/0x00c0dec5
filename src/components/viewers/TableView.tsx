@@ -7,7 +7,7 @@ import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
-import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
+import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 import { isDiffValue, computeDiffSummary, type DiffSummary } from './viewerUtils.ts';
 
 interface TableViewProps {
@@ -185,7 +185,7 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
                 width: colWidth,
                 flexShrink: 0,
                 padding: `0 ${spacing.xs}px`,
-                color: col.variable.color,
+                color: displayColor(col.variable.color),
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
               }}
@@ -291,9 +291,9 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
                       padding: `0 ${spacing.xs}px`,
                       color: colors.textPrimary,
                       backgroundColor: isValueHovered
-                        ? 'rgba(255,255,255,0.16)'
+                        ? 'var(--hover-strong)'
                         : isChunkHovered
-                          ? 'rgba(255,255,255,0.07)'
+                          ? 'var(--hover-weak)'
                           : diffBg,
                       cursor: 'default',
                       transition: 'background-color 0.1s ease',

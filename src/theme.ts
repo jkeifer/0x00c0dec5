@@ -1,19 +1,26 @@
+// Every value here (except `palette`, see below) is a CSS custom-property
+// reference resolved per-theme in src/index.css (`:root` = dark,
+// `[data-theme='light']` = light). Same keys as always, so the ~24 inline-style
+// consumers restyle on theme change with zero React re-renders.
 export const colors = {
-  bg: '#0d1117',
-  surface: '#161b22',
-  surfaceHover: '#272d36',
-  surfaceInput: '#0d1117',
-  border: '#30363d',
-  borderSubtle: '#2d333b',
+  bg: 'var(--bg)',
+  surface: 'var(--surface)',
+  surfaceHover: 'var(--surface-hover)',
+  surfaceInput: 'var(--surface-input)',
+  border: 'var(--border)',
+  borderSubtle: 'var(--border-subtle)',
 
-  textPrimary: '#e6edf3',
-  textSecondary: '#8b949e',
-  textTertiary: '#6e7681',
+  textPrimary: 'var(--text-primary)',
+  textSecondary: 'var(--text-secondary)',
+  textTertiary: 'var(--text-tertiary)',
 
-  accent: '#58a6ff',
-  accentDim: 'rgba(88, 166, 255, 0.25)',
+  accent: 'var(--accent)',
+  accentDim: 'var(--accent-dim)',
 
-  // 10-color variable palette
+  // 10-color variable palette. MUST stay literal hex: Sidebar writes these
+  // into persisted Variable.color, and GridView does parseInt() math on them.
+  // For colored *text*, use displayColor() below so light mode can substitute
+  // readable equivalents via --palette-{i}.
   palette: [
     '#e06c75', // red
     '#61afef', // blue
@@ -27,18 +34,30 @@ export const colors = {
     '#b8bb26', // lime
   ],
 
-  paneAccentLeft: '#58a6ff',
-  paneAccentRight: '#d19a66',
+  paneAccentLeft: 'var(--pane-accent-left)',
+  paneAccentRight: 'var(--pane-accent-right)',
 
-  warning: '#d19a66',
-  warningDim: '#d19a6615',
+  warning: 'var(--warning)',
+  warningDim: 'var(--warning-dim)',
 
   // Task 3.10 (remediation-plan.md, UI-12): the single source for
-  // success/error hex values that were previously hardcoded per call site
+  // success/error values that were previously hardcoded per call site
   // (PipelineStrip, ReadStatus, StagePane, TypeAssignConfig).
-  success: '#98c379',
-  error: '#e06c75',
+  success: 'var(--success)',
+  error: 'var(--error)',
 } as const;
+
+/**
+ * Map a persisted palette hex (Variable.color) to its theme-aware CSS var for
+ * display as *text* (e.g. `#e06c75` → `var(--palette-0, #e06c75)`), so light
+ * mode can substitute a darker, readable equivalent. Unknown colors pass
+ * through unchanged. Do NOT use for values that undergo color math (GridView
+ * heatmap, hex+alpha concatenation) or for swatch chips — those keep raw hex.
+ */
+export function displayColor(hex: string): string {
+  const i = (colors.palette as readonly string[]).indexOf(hex);
+  return i === -1 ? hex : `var(--palette-${i}, ${hex})`;
+}
 
 export const fonts = {
   sans: "'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",

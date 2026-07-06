@@ -1,6 +1,6 @@
 import type { ByteTrace } from '../../types/pipeline.ts';
 import { byteToHex, formatOffset, byteToAscii } from './viewerUtils.ts';
-import { colors, spacing } from '../../theme.ts';
+import { colors, displayColor, spacing } from '../../theme.ts';
 
 interface HexRowRendererProps {
   rowIndex: number;
@@ -75,8 +75,8 @@ export function HexRowRenderer({
             (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && trace.chunkId === hoveredChunkId)
             || (chunkTraceIds != null && chunkTraceIds.has(trace.traceId))
           );
-          const textColor = trace?.variableColor || colors.textSecondary;
-          const regionTint = regionByByte[byteIdx] === 1 ? 'rgba(255,255,255,0.05)' : undefined;
+          const textColor = trace?.variableColor ? displayColor(trace.variableColor) : colors.textSecondary;
+          const regionTint = regionByByte[byteIdx] === 1 ? 'var(--region-tint)' : undefined;
 
           return (
             <span
@@ -85,7 +85,7 @@ export function HexRowRenderer({
               data-testid={`hex-byte-${byteIdx}`}
               style={{
                 color: textColor,
-                backgroundColor: isValueHovered ? 'rgba(255,255,255,0.18)' : isChunkHovered ? 'rgba(255,255,255,0.08)' : regionTint,
+                backgroundColor: isValueHovered ? 'var(--hover-strong)' : isChunkHovered ? 'var(--hover-weak)' :regionTint,
                 borderRadius: 2,
                 cursor: 'default',
                 transition: 'background-color 0.1s ease',
@@ -123,7 +123,7 @@ export function HexRowRenderer({
               onMouseEnter={trace ? () => onHover(trace.traceId, trace.chunkId) : undefined}
               style={{
                 color: isValueHovered ? colors.textPrimary : isChunkHovered ? colors.textSecondary : colors.textTertiary,
-                backgroundColor: isValueHovered ? 'rgba(255,255,255,0.18)' : isChunkHovered ? 'rgba(255,255,255,0.08)' : undefined,
+                backgroundColor: isValueHovered ? 'var(--hover-strong)' : isChunkHovered ? 'var(--hover-weak)' :undefined,
                 cursor: 'default',
                 transition: 'background-color 0.1s ease',
               }}

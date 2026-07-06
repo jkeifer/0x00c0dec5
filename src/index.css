@@ -1,4 +1,11 @@
+/* Theme palettes. :root carries the dark values, so an un-attributed document
+   is unchanged (dark is the default). The init script in index.html and
+   src/state/uiPrefs.ts always write the *resolved* theme ('dark' | 'light')
+   to <html data-theme>, so there is no prefers-color-scheme CSS here — one
+   resolution path only. */
 :root {
+  color-scheme: dark;
+
   --bg: #0d1117;
   --surface: #161b22;
   --surface-hover: #272d36;
@@ -13,10 +20,85 @@
   --accent: #58a6ff;
   --accent-dim: rgba(88, 166, 255, 0.25);
 
+  --warning: #d19a66;
+  --warning-dim: #d19a6615;
+  --success: #98c379;
+  --error: #e06c75;
+
+  --pane-accent-left: #58a6ff;
+  --pane-accent-right: #d19a66;
+
+  /* Hover/region overlays (white-alpha in dark, black-alpha in light). */
+  --hover-strong: rgba(255, 255, 255, 0.18);
+  --hover-weak: rgba(255, 255, 255, 0.08);
+  --region-tint: rgba(255, 255, 255, 0.05);
+  --chunk-outline: rgba(255, 255, 255, 0.6);
+
+  /* Display-time variable palette (one-dark). Persisted Variable.color stays
+     the literal dark hex; theme.ts's displayColor() maps it to these vars for
+     colored *text* so light mode can substitute readable equivalents. */
+  --palette-0: #e06c75;
+  --palette-1: #61afef;
+  --palette-2: #98c379;
+  --palette-3: #e5c07b;
+  --palette-4: #c678dd;
+  --palette-5: #56b6c2;
+  --palette-6: #d19a66;
+  --palette-7: #be5046;
+  --palette-8: #7ec8e3;
+  --palette-9: #b8bb26;
+
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, Consolas, monospace;
 
   --hover-brightness: 1.25;
+}
+
+[data-theme='light'] {
+  color-scheme: light;
+
+  /* GitHub-light UI colors. */
+  --bg: #ffffff;
+  --surface: #f6f8fa;
+  --surface-hover: #eaeef2;
+  --surface-input: #ffffff;
+  --border: #d0d7de;
+  --border-subtle: #d8dee4;
+
+  --text-primary: #1f2328;
+  --text-secondary: #57606a;
+  --text-tertiary: #6e7781;
+
+  --accent: #0969da;
+  --accent-dim: rgba(9, 105, 218, 0.18);
+
+  --warning: #9a6700;
+  --warning-dim: rgba(154, 103, 0, 0.08);
+  --success: #1a7f37;
+  --error: #cf222e;
+
+  --pane-accent-left: #0969da;
+  --pane-accent-right: #bc4c00;
+
+  --hover-strong: rgba(0, 0, 0, 0.14);
+  --hover-weak: rgba(0, 0, 0, 0.06);
+  --region-tint: rgba(0, 0, 0, 0.04);
+  --chunk-outline: rgba(0, 0, 0, 0.45);
+
+  /* One-light equivalents of the one-dark palette, index-aligned. */
+  --palette-0: #e45649;
+  --palette-1: #4078f2;
+  --palette-2: #50a14f;
+  --palette-3: #c18401;
+  --palette-4: #a626a4;
+  --palette-5: #0184bc;
+  --palette-6: #986801;
+  --palette-7: #ca1243;
+  --palette-8: #2b7bb0;
+  --palette-9: #7d8600;
+
+  /* Brightening on hover works for dark surfaces; light surfaces darken. */
+  --hover-brightness: 0.94;
 }
 
 /* Hover/cursor affordances. `filter` is used because no component sets it

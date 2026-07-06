@@ -3,7 +3,7 @@ import type { PipelineStage } from '../../types/pipeline.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { isChunkLevelTrace } from '../../engine/trace.ts';
 import { buildTraceIndexWithCounts, buildChunkIndexWithCounts } from '../viewers/viewerUtils.ts';
-import { colors, fontSizes, spacing, fonts } from '../../theme.ts';
+import { colors, displayColor, fontSizes, spacing, fonts } from '../../theme.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
 
 interface HoverBarProps {
@@ -130,7 +130,7 @@ export function HoverBar({ stages }: HoverBarProps) {
           flexShrink: 0,
         }}
       />
-      <span style={{ color: isStructural ? colors.textTertiary : (traceInfo.variableColor || colors.textSecondary) }}>
+      <span style={{ color: isStructural ? colors.textTertiary : (traceInfo.variableColor ? displayColor(traceInfo.variableColor) : colors.textSecondary) }}>
         {label}
       </span>
 

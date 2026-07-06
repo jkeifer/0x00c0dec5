@@ -4,6 +4,10 @@ import { Radio } from '../shared/Radio.tsx';
 import { useAppState } from '../../state/useAppState.ts';
 import { PRESET_OPTIONS, hasCustomPreset, type PresetKey } from '../../state/presets.ts';
 import { saveCheckpoint, hasCheckpoint, buildShareUrl } from '../../state/share.ts';
+import { loadUiPrefs, saveUiPrefs, applyTheme, type ThemePref } from '../../state/uiPrefs.ts';
+
+const THEME_CYCLE: Record<ThemePref, ThemePref> = { dark: 'light', light: 'system', system: 'dark' };
+const THEME_LABEL: Record<ThemePref, string> = { dark: 'Dark', light: 'Light', system: 'System' };
 
 const MODEL_OPTIONS = [
   { value: 'tabular', label: 'Tabular' },
@@ -65,6 +69,16 @@ export function Header() {
   const [checkpointLabel, setCheckpointLabel] = useState('Save checkpoint');
   const [canRestore, setCanRestore] = useState(() => hasCheckpoint());
   const [shareLabel, setShareLabel] = useState('Share');
+  // Local label state only — the theme itself lives in CSS vars keyed off
+  // <html data-theme>, so no React re-render is needed to restyle.
+  const [themePref, setThemePref] = useState<ThemePref>(() => loadUiPrefs().theme);
+
+  function handleThemeToggle() {
+    const next = THEME_CYCLE[themePref];
+    saveUiPrefs({ theme: next });
+    applyTheme(next);
+    setThemePref(next);
+  }
 
   function handleSaveCheckpoint() {
     saveCheckpoint(state);
@@ -202,6 +216,15 @@ export function Header() {
           style={headerButtonStyle}
         >
           {shareLabel}
+        </button>
+        <button
+          type="button"
+          onClick={handleThemeToggle}
+          data-testid="theme-toggle"
+          aria-label={`Theme: ${THEME_LABEL[themePref]}. Click to switch to ${THEME_LABEL[THEME_CYCLE[themePref]]}.`}
+          style={headerButtonStyle}
+        >
+          Theme: {THEME_LABEL[themePref]}
         </button>
       </div>
     </header>

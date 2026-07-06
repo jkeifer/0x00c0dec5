@@ -4,7 +4,7 @@ import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { formatLogicalValue } from '../../engine/elements.ts';
 import { useHover } from '../../hooks/useHover.ts';
-import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
+import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 import { computeMaxAbsDiff, computeDiffSummary, scrollOffsetForCell } from './viewerUtils.ts';
 
 interface GridViewProps {
@@ -50,6 +50,9 @@ function diffToColor(diff: number, maxAbsDiff: number): string {
   }
 }
 
+// ponytail: heatmap fills stay dark-based in both themes — the lerp math needs
+// literal hex (Variable.color), and a dark-to-color ramp reads fine on a light
+// page. Add a light ramp only if a real complaint surfaces.
 function valueToColor(value: number, min: number, max: number, baseColor: string): string {
   if (min === max) return baseColor;
   const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
@@ -189,7 +192,7 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
             onClick={() => setSelectedVarIdx(idx)}
             style={{
               background: idx === effectiveVarIdx ? v.color + '33' : 'transparent',
-              color: idx === effectiveVarIdx ? v.color : colors.textSecondary,
+              color: idx === effectiveVarIdx ? displayColor(v.color) : colors.textSecondary,
               border: `1px solid ${idx === effectiveVarIdx ? v.color + '66' : colors.borderSubtle}`,
               borderRadius: 3,
               padding: `2px ${spacing.sm}px`,
@@ -291,7 +294,7 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
                   width: CELL_SIZE,
                   height: CELL_SIZE,
                   backgroundColor: cellColor,
-                  outline: isValueHovered ? `2px solid ${colors.textPrimary}` : isChunkHovered ? `1px solid rgba(255,255,255,0.6)` : undefined,
+                  outline: isValueHovered ? `2px solid ${colors.textPrimary}` : isChunkHovered ? '1px solid var(--chunk-outline)' : undefined,
                   outlineOffset: -1,
                   cursor: 'default',
                   transition: 'background-color 0.1s ease',
