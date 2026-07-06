@@ -30,7 +30,8 @@ import {
   saveCustomPreset,
   loadCustomPreset,
   hasCustomPreset,
-  CUSTOM_PRESET_KEY,
+  customPresetKey,
+  LEGACY_CUSTOM_PRESET_KEY,
   type PresetKey,
 } from '../../state/presets.ts';
 import { AppStateProvider, useAppState } from '../../state/useAppState.ts';
@@ -238,40 +239,75 @@ describe('resolvePreset', () => {
     }
   });
 
-  it('PRESET_OPTIONS lists exactly the three built-ins with the expected labels', () => {
+  it('PRESET_OPTIONS lists exactly the three built-ins with labels and data models', () => {
     expect(PRESET_OPTIONS).toEqual([
-      { key: 'basically-parquet', label: 'Basically Parquet' },
-      { key: 'basically-geotiff', label: 'Basically GeoTIFF' },
-      { key: 'basically-zarr', label: 'Basically Zarr' },
+      { key: 'basically-parquet', label: 'Basically Parquet', dataModel: 'tabular' },
+      { key: 'basically-geotiff', label: 'Basically GeoTIFF', dataModel: 'array' },
+      { key: 'basically-zarr', label: 'Basically Zarr', dataModel: 'array' },
     ]);
+  });
+
+  it('each PRESET_OPTIONS dataModel matches the preset JSON\'s own declared model', () => {
+    for (const opt of PRESET_OPTIONS) {
+      expect(opt.dataModel).toBe(PRESET_MODEL[opt.key]);
+    }
   });
 });
 
-describe('custom preset slot', () => {
-  it('hasCustomPreset is false until something is saved', () => {
-    expect(hasCustomPreset()).toBe(false);
+describe('custom preset slot (per-model)', () => {
+  it('hasCustomPreset is false until something is saved for that model', () => {
+    expect(hasCustomPreset('tabular')).toBe(false);
     saveCustomPreset(DEFAULT_STATE);
-    expect(hasCustomPreset()).toBe(true);
+    expect(hasCustomPreset('tabular')).toBe(true);
   });
 
-  it('saveCustomPreset writes to the dedicated custom-preset key, not either per-model key', () => {
+  it('saveCustomPreset writes to the state\'s own model slot, not either state key or the other model\'s slot', () => {
     saveCustomPreset({ ...DEFAULT_STATE, shape: [42] });
-    expect(localStorage.getItem(CUSTOM_PRESET_KEY)).not.toBeNull();
+    expect(localStorage.getItem(customPresetKey('tabular'))).not.toBeNull();
+    expect(localStorage.getItem(customPresetKey('array'))).toBeNull();
+    expect(hasCustomPreset('array')).toBe(false);
     expect(localStorage.getItem(TABULAR_KEY)).toBeNull();
     expect(localStorage.getItem(ARRAY_KEY)).toBeNull();
   });
 
   it('loadCustomPreset returns null when nothing has been saved', () => {
-    expect(loadCustomPreset()).toBeNull();
+    expect(loadCustomPreset('tabular')).toBeNull();
+    expect(loadCustomPreset('array')).toBeNull();
   });
 
-  it('loadCustomPreset round-trips a saved snapshot, preserving its dataModel', () => {
+  it('loadCustomPreset round-trips a saved snapshot under its own model', () => {
     const snapshot: AppState = { ...DEFAULT_STATE, dataModel: 'array', shape: [7, 7] };
     saveCustomPreset(snapshot);
-    const loaded = loadCustomPreset();
+    const loaded = loadCustomPreset('array');
     expect(loaded).not.toBeNull();
     expect(loaded!.dataModel).toBe('array');
     expect(loaded!.shape).toEqual([7, 7]);
+    expect(loadCustomPreset('tabular')).toBeNull();
+  });
+
+  it('the two models\' slots are independent', () => {
+    saveCustomPreset({ ...DEFAULT_STATE, shape: [11] });
+    saveCustomPreset({ ...DEFAULT_STATE, dataModel: 'array', shape: [5, 5] });
+    expect(loadCustomPreset('tabular')!.shape).toEqual([11]);
+    expect(loadCustomPreset('array')!.shape).toEqual([5, 5]);
+  });
+
+  it('legacy single-slot key is honored when its declared model matches', () => {
+    const legacy: AppState = { ...DEFAULT_STATE, dataModel: 'array', shape: [3, 3] };
+    localStorage.setItem(LEGACY_CUSTOM_PRESET_KEY, JSON.stringify(legacy));
+    expect(hasCustomPreset('array')).toBe(true);
+    expect(hasCustomPreset('tabular')).toBe(false);
+    expect(loadCustomPreset('array')!.shape).toEqual([3, 3]);
+    expect(loadCustomPreset('tabular')).toBeNull();
+  });
+
+  it('a per-model slot wins over the legacy key', () => {
+    localStorage.setItem(
+      LEGACY_CUSTOM_PRESET_KEY,
+      JSON.stringify({ ...DEFAULT_STATE, shape: [1] }),
+    );
+    saveCustomPreset({ ...DEFAULT_STATE, shape: [2] });
+    expect(loadCustomPreset('tabular')!.shape).toEqual([2]);
   });
 });
 
@@ -292,7 +328,7 @@ describe('loadPreset — flow', () => {
     expect(result.current.state.write.metadataPlacement).toBe('footer');
   });
 
-  it('loading a built-in preset snapshots the PRE-LOAD state to the custom slot first', () => {
+  it('loading a built-in preset snapshots the PRE-LOAD state to its model\'s custom slot first', () => {
     const { result } = renderApp();
     act(() => {
       result.current.dispatch({ type: 'SET_SHAPE', shape: [123] });
@@ -300,19 +336,21 @@ describe('loadPreset — flow', () => {
     expect(result.current.state.shape).toEqual([123]);
 
     act(() => {
-      result.current.loadPreset('basically-geotiff');
+      result.current.loadPreset('basically-parquet');
     });
 
     // The preset is now active...
-    expect(result.current.state.shape).toEqual([16, 16]);
-    expect(result.current.state.dataModel).toBe('array');
+    expect(result.current.state.shape).toEqual([64]);
+    expect(result.current.state.dataModel).toBe('tabular');
 
-    // ...and the custom slot holds exactly what was on screen right before
-    // the preset load (shape [123], tabular), not the preset itself.
-    const custom = loadCustomPreset();
+    // ...and the tabular custom slot holds exactly what was on screen right
+    // before the preset load (shape [123]), not the preset itself.
+    const custom = loadCustomPreset('tabular');
     expect(custom).not.toBeNull();
     expect(custom!.shape).toEqual([123]);
     expect(custom!.dataModel).toBe('tabular');
+    // The array model's slot is untouched.
+    expect(hasCustomPreset('array')).toBe(false);
   });
 
   it('loading "custom" restores the most recent pre-preset snapshot', () => {
@@ -321,9 +359,9 @@ describe('loadPreset — flow', () => {
       result.current.dispatch({ type: 'SET_SHAPE', shape: [55] });
     });
     act(() => {
-      result.current.loadPreset('basically-zarr');
+      result.current.loadPreset('basically-parquet');
     });
-    expect(result.current.state.shape).toEqual([16, 16]);
+    expect(result.current.state.shape).toEqual([64]);
 
     act(() => {
       result.current.loadPreset('custom');
@@ -363,7 +401,7 @@ describe('loadPreset — flow', () => {
     expect(result.current.state.shape).toEqual([55]);
   });
 
-  it('loading a preset that switches data models does NOT destroy the other model\'s saved slot', () => {
+  it('loading a preset does NOT touch either model\'s saved state slot', () => {
     const { result } = renderApp();
     // Put real, distinguishable content into the array model's own saved
     // slot via the normal switchDataModel path (as if the user had actually
@@ -378,46 +416,35 @@ describe('loadPreset — flow', () => {
       result.current.switchDataModel('tabular');
     });
     const savedArrayBefore = localStorage.getItem(ARRAY_KEY);
+    const savedTabularBefore = localStorage.getItem(TABULAR_KEY);
     expect(savedArrayBefore).not.toBeNull();
     expect(JSON.parse(savedArrayBefore!).shape).toEqual([9, 9]);
 
-    // Now load an array-model preset (Basically GeoTIFF) from tabular. Per
-    // D10, this must never touch `0x00c0dec5-state-array` — only the
-    // dedicated custom-preset key.
+    // Load the tabular preset. Per D10, this must never touch the
+    // `0x00c0dec5-state-{model}` keys — only the custom-preset key.
     act(() => {
-      result.current.loadPreset('basically-geotiff');
+      result.current.loadPreset('basically-parquet');
     });
-    expect(result.current.state.dataModel).toBe('array');
-    expect(result.current.state.shape).toEqual([16, 16]);
+    expect(result.current.state.shape).toEqual([64]);
 
-    const savedArrayAfter = localStorage.getItem(ARRAY_KEY);
-    expect(savedArrayAfter).toBe(savedArrayBefore);
-    expect(JSON.parse(savedArrayAfter!).shape).toEqual([9, 9]);
+    expect(localStorage.getItem(ARRAY_KEY)).toBe(savedArrayBefore);
+    expect(localStorage.getItem(TABULAR_KEY)).toBe(savedTabularBefore);
 
-    // Restore via the custom slot (not switchDataModel, which would itself
-    // persist whatever's currently on screen — the preset — under the array
-    // key; that's switchDataModel's own long-standing "save the outgoing
-    // model's live state" behavior, a separate concern from what loadPreset
-    // must guarantee). loadPreset('custom') gets back to the pre-preset
-    // tabular state without touching either per-model key.
-    act(() => {
-      result.current.loadPreset('custom');
-    });
-    expect(result.current.state.dataModel).toBe('tabular');
-
-    // The array model's own persisted slot must still hold the real [9,9]
-    // state saved before any preset was ever loaded — proof the preset
-    // never overwrote it, read back independently via loadState.
+    // The array model's own persisted slot still reads back as [9,9].
     const reloadedArray = loadState('array');
     expect(reloadedArray).not.toBeNull();
     expect(reloadedArray!.shape).toEqual([9, 9]);
   });
 
-  it('loading a built-in preset records the preset\'s data model as the active model', () => {
+  it('loading a built-in preset for the active model keeps that model active', () => {
     const { result } = renderApp();
+    act(() => {
+      result.current.switchDataModel('array');
+    });
     act(() => {
       result.current.loadPreset('basically-zarr');
     });
+    expect(result.current.state.dataModel).toBe('array');
     expect(localStorage.getItem('0x00c0dec5-active-model')).toBe('array');
   });
 });

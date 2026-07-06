@@ -1,13 +1,18 @@
-// Regression scenario: built-in presets (D10, remediation-plan.md, task 6.2).
+// Regression scenario: built-in presets (D10, remediation-plan.md, task 6.2;
+// revised for model-scoped presets).
 //
-// Loads each preset via the Header dropdown (data-testid="preset-select")
-// and asserts:
+// Presets are data-model specific: the Header dropdown only lists presets
+// matching the active model (Parquet on tabular; GeoTIFF/Zarr on array), and
+// the 'Custom (restore)' slot is per-model. Loads each preset via the Header
+// dropdown (data-testid="preset-select") and asserts:
+//   - the dropdown lists only the active model's presets
 //   - the select returns to the 'Presets…' placeholder after firing a load
 //     (it's an action menu, not persistent state)
 //   - the Read stage reports success for all three
 //   - Basically Parquet: footer placement + trailer visible in Write config
 //   - Basically Zarr: multiple files in the FileExplorer
 //   - Basically GeoTIFF: the crs custom entry is visible in the Metadata section
+//   - 'Custom (restore)' appears only after a preset load, per model
 //
 // Run: node tests/ui/scenario-presets.mjs   (dev server must be running)
 
@@ -30,12 +35,31 @@ async function openSidebarSection(page, name) {
   return section;
 }
 
+async function presetOptionValues(page) {
+  return page
+    .locator('[data-testid="preset-select"] option:not([hidden])')
+    .evaluateAll((opts) => opts.map((o) => o.value));
+}
+
+async function switchModel(page, model) {
+  await page.locator(`[data-testid="model-toggle-${model}"]`).click();
+  await page.waitForTimeout(600);
+}
+
 async function main() {
   const { browser, page } = await launch();
 
   // ─── The select shows the placeholder, not a stage/model option ─────────
   const initialValue = await page.locator('[data-testid="preset-select"]').inputValue();
   h.check('preset select starts on the placeholder', initialValue === '', `got "${initialValue}"`);
+
+  // ─── Model scoping: tabular lists only Parquet, and no Custom yet ───────
+  const tabularOptions = await presetOptionValues(page);
+  h.check(
+    'tabular dropdown lists only Basically Parquet (no array presets, no Custom before any load)',
+    tabularOptions.length === 1 && tabularOptions[0] === 'basically-parquet',
+    `options = ${JSON.stringify(tabularOptions)}`,
+  );
 
   // ─── Basically Parquet ────────────────────────────────────────────────
   await selectPreset(page, 'basically-parquet');
@@ -68,6 +92,24 @@ async function main() {
     footerLocatorText.replace(/\n/g, ' '),
   );
   await shot(page, 'preset-basically-parquet');
+
+  const tabularOptionsAfterLoad = await presetOptionValues(page);
+  h.check(
+    'Custom (restore) appears in the tabular dropdown after a preset load',
+    tabularOptionsAfterLoad.includes('custom'),
+    `options = ${JSON.stringify(tabularOptionsAfterLoad)}`,
+  );
+
+  // ─── Switch to N-d Array: dropdown lists only the array presets ─────────
+  await switchModel(page, 'array');
+  const arrayOptions = await presetOptionValues(page);
+  h.check(
+    'array dropdown lists exactly GeoTIFF + Zarr (no tabular presets, no Custom before any array load)',
+    arrayOptions.length === 2 &&
+      arrayOptions.includes('basically-geotiff') &&
+      arrayOptions.includes('basically-zarr'),
+    `options = ${JSON.stringify(arrayOptions)}`,
+  );
 
   // ─── Basically GeoTIFF ────────────────────────────────────────────────
   await selectPreset(page, 'basically-geotiff');
@@ -108,16 +150,35 @@ async function main() {
   );
   await shot(page, 'preset-basically-zarr');
 
-  // ─── Custom (restore) ───────────────────────────────────────────────────
-  // After three preset loads, "Custom" should restore whatever was on screen
-  // immediately before the FIRST preset load (Basically Parquet) — the
-  // pre-preset default state (shape [32]).
+  // ─── Custom (restore), per-model ─────────────────────────────────────────
+  // On the array model, "Custom" restores what was on screen immediately
+  // before the FIRST array preset load (Basically GeoTIFF) — the array
+  // default state (1 chunk), not the Zarr preset's 8-chunk layout.
   await selectPreset(page, 'custom');
   const afterCustomValue = await page.locator('[data-testid="preset-select"]').inputValue();
   h.check(
     'preset select returns to the placeholder after restoring Custom',
     afterCustomValue === '',
     `got "${afterCustomValue}"`,
+  );
+  const restoredFileCount = await page.locator('[data-testid^="file-entry-"]').count();
+  h.check(
+    'array Custom restores the pre-GeoTIFF array state (single file, not Zarr\'s multi-file layout)',
+    restoredFileCount === 1,
+    `file count = ${restoredFileCount}`,
+  );
+
+  // Back on tabular, its own Custom slot restores the pre-Parquet default.
+  await switchModel(page, 'tabular');
+  await selectPreset(page, 'custom');
+  const rowsValue = await page
+    .locator('[data-testid="sidebar-section-schema"] [data-testid="shape-input"]')
+    .inputValue()
+    .catch(() => '');
+  h.check(
+    'tabular Custom restores the pre-Parquet default state (32 rows, not the preset\'s 64)',
+    rowsValue === '32',
+    `rows = "${rowsValue}"`,
   );
 
   await browser.close();

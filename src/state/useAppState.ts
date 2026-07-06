@@ -206,14 +206,13 @@ interface AppStateContextValue {
    * `switchDataModel`'s shape — resolve a full `AppState` out-of-band, force
    * the resolved `dataModel`, dispatch a single `REPLACE_STATE` — but with
    * its own snapshot step: loading any built-in preset first saves the
-   * CURRENT state (whichever model it belongs to) to the dedicated custom
-   * slot, so 'Custom (restore)' always gets back to "what I had right before
-   * I loaded a preset," regardless of how many presets were loaded since.
+   * CURRENT state to its model's custom slot, so 'Custom (restore)' always
+   * gets back to "what I had right before I loaded a preset" for the active
+   * model. Presets and custom slots are model-scoped: the Header only offers
+   * presets matching the active model, so loading one never switches models.
    * Loading 'custom' does NOT re-snapshot (that would overwrite the very
-   * thing being restored). Per D10, this never touches the OTHER data
-   * model's own saved localStorage slot — the current model's live state is
-   * only ever written to the custom-preset key, never to
-   * `0x00c0dec5-state-{tabular,array}` here (that still only happens via the
+   * thing being restored). Per D10, this never touches the
+   * `0x00c0dec5-state-{tabular,array}` keys (those are only written via the
    * debounced autosave / `switchDataModel`).
    */
   loadPreset: (key: PresetKey | 'custom') => void;
@@ -326,12 +325,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       const currentState = stateRef.current;
 
       if (key === 'custom') {
-        // Restore the snapshot taken before the most recent preset load.
-        // Deliberately does NOT re-snapshot currentState — that would
-        // overwrite the very thing being restored.
-        const restored = loadCustomPreset();
+        // Restore the ACTIVE model's snapshot taken before its most recent
+        // preset load (custom slots are per-model now that presets are
+        // model-scoped). Deliberately does NOT re-snapshot currentState —
+        // that would overwrite the very thing being restored.
+        const restored = loadCustomPreset(currentState.dataModel);
         if (!restored) return;
-        saveActiveModel(restored.dataModel);
         dispatch({ type: 'REPLACE_STATE', state: restored });
         return;
       }
@@ -339,12 +338,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       const preset = resolvePreset(key);
       if (!preset) return;
 
-      // D10: snapshot current state to the custom slot FIRST, before
-      // replacing it — regardless of whether the preset switches data
-      // models. This never writes to the OTHER model's own
-      // `0x00c0dec5-state-{model}` key, only to the dedicated custom-preset
-      // key, so the other model's saved state (from the normal debounced
-      // autosave) is left completely untouched.
+      // D10: snapshot current state to its model's custom slot FIRST,
+      // before replacing it. This never writes to the
+      // `0x00c0dec5-state-{model}` keys, only to the custom-preset key, so
+      // the model's own saved state (from the normal debounced autosave) is
+      // left untouched. The Header only offers presets matching the active
+      // model, so `preset.dataModel === currentState.dataModel` by
+      // construction; `saveActiveModel` stays as a belt-and-suspenders for
+      // any direct `loadPreset` caller.
       saveCustomPreset(currentState);
 
       saveActiveModel(preset.dataModel);

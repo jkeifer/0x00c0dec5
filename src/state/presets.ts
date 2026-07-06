@@ -17,10 +17,13 @@ import basicallyZarrRaw from '../presets/basically-zarr.json';
  */
 export type PresetKey = 'basically-parquet' | 'basically-geotiff' | 'basically-zarr';
 
-export const PRESET_OPTIONS: { key: PresetKey; label: string }[] = [
-  { key: 'basically-parquet', label: 'Basically Parquet' },
-  { key: 'basically-geotiff', label: 'Basically GeoTIFF' },
-  { key: 'basically-zarr', label: 'Basically Zarr' },
+/** `dataModel` mirrors each preset JSON's own declared model so the Header
+ * can offer only the presets that belong to the active data model (loading a
+ * preset never switches models anymore). */
+export const PRESET_OPTIONS: { key: PresetKey; label: string; dataModel: AppState['dataModel'] }[] = [
+  { key: 'basically-parquet', label: 'Basically Parquet', dataModel: 'tabular' },
+  { key: 'basically-geotiff', label: 'Basically GeoTIFF', dataModel: 'array' },
+  { key: 'basically-zarr', label: 'Basically Zarr', dataModel: 'array' },
 ];
 
 const PRESET_RAW: Record<PresetKey, unknown> = {
@@ -30,18 +33,23 @@ const PRESET_RAW: Record<PresetKey, unknown> = {
 };
 
 /**
- * Custom slot (D10): where the state in play *before* a built-in preset was
- * loaded gets snapshotted, so the user can get back to what they had. A
- * single slot (not per-model) — loading a preset is a single "I'm about to
- * blow away what's on screen" action regardless of which model was active,
- * and the 'Custom (restore)' dropdown entry restores exactly that snapshot.
+ * Custom slot (D10, revised): where the state in play *before* a built-in
+ * preset was loaded gets snapshotted, so the user can get back to what they
+ * had. One slot PER data model — now that presets themselves are
+ * model-scoped, a single shared slot would let a preset load on one model
+ * silently destroy the other model's "get back to what I had" snapshot.
+ * The pre-revision single-slot key is kept as a read-only legacy fallback.
  */
-export const CUSTOM_PRESET_KEY = '0x00c0dec5-preset-custom';
+export const LEGACY_CUSTOM_PRESET_KEY = '0x00c0dec5-preset-custom';
+
+export function customPresetKey(model: AppState['dataModel']): string {
+  return `${LEGACY_CUSTOM_PRESET_KEY}-${model}`;
+}
 
 /** Resolve a preset's raw JSON through the validate/merge pipeline, forcing
- * `dataModel` to whatever the preset itself declares (presets intentionally
- * span both data models — loading "Basically GeoTIFF" while on the tabular
- * model switches to the array model). Returns `null` if the preset's own
+ * `dataModel` to whatever the preset itself declares. The Header only offers
+ * presets whose declared model matches the active one, so this no longer
+ * switches models in practice. Returns `null` if the preset's own
  * checked-in JSON somehow fails validation (a bug in the preset file, not
  * user input — should not happen for the shipped presets). */
 export function resolvePreset(key: PresetKey): AppState | null {
@@ -51,38 +59,52 @@ export function resolvePreset(key: PresetKey): AppState | null {
   return validateExternalState(raw, targetModel);
 }
 
-/** Snapshot `state` to the custom slot. Called before loading any built-in
- * preset (D10: "loading a built-in first snapshots current state to the
- * custom slot"), never by loading the custom slot itself. */
+/** Snapshot `state` to its model's custom slot. Called before loading any
+ * built-in preset (D10: "loading a built-in first snapshots current state to
+ * the custom slot"), never by loading the custom slot itself. */
 export function saveCustomPreset(state: AppState): void {
   try {
-    localStorage.setItem(CUSTOM_PRESET_KEY, JSON.stringify(state));
+    localStorage.setItem(customPresetKey(state.dataModel), JSON.stringify(state));
   } catch {
     // silently fail on storage errors, consistent with saveState/saveActiveModel
   }
 }
 
-/** Load the custom slot, validated through the same pipeline. Returns `null`
- * if nothing has been snapshotted yet (nothing to restore) or the snapshot
- * fails validation. The snapshot's own `dataModel` is preserved (it is
- * exactly whatever the user had active before switching to a preset). */
-export function loadCustomPreset(): AppState | null {
+/** Read the raw snapshot for `model`: the per-model key, falling back to the
+ * pre-revision single-slot key when the per-model key is absent AND the
+ * legacy snapshot's own declared model matches. */
+function readCustomPresetRaw(model: AppState['dataModel']): string | null {
+  const raw = localStorage.getItem(customPresetKey(model));
+  if (raw !== null) return raw;
+  const legacy = localStorage.getItem(LEGACY_CUSTOM_PRESET_KEY);
+  if (legacy === null) return null;
   try {
-    const raw = localStorage.getItem(CUSTOM_PRESET_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { dataModel?: unknown };
-    const model: AppState['dataModel'] = parsed.dataModel === 'array' ? 'array' : 'tabular';
-    return validateExternalState(parsed, model);
+    const parsed = JSON.parse(legacy) as { dataModel?: unknown };
+    const legacyModel = parsed.dataModel === 'array' ? 'array' : 'tabular';
+    return legacyModel === model ? legacy : null;
   } catch {
     return null;
   }
 }
 
-/** Whether a custom snapshot currently exists (drives whether the 'Custom
- * (restore)' dropdown option should be selectable/shown as available). */
-export function hasCustomPreset(): boolean {
+/** Load `model`'s custom slot, validated through the same pipeline. Returns
+ * `null` if nothing has been snapshotted for that model (nothing to restore)
+ * or the snapshot fails validation. */
+export function loadCustomPreset(model: AppState['dataModel']): AppState | null {
   try {
-    return localStorage.getItem(CUSTOM_PRESET_KEY) !== null;
+    const raw = readCustomPresetRaw(model);
+    if (!raw) return null;
+    return validateExternalState(JSON.parse(raw), model);
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a custom snapshot currently exists for `model` (drives whether
+ * the 'Custom (restore)' dropdown option is offered at all). */
+export function hasCustomPreset(model: AppState['dataModel']): boolean {
+  try {
+    return readCustomPresetRaw(model) !== null;
   } catch {
     return false;
   }

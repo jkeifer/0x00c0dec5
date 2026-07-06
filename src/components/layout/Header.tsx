@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 import { Radio } from '../shared/Radio.tsx';
 import { useAppState } from '../../state/useAppState.ts';
-import { PRESET_OPTIONS, type PresetKey } from '../../state/presets.ts';
+import { PRESET_OPTIONS, hasCustomPreset, type PresetKey } from '../../state/presets.ts';
 import { saveCheckpoint, hasCheckpoint, buildShareUrl } from '../../state/share.ts';
 
 const MODEL_OPTIONS = [
@@ -109,6 +109,13 @@ export function Header() {
         >
           0x00C0DEC5
         </span>
+        <Radio
+          options={MODEL_OPTIONS}
+          value={state.dataModel}
+          onChange={(model) => switchDataModel(model as 'tabular' | 'array')}
+          size="sm"
+          testIdPrefix="model-toggle"
+        />
         <select
           value={PRESET_PLACEHOLDER}
           onChange={(e) => {
@@ -137,13 +144,15 @@ export function Header() {
           <option value={PRESET_PLACEHOLDER} disabled hidden>
             Presets…
           </option>
-          {PRESET_OPTIONS.map((opt) => (
+          {PRESET_OPTIONS.filter((opt) => opt.dataModel === state.dataModel).map((opt) => (
             <option key={opt.key} value={opt.key}>
               {opt.label}
             </option>
           ))}
-          <option value="custom">Custom (restore)</option>
+          {hasCustomPreset(state.dataModel) && <option value="custom">Custom (restore)</option>}
         </select>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: spacing.md }}>
         <button
           type="button"
           onClick={handleSaveCheckpoint}
@@ -174,12 +183,6 @@ export function Header() {
           {shareLabel}
         </button>
       </div>
-      <Radio
-        options={MODEL_OPTIONS}
-        value={state.dataModel}
-        onChange={(model) => switchDataModel(model as 'tabular' | 'array')}
-        size="sm"
-      />
     </header>
   );
 }
