@@ -11,6 +11,8 @@ import { PipelineStrip } from './PipelineStrip.tsx';
 import { StagePane } from '../viewers/StagePane.tsx';
 import { HoverBar } from '../shared/HoverBar.tsx';
 import { ErrorBoundary } from '../shared/ErrorBoundary.tsx';
+import { GuideProvider } from '../../state/GuideContext.tsx';
+import { GuidePanel } from '../guide/GuidePanel.tsx';
 
 function MainLayout() {
   const { state, dispatch } = useAppState();
@@ -140,14 +142,21 @@ function HoverBarConnected() {
 }
 
 export function App() {
+  // GuideProvider wraps Header (toggle button), MainLayout (Sidebar section
+  // highlight), and GuidePanel. The panel is a fixed-width flex sibling of
+  // MainLayout's wrapper — NOT a third resizable panel, so the persisted
+  // 'main-layout' panel-group id is untouched.
   return (
-    <>
+    <GuideProvider>
       <Header />
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <ErrorBoundary>
-          <MainLayout />
-        </ErrorBoundary>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          <ErrorBoundary>
+            <MainLayout />
+          </ErrorBoundary>
+        </div>
+        <GuidePanel />
       </div>
-    </>
+    </GuideProvider>
   );
 }

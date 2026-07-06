@@ -1,5 +1,7 @@
+import { useEffect, useRef } from 'react';
 import { useAppState } from '../../state/useAppState.ts';
 import { usePipelineContext } from '../../state/PipelineContext.tsx';
+import { useGuide } from '../../state/GuideContext.tsx';
 import { SchemaEditor } from '../config/SchemaEditor.tsx';
 import { ChunkConfig } from '../config/ChunkConfig.tsx';
 import { InterleaveConfig } from '../config/InterleaveConfig.tsx';
@@ -9,7 +11,7 @@ import { MetadataEditor } from '../config/MetadataEditor.tsx';
 import { WriteConfig } from '../config/WriteConfig.tsx';
 import { ReadStatus } from '../config/ReadStatus.tsx';
 import { FileExplorer } from '../files/FileExplorer.tsx';
-import { colors, fontSizes, spacing } from '../../theme.ts';
+import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 
 const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Type Assignment', 'Codecs', 'Metadata', 'Write', 'Read'] as const;
 
@@ -50,6 +52,17 @@ const dividerStyle: React.CSSProperties = {
 export function Sidebar() {
   const { state, dispatch } = useAppState();
   const { files, readResult, variableStats } = usePipelineContext();
+  // Guide highlight (plan Phase 5): the section matching the guide's active
+  // step gets an accent outline and is scrolled into view.
+  const { activeSection } = useGuide();
+  const sectionRefs = useRef(new Map<string, HTMLDivElement>());
+
+  useEffect(() => {
+    if (!activeSection) return;
+    sectionRefs.current
+      .get(activeSection)
+      ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [activeSection]);
 
   function renderSection(section: (typeof SECTIONS)[number]) {
     switch (section) {
@@ -200,13 +213,34 @@ export function Sidebar() {
         height: '100%',
       }}
     >
-      {SECTIONS.map((section, i) => (
-        <div key={section} data-testid={`sidebar-section-${SECTION_TESTIDS[section]}`}>
-          {i > 0 && <div style={dividerStyle} />}
-          <h2 style={sectionLabelStyle}>{section}</h2>
-          {renderSection(section)}
-        </div>
-      ))}
+      {SECTIONS.map((section, i) => {
+        const slug = SECTION_TESTIDS[section];
+        const isGuideActive = slug === activeSection;
+        return (
+          <div
+            key={section}
+            data-testid={`sidebar-section-${slug}`}
+            data-guide-active={isGuideActive || undefined}
+            ref={(el) => {
+              if (el) sectionRefs.current.set(slug, el);
+              else sectionRefs.current.delete(slug);
+            }}
+            style={
+              isGuideActive
+                ? {
+                    outline: `2px solid ${colors.accent}`,
+                    outlineOffset: 4,
+                    borderRadius: radii.sm,
+                  }
+                : undefined
+            }
+          >
+            {i > 0 && <div style={dividerStyle} />}
+            <h2 style={sectionLabelStyle}>{section}</h2>
+            {renderSection(section)}
+          </div>
+        );
+      })}
     </aside>
   );
 }

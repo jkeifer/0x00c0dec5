@@ -5,6 +5,7 @@ import { useAppState } from '../../state/useAppState.ts';
 import { PRESET_OPTIONS, hasCustomPreset, type PresetKey } from '../../state/presets.ts';
 import { saveCheckpoint, hasCheckpoint, buildShareUrl } from '../../state/share.ts';
 import { loadUiPrefs, saveUiPrefs, applyTheme, type ThemePref } from '../../state/uiPrefs.ts';
+import { useGuide } from '../../state/GuideContext.tsx';
 
 const THEME_CYCLE: Record<ThemePref, ThemePref> = { dark: 'light', light: 'system', system: 'dark' };
 const THEME_LABEL: Record<ThemePref, string> = { dark: 'Dark', light: 'Light', system: 'System' };
@@ -66,6 +67,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
 
 export function Header() {
   const { state, switchDataModel, loadPreset, restoreCheckpoint, clearConfig } = useAppState();
+  const { open: guideOpen, toggleOpen: toggleGuide } = useGuide();
   const [checkpointLabel, setCheckpointLabel] = useState('Save checkpoint');
   const [canRestore, setCanRestore] = useState(() => hasCheckpoint());
   const [shareLabel, setShareLabel] = useState('Share');
@@ -216,6 +218,15 @@ export function Header() {
           style={headerButtonStyle}
         >
           {shareLabel}
+        </button>
+        <button
+          type="button"
+          onClick={toggleGuide}
+          data-testid="guide-toggle"
+          aria-label={guideOpen ? 'Close the guide panel' : 'Open the guide panel'}
+          style={headerButtonStyle}
+        >
+          Guide
         </button>
         <button
           type="button"
