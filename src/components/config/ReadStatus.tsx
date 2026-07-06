@@ -51,7 +51,7 @@ export function ReadStatus({ readResult, showDiff, onShowDiffChange }: ReadStatu
         <div>{totalValues.toLocaleString()} total values</div>
         {lossyCount > 0 && (
           <div style={{ color: colors.warning }}>
-            {lossyCount} lossy variable{lossyCount !== 1 ? 's' : ''} (precision lost during type assignment):{' '}
+            {lossyCount} lossy variable{lossyCount !== 1 ? 's' : ''} (precision lost or text truncated during type assignment):{' '}
             {[...readResult.lossyVariables].join(', ')}
           </div>
         )}

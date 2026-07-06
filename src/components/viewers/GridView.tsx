@@ -256,7 +256,10 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
         >
           {diffSummary.count === 0
             ? 'No differences from original'
-            : `${diffSummary.count} differing / max Δ ${diffSummary.maxAbsError.toPrecision(4)} / mean Δ ${diffSummary.meanAbsError.toPrecision(4)}`}
+            : diffSummary.maxAbsError > 0
+              ? `${diffSummary.count} differing / max Δ ${diffSummary.maxAbsError.toPrecision(4)} / mean Δ ${diffSummary.meanAbsError.toPrecision(4)}`
+              // String (text) diffs have no numeric magnitude — Δ stats would misleadingly read 0.
+              : `${diffSummary.count} differing`}
         </div>
       )}
 

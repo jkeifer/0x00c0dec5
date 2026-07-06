@@ -1,4 +1,5 @@
-import type { Variable, LogicalTypeConfig, LogicalType } from '../../types/state.ts';
+import type { Variable, LogicalTypeConfig, LogicalType, WordSetKey } from '../../types/state.ts';
+import { wordSetMaxLength } from '../../engine/generate.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
 import { NumberInput } from '../shared/NumberInput.tsx';
@@ -17,6 +18,14 @@ const LOGICAL_TYPES: { value: LogicalType; label: string }[] = [
   { value: 'integer', label: 'Integer' },
   { value: 'decimal', label: 'Decimal' },
   { value: 'continuous', label: 'Continuous' },
+  { value: 'text', label: 'Text' },
+];
+
+const WORD_SETS_UI: { value: WordSetKey; label: string }[] = [
+  { value: 'names', label: 'Names' },
+  { value: 'cities', label: 'Cities' },
+  { value: 'countries', label: 'Countries' },
+  { value: 'stations', label: 'Station IDs' },
 ];
 
 // D9 (remediation-plan.md, Phase 6.1): one-line descriptions shown next to
@@ -155,6 +164,11 @@ export function SchemaEditor({
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
           {variables.map((v, varIdx) => {
             const hasWarning = !v.name || duplicateNames.has(v.name);
+            // For text, 'smooth' means drifting through the sorted word set
+            // rather than a numeric random walk.
+            const genDesc = v.logicalType.type === 'text' && v.logicalType.generation === 'smooth'
+              ? 'smooth — drifts between alphabetical neighbors'
+              : GENERATION_DESCRIPTIONS[v.logicalType.generation];
             return (
               <div
                 key={v.id}
@@ -216,15 +230,32 @@ export function SchemaEditor({
                     value={v.logicalType.type}
                     onChange={(e) => {
                       const newType = e.target.value as LogicalType;
+                      const wasText = v.logicalType.type === 'text';
+                      const isText = newType === 'text';
                       const base: LogicalTypeConfig = {
                         type: newType,
-                        min: v.logicalType.min,
-                        max: v.logicalType.max,
+                        min: isText ? 0 : v.logicalType.min,
+                        max: isText ? 0 : v.logicalType.max,
                         generation: v.logicalType.generation,
                       };
                       if (newType === 'decimal') base.decimalPlaces = 1;
                       if (newType === 'continuous') base.significantFigures = 6;
-                      onUpdateVariable(v.id, { logicalType: base });
+                      if (isText) base.wordSet = v.logicalType.wordSet ?? 'names';
+                      // Swap storageDtype in the same update: text needs char
+                      // storage, numeric types need a numeric dtype back.
+                      if (isText && !wasText) {
+                        onUpdateVariable(v.id, {
+                          logicalType: base,
+                          typeAssignment: { storageDtype: 'char8' },
+                        });
+                      } else if (!isText && wasText) {
+                        onUpdateVariable(v.id, {
+                          logicalType: base,
+                          typeAssignment: { storageDtype: 'float32' },
+                        });
+                      } else {
+                        onUpdateVariable(v.id, { logicalType: base });
+                      }
                     }}
                     style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
                   >
@@ -233,18 +264,39 @@ export function SchemaEditor({
                     ))}
                   </select>
 
-                  <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>min</span>
-                  <NumberInput
-                    value={v.logicalType.min}
-                    onValue={(n) => updateLogicalType(v, { min: n })}
-                    style={{ ...inputStyle(fontSizes.xs), width: 55 }}
-                  />
-                  <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>max</span>
-                  <NumberInput
-                    value={v.logicalType.max}
-                    onValue={(n) => updateLogicalType(v, { max: n })}
-                    style={{ ...inputStyle(fontSizes.xs), width: 55 }}
-                  />
+                  {v.logicalType.type === 'text' ? (
+                    <>
+                      <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>words</span>
+                      <select
+                        value={v.logicalType.wordSet ?? 'names'}
+                        onChange={(e) => updateLogicalType(v, { wordSet: e.target.value as WordSetKey })}
+                        data-testid={`wordset-select-${varIdx}`}
+                        style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
+                      >
+                        {WORD_SETS_UI.map((ws) => (
+                          <option key={ws.value} value={ws.value}>{ws.label}</option>
+                        ))}
+                      </select>
+                      <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
+                        longest word: {wordSetMaxLength(v.logicalType.wordSet ?? 'names')} chars
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>min</span>
+                      <NumberInput
+                        value={v.logicalType.min}
+                        onValue={(n) => updateLogicalType(v, { min: n })}
+                        style={{ ...inputStyle(fontSizes.xs), width: 55 }}
+                      />
+                      <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>max</span>
+                      <NumberInput
+                        value={v.logicalType.max}
+                        onValue={(n) => updateLogicalType(v, { max: n })}
+                        style={{ ...inputStyle(fontSizes.xs), width: 55 }}
+                      />
+                    </>
+                  )}
 
                   {v.logicalType.type === 'decimal' && (
                     <>
@@ -282,7 +334,7 @@ export function SchemaEditor({
                       updateLogicalType(v, { generation: e.target.value as LogicalTypeConfig['generation'] })
                     }
                     data-testid={`generation-mode-${varIdx}`}
-                    title={GENERATION_DESCRIPTIONS[v.logicalType.generation]}
+                    title={genDesc}
                     style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
                   >
                     {GENERATION_MODES.map((gm) => (
@@ -301,7 +353,7 @@ export function SchemaEditor({
                       minWidth: 0,
                     }}
                   >
-                    {GENERATION_DESCRIPTIONS[v.logicalType.generation]}
+                    {genDesc}
                   </span>
                 </div>
               </div>

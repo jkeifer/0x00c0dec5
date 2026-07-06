@@ -205,7 +205,10 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
                 >
                   {summary.count === 0
                     ? 'no diffs'
-                    : `${summary.count} diff / max Δ ${summary.maxAbsError.toPrecision(4)} / mean Δ ${summary.meanAbsError.toPrecision(4)}`}
+                    : summary.maxAbsError > 0
+                      ? `${summary.count} diff / max Δ ${summary.maxAbsError.toPrecision(4)} / mean Δ ${summary.meanAbsError.toPrecision(4)}`
+                      // String (text) diffs have no numeric magnitude — Δ stats would misleadingly read 0.
+                      : `${summary.count} diff`}
                 </div>
               )}
             </div>

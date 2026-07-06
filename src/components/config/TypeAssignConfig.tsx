@@ -23,10 +23,21 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
         const stats = variableStats.get(v.name);
         const outDtype = v.typeAssignment.storageDtype;
         const outInfo = getDtype(outDtype);
-        const isIntStorage = !outInfo.float;
+        const isIntStorage = !outInfo.float && !outInfo.char;
         const isDecimalOrContinuous = v.logicalType.type === 'decimal' || v.logicalType.type === 'continuous';
         const showScaleOffset = isIntStorage && isDecimalOrContinuous;
         const showKeepBits = outInfo.float;
+        // Text variables choose among char widths only; numeric variables
+        // never see the char dtypes.
+        const isText = v.logicalType.type === 'text';
+        const dtypeOptions = DTYPE_KEYS.filter((dk) => Boolean(DTYPE_REGISTRY[dk].char) === isText);
+        const lossyParts = stats
+          ? [
+              stats.clipped > 0 ? `${stats.clipped} clipped` : null,
+              stats.rounded > 0 ? `${stats.rounded} rounded` : null,
+              (stats.truncated ?? 0) > 0 ? `${stats.truncated} truncated` : null,
+            ].filter(Boolean).join(', ')
+          : '';
 
         return (
           <div
@@ -60,7 +71,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
                 onChange={(e) => updateAssignment(v, { storageDtype: e.target.value as DtypeKey })}
                 style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
               >
-                {DTYPE_KEYS.map((dk) => (
+                {dtypeOptions.map((dk) => (
                   <option key={dk} value={dk}>
                     {DTYPE_REGISTRY[dk].label}
                   </option>
@@ -111,11 +122,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
             {stats && (
               <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs, fontSize: fontSizes.xs }}>
                 {stats.isLossy ? (
-                  <span style={{ color: colors.warning }}>
-                    {stats.clipped > 0 && `${stats.clipped} clipped`}
-                    {stats.clipped > 0 && stats.rounded > 0 && ', '}
-                    {stats.rounded > 0 && `${stats.rounded} rounded`}
-                  </span>
+                  <span style={{ color: colors.warning }}>{lossyParts}</span>
                 ) : (
                   <span style={{ color: colors.success }}>lossless</span>
                 )}
