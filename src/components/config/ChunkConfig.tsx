@@ -1,6 +1,7 @@
 import { computeChunkGrid, computeChunkCount } from '../../engine/chunk.ts';
 import { colors, fontSizes, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
+import { NumberInput } from '../shared/NumberInput.tsx';
 
 interface ChunkConfigProps {
   shape: number[];
@@ -19,15 +20,13 @@ export function ChunkConfig({ shape, chunkShape, onChunkShapeChange }: ChunkConf
           <span style={{ fontSize: fontSizes.sm, color: colors.textSecondary, minWidth: 40 }}>
             Dim {d}
           </span>
-          <input
-            type="number"
+          <NumberInput
             min={1}
             max={shape[d]}
             value={cs}
-            onChange={(e) => {
-              const v = Math.max(1, Math.min(shape[d], parseInt(e.target.value) || 1));
+            onValue={(n) => {
               const newChunkShape = [...chunkShape];
-              newChunkShape[d] = v;
+              newChunkShape[d] = Math.max(1, Math.min(shape[d], Math.trunc(n)));
               onChunkShapeChange(newChunkShape);
             }}
             style={{ ...inputStyle(), width: 60 }}

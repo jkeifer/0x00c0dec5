@@ -1,6 +1,7 @@
 import type { Variable, LogicalTypeConfig, LogicalType } from '../../types/state.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
+import { NumberInput } from '../shared/NumberInput.tsx';
 
 interface SchemaEditorProps {
   variables: Variable[];
@@ -64,14 +65,10 @@ export function SchemaEditor({
             <span style={{ fontSize: fontSizes.sm, color: colors.textSecondary, minWidth: 40 }}>
               Rows
             </span>
-            <input
-              type="number"
+            <NumberInput
               min={1}
               value={shape[0]}
-              onChange={(e) => {
-                const val = Math.max(1, parseInt(e.target.value) || 1);
-                onShapeChange([val]);
-              }}
+              onValue={(n) => onShapeChange([Math.max(1, Math.trunc(n))])}
               data-testid="shape-input"
               style={{ ...inputStyle(), width: 60 }}
             />
@@ -85,14 +82,12 @@ export function SchemaEditor({
                 >
                   Dim {d}
                 </span>
-                <input
-                  type="number"
+                <NumberInput
                   min={1}
                   value={dim}
-                  onChange={(e) => {
-                    const val = Math.max(1, parseInt(e.target.value) || 1);
+                  onValue={(n) => {
                     const newShape = [...shape];
-                    newShape[d] = val;
+                    newShape[d] = Math.max(1, Math.trunc(n));
                     onShapeChange(newShape);
                   }}
                   data-testid={`shape-input-${d}`}
@@ -239,29 +234,26 @@ export function SchemaEditor({
                   </select>
 
                   <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>min</span>
-                  <input
-                    type="number"
+                  <NumberInput
                     value={v.logicalType.min}
-                    onChange={(e) => updateLogicalType(v, { min: parseFloat(e.target.value) || 0 })}
+                    onValue={(n) => updateLogicalType(v, { min: n })}
                     style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                   />
                   <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>max</span>
-                  <input
-                    type="number"
+                  <NumberInput
                     value={v.logicalType.max}
-                    onChange={(e) => updateLogicalType(v, { max: parseFloat(e.target.value) || 0 })}
+                    onValue={(n) => updateLogicalType(v, { max: n })}
                     style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                   />
 
                   {v.logicalType.type === 'decimal' && (
                     <>
                       <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>places</span>
-                      <input
-                        type="number"
+                      <NumberInput
                         min={0}
                         max={10}
                         value={v.logicalType.decimalPlaces ?? 1}
-                        onChange={(e) => updateLogicalType(v, { decimalPlaces: Math.max(0, parseInt(e.target.value) || 0) })}
+                        onValue={(n) => updateLogicalType(v, { decimalPlaces: Math.max(0, Math.trunc(n)) })}
                         style={{ ...inputStyle(fontSizes.xs), width: 40 }}
                       />
                     </>
@@ -270,12 +262,11 @@ export function SchemaEditor({
                   {v.logicalType.type === 'continuous' && (
                     <>
                       <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>sig figs</span>
-                      <input
-                        type="number"
+                      <NumberInput
                         min={1}
                         max={15}
                         value={v.logicalType.significantFigures ?? 6}
-                        onChange={(e) => updateLogicalType(v, { significantFigures: Math.max(1, parseInt(e.target.value) || 6) })}
+                        onValue={(n) => updateLogicalType(v, { significantFigures: Math.max(1, Math.trunc(n)) })}
                         style={{ ...inputStyle(fontSizes.xs), width: 40 }}
                       />
                     </>

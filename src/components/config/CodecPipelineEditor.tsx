@@ -4,6 +4,7 @@ import { CODEC_REGISTRY, outputDtypeFor, stepWarnings } from '../../engine/codec
 import { DTYPE_REGISTRY, getDtype } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
+import { NumberInput } from '../shared/NumberInput.tsx';
 
 interface CodecPipelineEditorProps {
   steps: CodecStep[];
@@ -203,17 +204,16 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
                   {paramDef.label}
                 </span>
                 {paramDef.type === 'number' ? (
-                  <input
-                    type="number"
+                  <NumberInput
                     min={paramDef.min}
                     max={paramDef.max}
                     step={paramDef.step}
                     value={Number(step.params[paramKey] ?? paramDef.default)}
-                    onChange={(e) =>
+                    onValue={(n) =>
                       updateParam(
                         i,
                         paramKey,
-                        clampParamValue(e.target.value, paramDef.min, paramDef.max, Number(paramDef.default)),
+                        clampParamValue(String(n), paramDef.min, paramDef.max, Number(paramDef.default)),
                       )
                     }
                     style={{ ...inputStyle(), width: 70 }}

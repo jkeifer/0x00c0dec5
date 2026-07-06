@@ -4,6 +4,7 @@ import type { DtypeKey } from '../../types/dtypes.ts';
 import { DTYPE_KEYS, DTYPE_REGISTRY, getDtype } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
+import { NumberInput } from '../shared/NumberInput.tsx';
 
 interface TypeAssignConfigProps {
   variables: Variable[];
@@ -71,19 +72,17 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
             {showScaleOffset && (
               <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>scale</span>
-                <input
-                  type="number"
+                <NumberInput
                   value={v.typeAssignment.scale ?? 1}
                   step={0.1}
-                  onChange={(e) => updateAssignment(v, { scale: parseFloat(e.target.value) || 1 })}
+                  onValue={(n) => updateAssignment(v, { scale: n || 1 })}
                   style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                 />
                 <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>offset</span>
-                <input
-                  type="number"
+                <NumberInput
                   value={v.typeAssignment.offset ?? 0}
                   step={1}
-                  onChange={(e) => updateAssignment(v, { offset: parseFloat(e.target.value) || 0 })}
+                  onValue={(n) => updateAssignment(v, { offset: n })}
                   style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                 />
               </div>
