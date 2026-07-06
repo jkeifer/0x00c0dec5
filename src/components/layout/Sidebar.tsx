@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { Fragment, useEffect, useRef } from 'react';
 import { useAppState } from '../../state/useAppState.ts';
 import { usePipelineContext } from '../../state/PipelineContext.tsx';
 import { useGuide } from '../../state/GuideContext.tsx';
@@ -39,10 +39,13 @@ const sectionLabelStyle: React.CSSProperties = {
   margin: `0 0 ${spacing.xs}px`,
 };
 
+// Rendered as a flex sibling BETWEEN sections (not inside them), so the
+// column gap spaces it evenly on both sides and the guide highlight outline
+// wraps only a section's label + content, symmetric between dividers.
 const dividerStyle: React.CSSProperties = {
   height: 1,
   background: colors.borderSubtle,
-  marginBottom: spacing.lg,
+  flexShrink: 0,
 };
 
 // Task 3.9 (remediation-plan.md, Phase 3): files/readResult/variableStats
@@ -217,28 +220,29 @@ export function Sidebar() {
         const slug = SECTION_TESTIDS[section];
         const isGuideActive = slug === activeSection;
         return (
-          <div
-            key={section}
-            data-testid={`sidebar-section-${slug}`}
-            data-guide-active={isGuideActive || undefined}
-            ref={(el) => {
-              if (el) sectionRefs.current.set(slug, el);
-              else sectionRefs.current.delete(slug);
-            }}
-            style={
-              isGuideActive
-                ? {
-                    outline: `2px solid ${colors.accent}`,
-                    outlineOffset: 4,
-                    borderRadius: radii.sm,
-                  }
-                : undefined
-            }
-          >
+          <Fragment key={section}>
             {i > 0 && <div style={dividerStyle} />}
-            <h2 style={sectionLabelStyle}>{section}</h2>
-            {renderSection(section)}
-          </div>
+            <div
+              data-testid={`sidebar-section-${slug}`}
+              data-guide-active={isGuideActive || undefined}
+              ref={(el) => {
+                if (el) sectionRefs.current.set(slug, el);
+                else sectionRefs.current.delete(slug);
+              }}
+              style={
+                isGuideActive
+                  ? {
+                      outline: `2px solid ${colors.accent}`,
+                      outlineOffset: 4,
+                      borderRadius: radii.sm,
+                    }
+                  : undefined
+              }
+            >
+              <h2 style={sectionLabelStyle}>{section}</h2>
+              {renderSection(section)}
+            </div>
+          </Fragment>
         );
       })}
     </aside>
