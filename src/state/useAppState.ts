@@ -9,7 +9,7 @@ import {
   createElement,
 } from 'react';
 import { produce } from 'immer';
-import { DEFAULT_STATE, type AppState, type Variable } from '../types/state.ts';
+import { DEFAULT_STATE, makeEmptyState, type AppState, type Variable } from '../types/state.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import { loadState, saveState, loadActiveModel, saveActiveModel } from './persistence.ts';
 import { type PresetKey, resolvePreset, saveCustomPreset, loadCustomPreset } from './presets.ts';
@@ -23,9 +23,11 @@ export type AppAction =
   // REPLACE_STATE with the fully-resolved state instead. Nothing should
   // dispatch SET_DATA_MODEL directly except that wrapper.
   | { type: 'SET_DATA_MODEL'; model: AppState['dataModel'] }
-  // REPLACE_STATE swaps in a full AppState wholesale. Used ONLY by
-  // switchDataModel's wrapper (the one remaining "replace everything" escape
-  // hatch now that LOAD_STATE — never dispatched — is deleted, SW-8).
+  // REPLACE_STATE swaps in a full AppState wholesale — the one remaining
+  // "replace everything" escape hatch now that LOAD_STATE (never dispatched)
+  // is deleted (SW-8). Dispatched only by the AppStateProvider wrappers that
+  // resolve a full state out-of-band: switchDataModel, loadPreset,
+  // restoreCheckpoint, and clearConfig.
   | { type: 'REPLACE_STATE'; state: AppState }
   // Schema
   | { type: 'SET_SHAPE'; shape: number[] }
@@ -196,8 +198,7 @@ interface AppStateContextValue {
    * model's current state, load the INCOMING model's persisted state (or its
    * default), force `dataModel` to the incoming model on whichever state was
    * resolved, record the incoming model as the active one (SW-5), then
-   * dispatch a single REPLACE_STATE with the fully-resolved state. This is
-   * the only caller that should ever dispatch REPLACE_STATE.
+   * dispatch a single REPLACE_STATE with the fully-resolved state.
    */
   switchDataModel: (model: AppState['dataModel']) => void;
   /**
@@ -228,6 +229,17 @@ interface AppStateContextValue {
    * validation.
    */
   restoreCheckpoint: () => void;
+  /**
+   * Clear the ACTIVE data model's configuration to a *blank* state (zero
+   * variables — `makeEmptyState`, not DEFAULT_STATE's starter variables).
+   * Mirrors `restoreCheckpoint`'s shape: resolve a full `AppState`
+   * out-of-band, persist it immediately via `saveState` (so the clear isn't
+   * lost if the debounced autosave hasn't fired before a reload), then
+   * dispatch one `REPLACE_STATE`. Scoped strictly to the active model: only
+   * `0x00c0dec5-state-{activeModel}` is written; the other model's state,
+   * the checkpoint, and the custom-preset slots are untouched.
+   */
+  clearConfig: () => void;
 }
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
@@ -369,9 +381,18 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'REPLACE_STATE', state: restored });
   }, []);
 
+  const clearConfig = useCallback(() => {
+    // See the AppStateContextValue doc comment: blank state for the ACTIVE
+    // model only, saved immediately (mirrors restoreCheckpoint) so the clear
+    // survives an immediate reload.
+    const empty = makeEmptyState(stateRef.current.dataModel);
+    saveState(empty);
+    dispatch({ type: 'REPLACE_STATE', state: empty });
+  }, []);
+
   return createElement(
     AppStateContext.Provider,
-    { value: { state, dispatch, switchDataModel, loadPreset, restoreCheckpoint } },
+    { value: { state, dispatch, switchDataModel, loadPreset, restoreCheckpoint, clearConfig } },
     children,
   );
 }

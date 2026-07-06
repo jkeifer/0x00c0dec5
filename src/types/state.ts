@@ -151,3 +151,21 @@ export const DEFAULT_STATE: AppState = {
     showDiff: false,
   },
 };
+
+/**
+ * A *blank* configuration for `dataModel` — zero variables, no field
+ * pipelines — as opposed to DEFAULT_STATE's three starter variables. Used by
+ * the Header's Clear button. `shape`/`chunkShape` deliberately keep the
+ * defaults: persistence's `validateState` hard-resets the whole state on an
+ * empty shape array, and the documented degenerate state (design.md Edge
+ * Cases) is *zero variables*, not zero dimensions. A factory rather than a
+ * constant because callers may mutate the returned state (mutable refs).
+ */
+export function makeEmptyState(dataModel: AppState['dataModel']): AppState {
+  return {
+    ...structuredClone(DEFAULT_STATE),
+    dataModel,
+    variables: [],
+    fieldPipelines: {},
+  };
+}

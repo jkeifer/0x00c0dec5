@@ -61,7 +61,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
 }
 
 export function Header() {
-  const { state, switchDataModel, loadPreset, restoreCheckpoint } = useAppState();
+  const { state, switchDataModel, loadPreset, restoreCheckpoint, clearConfig } = useAppState();
   const [checkpointLabel, setCheckpointLabel] = useState('Save checkpoint');
   const [canRestore, setCanRestore] = useState(() => hasCheckpoint());
   const [shareLabel, setShareLabel] = useState('Share');
@@ -75,6 +75,19 @@ export function Header() {
 
   function handleRestoreCheckpoint() {
     restoreCheckpoint();
+  }
+
+  function handleClearConfig() {
+    const modelLabel = state.dataModel === 'tabular' ? 'Tabular' : 'N-d Array';
+    // window.confirm: no dialog infrastructure exists in the app, and a
+    // destructive one-shot action doesn't warrant building one.
+    if (
+      window.confirm(
+        `Clear the current ${modelLabel} configuration? The other data model, checkpoint, and presets are not affected.`,
+      )
+    ) {
+      clearConfig();
+    }
   }
 
   async function handleShare() {
@@ -173,6 +186,14 @@ export function Header() {
           }}
         >
           Restore
+        </button>
+        <button
+          type="button"
+          onClick={handleClearConfig}
+          data-testid="clear-config"
+          style={headerButtonStyle}
+        >
+          Clear
         </button>
         <button
           type="button"
