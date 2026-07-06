@@ -55,8 +55,8 @@ export const STEPS: GuideStep[] = [
     section: 'schema',
     decision:
       'Define the dataset: its shape, its variables, and what each variable’s values look ' +
-      'like — a logical type (integer, decimal, or continuous, with a range) plus a generation ' +
-      'mode that controls the data’s structure.',
+      'like — a logical type (integer, decimal, or continuous with a range, or text drawn ' +
+      'from a word set) plus a generation mode that controls the data’s structure.',
     options: [
       {
         label: 'random',
@@ -85,7 +85,11 @@ export const STEPS: GuideStep[] = [
       'the same move — Parquet columns, GeoTIFF bands, and Zarr arrays all answer "what ' +
       'variables, what shape, what values". Generation mode matters because everything ' +
       'downstream is a bet on the data’s structure: the defaults (smooth temperature, sorted ' +
-      'pressure, stepped humidity) exist so each later stage has something honest to show.',
+      'pressure, stepped humidity) exist so each later stage has something honest to show. ' +
+      'Variables need not be numeric: the text type draws words from a bundled set — names, ' +
+      'cities, countries, or prefix-heavy station IDs like WX-0042-A — and because the sets ' +
+      'are stored sorted, the same four modes shape categorical data too: stepped becomes ' +
+      'runs of one repeated word, sorted becomes alphabetical order.',
     tryIt:
       'In Schema, change temperature’s generation from smooth to random and watch the Values ' +
       'pane. Then check the Encoded stage’s entropy stat in the pipeline strip — random data ' +
@@ -178,6 +182,11 @@ export const STEPS: GuideStep[] = [
         cons: 'Values outside the representable range clamp, and anything finer than the scale step rounds away. You must pick scale/offset to fit min/max.',
       },
       {
+        label: 'char[N] fixed-width text (4/8/16 bytes)',
+        pros: 'Every value occupies exactly N bytes, so chunking, seeking, and tracing stay trivial — the same bet DBF and NetCDF-classic made — and the hex view’s ASCII column shows the words directly.',
+        cons: 'Too narrow truncates — "Wellington" in char8 stores "Wellingt", counted in the truncated stat and flagged lossy at Read. Too wide pads — char16 cities are mostly trailing spaces.',
+      },
+      {
         label: 'keepBits (float bit-rounding)',
         pros: 'Zeroing mantissa bits you don’t need creates trailing zero bytes that shuffle + compress beautifully, while keeping float semantics.',
         cons: 'Irrecoverably truncates precision — the diff view will show it. Choosing keepBits requires knowing your data’s real precision.',
@@ -189,7 +198,10 @@ export const STEPS: GuideStep[] = [
       'deliberately makes it a pipeline stage (Typed) rather than a codec: "what does this ' +
       'value mean" and "how many bytes do I spend representing it" are different decisions. ' +
       'The stats beside each variable (clipped, rounded, lossy) come from this stage and feed ' +
-      'the Read stage’s diff view later.',
+      'the Read stage’s diff view later. Text faces the same size-versus-fidelity trade as ' +
+      'numbers, just with truncation and padding instead of rounding; real formats eventually ' +
+      'reach for offset arrays or dictionaries to store variable-length strings — complexity ' +
+      'this tool leaves out on purpose.',
     tryIt:
       'Set temperature’s storage dtype to int16 with scale 1: the Typed stage halves, the ' +
       'stats show rounded values, and the Read diff view shows errors up to half a degree. ' +
@@ -233,7 +245,12 @@ export const STEPS: GuideStep[] = [
       'through the pipeline (entropy codecs collapse it to uint8), and the hover tracing — ' +
       'after RLE or LZ, hovering an encoded byte highlights the whole source chunk, because ' +
       'individual bytes no longer map to individual values. That opacity is why metadata must ' +
-      'record the pipeline: nothing about the bytes themselves says how to reverse them.',
+      'record the pipeline: nothing about the bytes themselves says how to reverse them. ' +
+      'Text has its own version of the pairing: RLE devours the trailing-space padding of ' +
+      'short words in char16, but it is LZ that compresses the words themselves — repeated ' +
+      'values and shared station-ID prefixes are byte sequences, not same-byte runs. Delta ' +
+      'on text falls back to meaningless byte-wise differences; the tool warns but stays ' +
+      'lossless.',
     tryIt:
       'Add Delta then RLE to humidity (stepped — long runs) and watch its Encoded bytes ' +
       'shrink. Add the same two codecs to temperature after setting its generation to random: ' +
