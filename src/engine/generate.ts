@@ -108,15 +108,17 @@ export function createPRNG(seed: number): () => number {
 }
 
 /**
- * Arithmetic replacement for Number(x.toPrecision(sig)) — the generation hot
- * path (3M string round-trips at the 1M-element target dominated the values
- * stage's ~1s in the Phase 1-3 exit profile). Matches toPrecision exactly in
- * the overwhelming majority of cases; may differ by 1 ulp when the scale
- * factor is not exactly representable. Determinism is unaffected (pure
- * arithmetic, same inputs -> same outputs).
+ * Arithmetic replacement for Number(x.toPrecision(sig)) on the continuous
+ * generation path — avoids a per-element string round-trip (~34% faster for
+ * 1M continuous values in isolated benchmarks; the default profile state has
+ * no continuous variables, so this does not appear in `npm run profile`).
+ * Matches toPrecision exactly in the overwhelming majority of cases; may
+ * differ by 1 ulp when the scale factor is not exactly representable.
+ * Determinism is unaffected (pure arithmetic, same inputs -> same outputs).
  */
 export function roundToSigFigs(x: number, sigFigs: number): number {
-  if (x === 0 || !Number.isFinite(x)) return x;
+  if (x === 0) return 0;
+  if (!Number.isFinite(x)) return x;
   const mag = Math.floor(Math.log10(Math.abs(x)));
   const factor = Math.pow(10, sigFigs - 1 - mag);
   const rounded = Math.round(x * factor) / factor;

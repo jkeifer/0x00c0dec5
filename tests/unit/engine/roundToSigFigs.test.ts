@@ -5,6 +5,7 @@ import type { LogicalTypeConfig } from '../../../src/types/state.ts';
 describe('roundToSigFigs', () => {
   it('handles exact cases', () => {
     expect(roundToSigFigs(0, 6)).toBe(0);
+    expect(Object.is(roundToSigFigs(-0, 6), 0)).toBe(true);
     expect(roundToSigFigs(123.456789, 6)).toBe(Number((123.456789).toPrecision(6)));
     expect(roundToSigFigs(-0.000123456, 3)).toBe(Number((-0.000123456).toPrecision(3)));
     expect(roundToSigFigs(1000, 2)).toBe(1000);
