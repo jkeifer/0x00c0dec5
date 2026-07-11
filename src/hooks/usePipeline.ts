@@ -419,17 +419,28 @@ function buildStageSources(
   ]);
 }
 
-export function computePipelineStages(state: AppState): PipelineResult {
-  const values = computeValuesStage(state.shape, state.variables);
-  const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
-  const linearized = computeLinearizedStage(
+export function computePipelineStages(
+  state: AppState,
+  onStage?: (stage: StageName, ms: number) => void,
+): PipelineResult {
+  const timed = <T,>(stage: StageName, fn: () => T): T => {
+    if (!onStage) return fn();
+    const t0 = performance.now();
+    const out = fn();
+    onStage(stage, performance.now() - t0);
+    return out;
+  };
+
+  const values = timed('values', () => computeValuesStage(state.shape, state.variables));
+  const typed = timed('typed', () => computeTypedStage(state.shape, state.variables, values.variableValues));
+  const linearized = timed('linearized', () => computeLinearizedStage(
     state.shape,
     state.chunkShape,
     state.interleaving,
     state.variables,
     typed.typedVariableValues,
-  );
-  const encoded = computeEncodedStage(
+  ));
+  const encoded = timed('encoded', () => computeEncodedStage(
     linearized.chunks,
     linearized.linearizedChunks,
     state.interleaving,
@@ -437,10 +448,10 @@ export function computePipelineStages(state: AppState): PipelineResult {
     state.fieldPipelines,
     state.chunkPipeline,
     linearized.stage.layout,
-  );
-  const metadata = computeMetadataStage(state, encoded.encodedChunks, typed.variableStats);
-  const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, encoded.stage.layout);
-  const read = computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber);
+  ));
+  const metadata = timed('metadata', () => computeMetadataStage(state, encoded.encodedChunks, typed.variableStats));
+  const files = timed('write', () => computeFilesStage(state, encoded.encodedChunks, typed.variableStats, encoded.stage.layout));
+  const read = timed('read', () => computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber));
 
   const stages: PipelineStage[] = [
     values.stage,
