@@ -81,3 +81,38 @@ describe('useWorkerPipeline', () => {
     expect(terminateSpy).toHaveBeenCalled();
   });
 });
+
+describe('useWorkerPipeline compute trigger scope', () => {
+  it('does NOT post a compute for a ui-only state change', () => {
+    const worker = new FakeWorker();
+    const { result, rerender } = renderHook((state: AppState) => useWorkerPipeline(state, () => worker), {
+      initialProps: DEFAULT_STATE,
+    });
+    expect(worker.posted).toHaveLength(1);
+    act(() => worker.emitResult(worker.posted[0].id, { stages: [] } as never));
+    expect(result.current.computing).toBe(false);
+
+    // New state identity, same pipeline-relevant slices, different ui — this
+    // is what a pane-stage change dispatch produces.
+    const uiOnly: AppState = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, leftPaneStage: 'typed' } };
+    rerender(uiOnly);
+
+    expect(worker.posted).toHaveLength(1); // no new compute
+    expect(result.current.computing).toBe(false); // no recompute indicator flash
+  });
+
+  it('DOES post a compute for a pipeline-relevant change', () => {
+    const worker = new FakeWorker();
+    const { rerender } = renderHook((state: AppState) => useWorkerPipeline(state, () => worker), {
+      initialProps: DEFAULT_STATE,
+    });
+    expect(worker.posted).toHaveLength(1);
+    // Settle the in-flight compute first — the client queues (not posts)
+    // while one is outstanding (Task 12 coalescing).
+    act(() => worker.emitResult(worker.posted[0].id, { stages: [] } as never));
+
+    const shapeChange: AppState = { ...DEFAULT_STATE, shape: [64] };
+    rerender(shapeChange);
+    expect(worker.posted).toHaveLength(2);
+  });
+});

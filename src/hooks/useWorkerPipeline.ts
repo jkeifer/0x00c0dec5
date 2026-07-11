@@ -51,10 +51,20 @@ export function useWorkerPipeline(
     });
   }
 
+  // Recompute only when a PIPELINE input changes. `state.ui` (pane
+  // selections, view modes, diff toggle) lives in the same AppState object,
+  // and depending on `[state]` fired a full worker round-trip — result
+  // structured-clone included — on every pane click (measured ~1.3s at 1M
+  // elements for a change that recomputes nothing). Immer keeps untouched
+  // slice identities stable, so depending on the slices themselves skips
+  // ui-only changes. The posted state still carries `ui`; the worker's
+  // stage memos never key on it.
+  const { dataModel, shape, chunkShape, interleaving, variables, fieldPipelines, chunkPipeline, metadata, write } = state;
   useEffect(() => {
     setComputing(true);
     clientRef.current!.compute(state);
-  }, [state]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: `state` is posted whole, but only pipeline slices trigger
+  }, [dataModel, shape, chunkShape, interleaving, variables, fieldPipelines, chunkPipeline, metadata, write]);
 
   useEffect(() => () => clientRef.current!.dispose(), []);
 
