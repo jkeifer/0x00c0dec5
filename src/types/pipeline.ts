@@ -161,6 +161,13 @@ export interface ReadSuccess {
  *   them (D3). Wired up by a later agent (task 2.13).
  * - 'decode-error': codec reversal / deinterleave / reassembly failed after
  *   metadata was found and parsed successfully.
+ * - 'missing-schema': metadata was found and parsed, but the `schema` key
+ *   itself is absent (read plan Task 3 — `metadata.include.schema` off).
+ *   Distinct from 'corrupt-metadata', which is for keys that ARE present but
+ *   fail to parse.
+ * - 'missing-layout': metadata was found and parsed, schema was present, but
+ *   the `shape`/`chunk_shape` keys are absent (read plan Task 3 —
+ *   `metadata.include.layout` off).
  */
 export type ReadFailureReason =
   | 'no-metadata'
@@ -168,7 +175,9 @@ export type ReadFailureReason =
   | 'bad-magic'
   | 'corrupt-metadata'
   | 'no-chunk-index'
-  | 'decode-error';
+  | 'decode-error'
+  | 'missing-schema'
+  | 'missing-layout';
 
 export interface ReadFailure {
   success: false;

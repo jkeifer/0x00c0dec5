@@ -22,6 +22,29 @@ import { flatIndexToCoords, coordsToFlatIndex, computeChunkGrid, enumerateChunkC
  * Mapped by `readFile` to failure reason 'no-chunk-index'. */
 class NoChunkIndexError extends Error {}
 
+/** Read plan Task 3: thrown by `parseStructure` when the `schema` key itself
+ * is absent from located metadata entries (`metadata.include.schema` off at
+ * write time). Mapped by `readFile` to failure reason 'missing-schema' at the
+ * read-schema step. Distinct from a present-but-malformed `schema` value,
+ * which stays a JSON.parse throw mapped to 'corrupt-metadata'. */
+class MissingSchemaError extends Error {}
+
+/** Read plan Task 3: thrown by `parseStructure` when `shape`/`chunk_shape`
+ * are absent (`metadata.include.layout` off). Only checked once schema is
+ * confirmed present — schema absence wins first when both are off, mirroring
+ * the reader's step order (read-schema before read-layout). Mapped to
+ * 'missing-layout' at the read-layout step. */
+class MissingLayoutError extends Error {}
+
+/** Read plan Task 3 §3: thrown by `reconstructValues` when assume-identity
+ * (codec_pipelines absent) is active and a chunk's raw byte count doesn't
+ * match what chunk geometry x dtype size predicts — the detectable half of
+ * the three-way assume-identity outcome (the other two, honest-success and
+ * garbled-but-same-size, can't be distinguished from a byte count alone and
+ * both fall through as ordinary decode-chunks 'ok'). Mapped by `readFile` to
+ * 'decode-error' at decode-chunks, with both counts named in the message. */
+class AssumedIdentitySizeMismatchError extends Error {}
+
 interface VariableStatsLike {
   isLossy: boolean;
 }
@@ -49,6 +72,12 @@ interface ParsedStructure {
   typeAssignments: Record<string, TypeAssignment> | null;
   variableStatistics: Record<string, VariableStatsLike> | null;
   totalElements: number;
+  /** Read plan Task 3: whether the `codec_pipelines` key was present in
+   * metadata at all. When false, the reader proceeds via assume-identity
+   * (empty pipelines) — `decode-chunks`' step detail distinguishes "no
+   * codec info — none was needed" (honest) from "assumed raw bytes"
+   * (codecs WERE applied at write time but the reader can't know that). */
+  codecInfoPresent: boolean;
 }
 
 /**
@@ -99,10 +128,37 @@ export function readFile(
   try {
     structure = parseStructure(located.entries);
   } catch (err) {
-    // Metadata was located and parsed as entries, but the entries don't
-    // describe a dataset (missing fields), or a field's JSON didn't parse
-    // into the shape the reader expects — located-but-unusable is corrupt,
-    // not absent.
+    // Read plan Task 3: schema/layout presence checks are split out of
+    // parseStructure's single combined throw — a genuinely missing `schema`
+    // or `shape`/`chunk_shape` key gets its own reason and step, distinct
+    // from a present-but-malformed key (which still falls through to the
+    // generic corrupt-metadata branch below).
+    if (err instanceof MissingSchemaError) {
+      recorder.ok('parse-metadata', `${located.entries.length} entries parsed`);
+      return makeFailure(
+        'missing-schema',
+        totalBytes(dataFiles),
+        recorder,
+        'read-schema',
+        'metadata parsed, but no "schema" entry describing variables/types',
+        describeError(err),
+      );
+    }
+    if (err instanceof MissingLayoutError) {
+      recorder.ok('parse-metadata', `${located.entries.length} entries parsed`);
+      recorder.ok('read-schema', `${located.entries.length} entries parsed, schema present`);
+      return makeFailure(
+        'missing-layout',
+        totalBytes(dataFiles),
+        recorder,
+        'read-layout',
+        'metadata parsed, but no "shape"/"chunk_shape" entries describing the dataset geometry',
+        describeError(err),
+      );
+    }
+    // Metadata was located and parsed as entries, but a field's JSON didn't
+    // parse into the shape the reader expects — located-but-unusable is
+    // corrupt, not absent.
     return makeFailure(
       'corrupt-metadata',
       totalBytes(dataFiles),
@@ -113,11 +169,7 @@ export function readFile(
     );
   }
   recorder.ok('parse-metadata', `${located.entries.length} entries parsed`);
-  // Presence checks for schema/layout are split out in a later task —
-  // reaching here means parseStructure already succeeded, which today
-  // requires schema/shape/chunk_shape to all be present (its combined throw
-  // is caught above and mapped to corrupt-metadata), so both are ok here.
-  recorder.ok('read-schema', `${structure.schema.length} variable(s): ${structure.schema.map((s) => s.name).join(', ')}`);
+  recorder.ok('read-schema', describeSchemaFound(structure, located.entries));
   recorder.ok('read-layout', `shape [${structure.shape.join(',')}], chunk shape [${structure.chunkShape.join(',')}], ${structure.interleaving} interleaving`);
 
   try {
@@ -138,6 +190,11 @@ export function readFile(
     // reversal or dtype mismatch) — rather than guess from the exception.
     return makeFailure('decode-error', totalBytes(dataFiles), recorder, 'decode-chunks', 'reconstruction failed', describeError(err));
   }
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }
 
 /** Describe a magic mismatch for the step log: actual leading bytes vs expected, as hex. */
@@ -220,24 +277,40 @@ function locateMetadata(
   };
 }
 
-/** Parse located metadata entries into a typed dataset structure. Throws on
- * missing required fields or malformed JSON; caller maps that to
- * 'corrupt-metadata'. */
+/** Parse located metadata entries into a typed dataset structure.
+ *
+ * Presence checks are split by group, checked in reader-step order (read plan
+ * Task 3): schema (`schema` key) first, then layout (`shape`/`chunk_shape`)
+ * — throwing typed `MissingSchemaError`/`MissingLayoutError` respectively, so
+ * `readFile` can attribute the failure to the right step. `type_assignments`
+ * and `logical_types` are schema-group per `METADATA_KEY_GROUPS`
+ * (metadata.ts) but are optional even when schema IS present (a variable's
+ * dtype lives in `schema` itself) — they are not gated here. `interleaving`
+ * is layout-group but already defaults to 'column' when absent and keeps
+ * that default; it isn't a presence-check trigger.
+ *
+ * Once both groups are confirmed present, malformed JSON in any key throws a
+ * plain `Error`; the caller maps that to 'corrupt-metadata' — located-and-
+ * present-but-unusable is corrupt, not absent. */
 function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructure {
   const metaMap = new Map(metadataEntries.map((e) => [e.key, e.value]));
 
   const schemaStr = metaMap.get('schema');
+  if (!schemaStr) {
+    throw new MissingSchemaError('metadata is missing the schema (no "schema" key)');
+  }
+
   const shapeStr = metaMap.get('shape');
   const chunkShapeStr = metaMap.get('chunk_shape');
+  if (!shapeStr || !chunkShapeStr) {
+    throw new MissingLayoutError('metadata is missing layout fields (shape, chunk_shape)');
+  }
+
   const interleavingStr = metaMap.get('interleaving') ?? 'column';
   const codecPipelinesStr = metaMap.get('codec_pipelines');
   const chunkIndexStr = metaMap.get('chunk_index');
   const typeAssignmentsStr = metaMap.get('type_assignments');
   const variableStatisticsStr = metaMap.get('variable_statistics');
-
-  if (!schemaStr || !shapeStr || !chunkShapeStr) {
-    throw new Error('metadata is missing required fields (schema, shape, chunk_shape)');
-  }
 
   const shape: number[] = JSON.parse(shapeStr);
   let fieldPipelines: Record<string, CodecStep[]> | null = null;
@@ -263,7 +336,29 @@ function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructure {
     typeAssignments: typeAssignmentsStr ? JSON.parse(typeAssignmentsStr) : null,
     variableStatistics: variableStatisticsStr ? JSON.parse(variableStatisticsStr) : null,
     totalElements: shape.reduce((a, b) => a * b, 1),
+    codecInfoPresent: codecPipelinesStr !== undefined,
   };
+}
+
+/** Read plan Task 3: read-schema step's `found` text. When descriptive
+ * metadata (`variable_statistics` + custom entries) is absent, says so
+ * explicitly — the structural-vs-descriptive lesson: the reader read the
+ * schema just fine without it, because descriptive content was never needed
+ * to interpret bytes, only to help a human understand values. `metadata_format`
+ * and `byte_order` are the only other non-schema/layout/codec/chunk-index
+ * keys (envelope, always present), so anything else present alongside schema
+ * counts as descriptive content having been included. */
+function describeSchemaFound(structure: ParsedStructure, entries: MetadataEntry[]): string {
+  const base = `${structure.schema.length} variable(s): ${structure.schema.map((s) => s.name).join(', ')}`;
+  const knownKeys = new Set([
+    'schema', 'type_assignments', 'logical_types',
+    'shape', 'chunk_shape', 'chunk_grid', 'chunk_order', 'partitioning', 'interleaving',
+    'codec_pipelines', 'chunk_index',
+    'metadata_format', 'byte_order',
+  ]);
+  const hasDescriptive = entries.some((e) => e.key === 'variable_statistics' || !knownKeys.has(e.key));
+  if (hasDescriptive) return base;
+  return `${base} (statistics and custom entries were absent — not needed to read the schema)`;
 }
 
 /** Resolve the chunk index, reconstruct all variables' values from their
@@ -277,7 +372,7 @@ function reconstruct(
   chunkDataStart: number,
   recorder: StepRecorder,
 ): ReadFileResult {
-  const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, typeAssignments, variableStatistics, totalElements } = structure;
+  const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, typeAssignments, variableStatistics, totalElements, codecInfoPresent } = structure;
 
   const typeAssignLossy = new Set<string>();
   if (variableStatistics) {
@@ -320,13 +415,18 @@ function reconstruct(
     chunkPipeline,
     chunkIndex: resolvedChunkIndex,
     totalElements,
+    codecInfoPresent,
   };
 
   const getChunkBytes = dataFiles.length === 1
     ? makeSingleFileChunkReader(dataFiles[0].bytes)
     : makePerChunkFileReader(dataFiles, magicBytes);
   const reconstructedValues = reconstructValues(context, getChunkBytes);
-  recorder.ok('decode-chunks', `${schema.length} variable(s) decoded through their codec pipeline(s)`);
+  recorder.ok(
+    'decode-chunks',
+    `${schema.length} variable(s) decoded through their codec pipeline(s)`,
+    describeDecodeDetail(codecInfoPresent),
+  );
 
   if (typeAssignments) {
     for (const [varName, assignment] of Object.entries(typeAssignments)) {
@@ -345,9 +445,22 @@ function reconstruct(
   };
 }
 
-function describeError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
+/** Read plan Task 3 §3: decode-chunks step detail for the assume-identity
+ * path (`codec_pipelines` absent from metadata). The reader genuinely cannot
+ * tell, from parsed metadata alone, whether that means "no codecs were ever
+ * applied" (honest — the empty pipeline it assumes IS correct) or "codecs
+ * WERE applied at write time but their record was omitted" (the pipeline it
+ * assumes is wrong, and reconstructed values will be garbled for anything
+ * beyond identity) — both look identical from inside `reconstruct`: an
+ * absent `codec_pipelines` key either way. One honest detail string covers
+ * both readings rather than claiming certainty the reader doesn't have; the
+ * size-changing sub-case never reaches this text at all (caught earlier, as
+ * a genuine decode-error, by the byte-count check in `reconstructValues`).
+ * When codec info WAS present, no extra detail is needed — the step's plain
+ * `found` text already says the pipeline was used. */
+function describeDecodeDetail(codecInfoPresent: boolean): string | undefined {
+  if (codecInfoPresent) return undefined;
+  return 'no codec info — assumed raw bytes (honest if none were applied at write time; garbled if they were)';
 }
 
 function totalBytes(dataFiles: VirtualFile[]): number {
@@ -396,6 +509,19 @@ const FAILURE_MESSAGES: Record<ReadFailureReason, (byteCount: number, detail?: s
     (detail ? ` Underlying error: ${detail}` : '') +
     `\n\nThis usually means the encoded bytes don't actually match what the metadata claims about them ` +
     `(wrong dtype, wrong chunk geometry, or a codec that isn't a true inverse of its encode step).`,
+  'missing-schema': (byteCount) =>
+    `Cannot read file.\n\n` +
+    `Metadata for the ${byteCount} bytes of file data was found and parsed, but nothing describes the ` +
+    `variables — their names, storage types, or how logical values were converted for storage. The reader ` +
+    `can locate bytes but cannot interpret a single one of them.\n\n` +
+    `Enable "Schema" in the Metadata section's include toggles so the file describes its own variables.`,
+  'missing-layout': (byteCount) =>
+    `Cannot read file.\n\n` +
+    `Metadata was found and parsed, and the ${byteCount} bytes of file data describe known variables, but ` +
+    `nothing records the dataset's shape, chunk shape, or interleaving. The reader knows what each value ` +
+    `means but not how many values there are or how they're arranged — it can't even say where one chunk ` +
+    `ends and the next begins.\n\n` +
+    `Enable "Layout" in the Metadata section's include toggles so the file describes its own geometry.`,
 };
 
 /**
@@ -820,6 +946,15 @@ interface ReassemblyContext {
   chunkPipeline: CodecStep[] | null;
   chunkIndex: ChunkIndexEntry[] | null;
   totalElements: number;
+  /** Read plan Task 3 §3: whether `codec_pipelines` was present in metadata.
+   * When false, the reader assumes an empty (identity) pipeline per variable/
+   * chunk — correct if no codecs were actually applied at write time, wrong
+   * (garbled values) if a non-size-changing codec was applied, and *detectably*
+   * wrong if a size-changing codec was applied: the assumed-raw chunk byte
+   * count won't match what chunk geometry x dtype size predicts, since the
+   * codec compressed it. `reconstructValues` checks that expected-vs-actual
+   * count in exactly that situation and throws (mapped to decode-error). */
+  codecInfoPresent: boolean;
 }
 
 interface ChunkGeometry {
@@ -896,7 +1031,7 @@ function makePerChunkFileReader(dataFiles: VirtualFile[], magicBytes: Uint8Array
  */
 function resolveChunkIndex(
   chunkIndex: ChunkIndexEntry[] | null,
-  ctx: Omit<ReassemblyContext, 'chunkIndex' | 'totalElements'>,
+  ctx: Omit<ReassemblyContext, 'chunkIndex' | 'totalElements' | 'codecInfoPresent'>,
   magicLength: number,
 ): ChunkIndexEntry[] {
   if (chunkIndex) return chunkIndex;
@@ -971,7 +1106,7 @@ function reconstructValues(
   ctx: ReassemblyContext,
   getChunkBytes: ChunkBytesReader,
 ): Map<string, ValueArray> {
-  const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, chunkIndex, totalElements } = ctx;
+  const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, chunkIndex, totalElements, codecInfoPresent } = ctx;
   const result = new Map<string, ValueArray>();
 
   if (interleaving === 'column') {
@@ -988,6 +1123,10 @@ function reconstructValues(
       for (const entry of varEntries) {
         const chunkBytes = getChunkBytes(entry, varInfo.name);
         if (!chunkBytes) continue;
+        if (!codecInfoPresent) {
+          const expectedBytes = chunkGeometry(entry.coords, chunkShape, shape).elementCount * getDtype(varInfo.dtype).size;
+          checkAssumedIdentitySize(chunkBytes.length, expectedBytes, varInfo.name, entry.coords);
+        }
         const decoded = reverseCodecPipeline(chunkBytes, steps, varInfo.dtype);
         const chunkValues = bytesToValues(decoded.bytes, decoded.outputDtype as DtypeKey);
         scatterChunkValues(values, chunkValues, entry.coords, chunkShape, shape);
@@ -1001,6 +1140,7 @@ function reconstructValues(
     // chunk-local arrays, then scatter each into its global position.
     const steps = chunkPipeline ?? [];
     const inputDtype = rowModeInputDtype(schema);
+    const bytesPerElement = schema.reduce((sum, v) => sum + getDtype(v.dtype).size, 0);
 
     for (const varInfo of schema) {
       result.set(varInfo.name, makeReconstructionTarget(varInfo.dtype, totalElements));
@@ -1009,6 +1149,10 @@ function reconstructValues(
     for (const entry of chunkIndex ?? []) {
       const chunkBytes = getChunkBytes(entry);
       if (!chunkBytes) continue;
+      if (!codecInfoPresent) {
+        const expectedBytes = chunkGeometry(entry.coords, chunkShape, shape).elementCount * bytesPerElement;
+        checkAssumedIdentitySize(chunkBytes.length, expectedBytes, undefined, entry.coords);
+      }
       const decoded = reverseCodecPipeline(chunkBytes, steps, inputDtype);
       const chunkElementN = chunkGeometry(entry.coords, chunkShape, shape).elementCount;
       const perVarChunkValues = deinterleaveRowChunk(decoded.bytes, schema, chunkElementN);
@@ -1025,6 +1169,27 @@ function reconstructValues(
   }
 
   return result;
+}
+
+/** Read plan Task 3 §3: the assume-identity byte-count check. `expectedBytes`
+ * is chunk geometry x dtype size — what a size-preserving (or no) codec
+ * pipeline would produce. A mismatch means a size-changing codec (rle/lz)
+ * really was applied at write time and its metadata omitted; the reader has
+ * no way to reverse it without knowing which codec, so this is a genuine
+ * failure, not a silent guess. */
+function checkAssumedIdentitySize(
+  actualBytes: number,
+  expectedBytes: number,
+  variableName: string | undefined,
+  coords: number[],
+): void {
+  if (actualBytes === expectedBytes) return;
+  const where = variableName ? `variable "${variableName}", ` : '';
+  throw new AssumedIdentitySizeMismatchError(
+    `${where}chunk [${coords.join(',')}]: expected ${expectedBytes} bytes (chunk shape x dtype size, ` +
+    `assuming no codec was applied) but found ${actualBytes} bytes — a size-changing codec was likely ` +
+    `applied at write time and its metadata was omitted.`,
+  );
 }
 
 function rowModeInputDtype(schema: SchemaEntry[]): DtypeKey {
