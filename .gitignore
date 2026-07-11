@@ -25,3 +25,5 @@ dist-ssr
 
 .claude
 tests/ui/screenshots/
+
+src/build-info.js

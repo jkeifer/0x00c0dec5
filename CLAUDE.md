@@ -179,6 +179,9 @@ in `tests/ui/` for reference; prefer the `scenario-*.mjs` files and
 - `shape-input` (tabular) / `shape-input-{d}` (array) — dataset shape inputs
 - `add-variable` — the Schema section's "add variable" button
 - `variable-row-{index}`, `variable-name-{index}` — per-variable Schema editor rows and name inputs
+- `about-button` — Header's ⓘ button that opens the About modal
+- `about-modal` — the About modal's panel container
+- `about-performance-toggle` — the About modal's collapsed-by-default Performance section toggle
 
 New UI work should keep adding testids per these conventions rather than relying on text/structure selectors.
 
