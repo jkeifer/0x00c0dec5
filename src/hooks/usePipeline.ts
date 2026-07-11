@@ -3,7 +3,6 @@ import type { AppState, Variable } from '../types/state.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import type {
   PipelineStage,
-  ByteTrace,
   Chunk,
   LinearizedChunk,
   EncodedChunk,
@@ -13,17 +12,14 @@ import type {
   StageName,
 } from '../types/pipeline.ts';
 import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
-import { getDtype } from '../types/dtypes.ts';
 import { generateValues } from '../engine/generate.ts';
 import { assignType } from '../engine/typeAssign.ts';
-import { chunkData, chunkDataPerVariable, computeChunkGrid, flatIndexToCoords } from '../engine/chunk.ts';
+import { chunkData, chunkDataPerVariable, computeChunkGrid } from '../engine/chunk.ts';
 import { linearizeChunk } from '../engine/linearize.ts';
 import { runCodecPipeline, shannonEntropy } from '../engine/codecs.ts';
 import { collectMetadata, serializeMetadata } from '../engine/metadata.ts';
 import { assembleFiles } from '../engine/write.ts';
 import { valuesToBytes, bytesToValues } from '../engine/elements.ts';
-import { formatValue, formatLogicalValue } from '../engine/elements.ts';
-import { makeTraceId } from '../engine/trace.ts';
 import { readFile } from '../engine/read.ts';
 import { hexToBytes, concatBytes } from '../engine/bytes.ts';
 import {
@@ -39,11 +35,10 @@ import {
   type LayoutRegion,
 } from '../engine/layout.ts';
 
-function makeStage(name: string, bytes: Uint8Array, traces: ByteTrace[], layout: StageLayout): PipelineStage {
+function makeStage(name: string, bytes: Uint8Array, layout: StageLayout): PipelineStage {
   return {
     name,
     bytes,
-    traces,
     chunkRegions: chunkRegionsOf(layout),
     layout,
     stats: {
@@ -54,17 +49,19 @@ function makeStage(name: string, bytes: Uint8Array, traces: ByteTrace[], layout:
 }
 
 /**
- * Build a Values-stage-shaped byte blob + per-byte traces for a set of logical
- * (float64) values per variable. Shared by the Values stage and the Read
- * stage, which both display reconstructed logical values in the same layout.
+ * Build a Values-stage-shaped byte blob for a set of logical (float64)
+ * values per variable. Shared by the Values stage and the Read stage, which
+ * both display reconstructed logical values in the same layout.
+ *
+ * Per-byte tracing for this stage is computed on demand from the returned
+ * bytes' StageLayout (buildValueBlocksLayout) via traceAt, not materialized
+ * here — see CLAUDE.md pitfall 1.
  */
 function buildLogicalValuesStage(
   variables: Pick<Variable, 'name' | 'color'>[],
-  shape: number[],
   valuesByName: Map<string, LogicalValue[]>,
-): { bytes: Uint8Array; traces: ByteTrace[] } {
+): { bytes: Uint8Array } {
   const partBytes: Uint8Array[] = [];
-  const traces: ByteTrace[] = [];
   for (const v of variables) {
     const vals = valuesByName.get(v.name) ?? [];
 
@@ -72,7 +69,7 @@ function buildLogicalValuesStage(
       // Text variables: at the Values stage each FULL, untruncated string is
       // encoded as raw ASCII with byteCount = str.length — variable stride
       // here vs. the fixed charN stride at Typed IS the lesson. Both
-      // HexView/FlatView are trace-driven, so variable stride is safe.
+      // HexView/FlatView are layout-driven, so variable stride is safe.
       for (let i = 0; i < vals.length; i++) {
         const str = String(vals[i]);
         const strBytes = new Uint8Array(str.length);
@@ -81,49 +78,13 @@ function buildLogicalValuesStage(
           strBytes[c] = code <= 0x7f ? code : 0x3f; // '?'
         }
         partBytes.push(strBytes);
-
-        const coords = flatIndexToCoords(i, shape);
-        const traceId = makeTraceId(v.name, coords);
-        for (let b = 0; b < str.length; b++) {
-          traces.push({
-            traceId,
-            variableName: v.name,
-            variableColor: v.color,
-            coords,
-            displayValue: str,
-            dtype: 'text',
-            chunkId: '',
-            byteInValue: b,
-            byteCount: str.length,
-          });
-        }
       }
       continue;
     }
 
-    const bytes = valuesToBytes(vals, 'float64');
-    partBytes.push(bytes);
-
-    for (let i = 0; i < vals.length; i++) {
-      const coords = flatIndexToCoords(i, shape);
-      const traceId = makeTraceId(v.name, coords);
-      const display = formatLogicalValue(vals[i]);
-      for (let b = 0; b < 8; b++) { // float64 = 8 bytes
-        traces.push({
-          traceId,
-          variableName: v.name,
-          variableColor: v.color,
-          coords,
-          displayValue: display,
-          dtype: 'float64',
-          chunkId: '',
-          byteInValue: b,
-          byteCount: 8,
-        });
-      }
-    }
+    partBytes.push(valuesToBytes(vals, 'float64'));
   }
-  return { bytes: concatBytes(partBytes), traces };
+  return { bytes: concatBytes(partBytes) };
 }
 
 // ─── Stage 1: Values ───────────────────────────────────────────────────────
@@ -148,12 +109,12 @@ export function computeValuesStage(
     variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }
 
-  const { bytes, traces } = buildLogicalValuesStage(variables, shape, variableValues);
+  const { bytes } = buildLogicalValuesStage(variables, variableValues);
   const layout = buildValueBlocksLayout(
     variables, shape, variableValues,
     (name) => (variableValues.get(name) ?? []).some((v) => typeof v === 'string') ? 'text' : 'float64',
   );
-  return { stage: makeStage('Values', bytes, traces, layout), variableValues };
+  return { stage: makeStage('Values', bytes, layout), variableValues };
 }
 
 // ─── Stage 2: Typed ──────────────────────────────────────────────────────────
@@ -174,7 +135,6 @@ export function computeTypedStage(
   variableValues: Map<string, LogicalValue[]>,
 ): TypedStageResult {
   const typedPartBytes: Uint8Array[] = [];
-  const typedTraces: ByteTrace[] = [];
   const variableStats = new Map<string, VariableStats>();
   const typedVariableValues = new Map<string, LogicalValue[]>();
 
@@ -182,7 +142,6 @@ export function computeTypedStage(
     const vals = variableValues.get(v.name) ?? [];
     const result = assignType(vals, v.logicalType, v.typeAssignment);
     const storageDtype = v.typeAssignment.storageDtype;
-    const dtypeInfo = getDtype(storageDtype);
 
     typedPartBytes.push(result.bytes);
     variableStats.set(v.name, result.stats);
@@ -192,25 +151,6 @@ export function computeTypedStage(
     // dtypes (strings) through the same single code path.
     const typedVals = bytesToValues(result.bytes, storageDtype);
     typedVariableValues.set(v.name, typedVals);
-
-    for (let i = 0; i < vals.length; i++) {
-      const coords = flatIndexToCoords(i, shape);
-      const traceId = makeTraceId(v.name, coords);
-      const display = formatValue(typedVals[i], storageDtype);
-      for (let b = 0; b < dtypeInfo.size; b++) {
-        typedTraces.push({
-          traceId,
-          variableName: v.name,
-          variableColor: v.color,
-          coords,
-          displayValue: display,
-          dtype: storageDtype,
-          chunkId: '',
-          byteInValue: b,
-          byteCount: dtypeInfo.size,
-        });
-      }
-    }
   }
   const typedBytes = concatBytes(typedPartBytes);
   const typedLayout = buildValueBlocksLayout(
@@ -218,7 +158,7 @@ export function computeTypedStage(
     (name) => variables.find((v) => v.name === name)!.typeAssignment.storageDtype,
   );
   return {
-    stage: makeStage('Typed', typedBytes, typedTraces, typedLayout),
+    stage: makeStage('Typed', typedBytes, typedLayout),
     typedVariableValues,
     variableStats,
   };
@@ -252,12 +192,11 @@ export function computeLinearizedStage(
     : chunkData(shape, chunkShape, chunkVariables, typedVariableValues);
   const linearizedChunks = chunks.map((chunk) => linearizeChunk(chunk, interleaving));
   const linearizedBytes = concatBytes(linearizedChunks.map((lc) => lc.bytes));
-  const linearizedTraces = linearizedChunks.flatMap((lc) => lc.traces);
 
   const linearizedLayout = buildLinearizedLayout(chunks, linearizedChunks, interleaving, shape, chunkShape);
 
   return {
-    stage: makeStage('Linearized', linearizedBytes, linearizedTraces, linearizedLayout),
+    stage: makeStage('Linearized', linearizedBytes, linearizedLayout),
     chunks,
     linearizedChunks,
   };
@@ -322,27 +261,24 @@ export function computeEncodedStage(
     const meta = encodedChunkMeta(steps, inputDtype);
     outputDtypes.push(meta.outputDtype);
     hasEntropy.push(meta.hasEntropy);
-    const result = runCodecPipeline(linearized.bytes, linearized.traces, steps, inputDtype);
+    const result = runCodecPipeline(linearized.bytes, steps, inputDtype);
     return interleaving === 'column'
       ? {
         chunkId: linearized.chunkId,
         coords: linearized.coords,
         bytes: result.bytes,
-        traces: result.traces,
         variableName: linearized.variableName,
       }
       : {
         chunkId: linearized.chunkId,
         coords: linearized.coords,
         bytes: result.bytes,
-        traces: result.traces,
       };
   });
 
   const encodedBytes = concatBytes(encodedChunks.map((ec) => ec.bytes));
-  const encodedTraces = encodedChunks.flatMap((ec) => ec.traces);
   const encodedLayout = buildEncodedLayout(linearizedLayout, encodedChunks, outputDtypes, hasEntropy);
-  return { stage: makeStage('Encoded', encodedBytes, encodedTraces, encodedLayout), encodedChunks };
+  return { stage: makeStage('Encoded', encodedBytes, encodedLayout), encodedChunks };
 }
 
 // ─── Stage 5: Metadata ──────────────────────────────────────────────────────
@@ -364,18 +300,7 @@ export function computeMetadataStage(
 ): MetadataStageResult {
   const metaEntries = collectMetadata(state, encodedChunks, variableStats);
   const metaBytes = serializeMetadata(metaEntries, state.metadata.serialization);
-  const metaTraces: ByteTrace[] = Array.from({ length: metaBytes.length }, (_, i) => ({
-    traceId: 'metadata',
-    variableName: '',
-    variableColor: '',
-    coords: [],
-    displayValue: 'metadata',
-    dtype: 'uint8',
-    chunkId: '',
-    byteInValue: i,
-    byteCount: metaBytes.length,
-  }));
-  return { stage: makeStage('Metadata', metaBytes, metaTraces, buildMetadataLayout(metaBytes.length)) };
+  return { stage: makeStage('Metadata', metaBytes, buildMetadataLayout(metaBytes.length)) };
 }
 
 // ─── Stage 6: Write (assembled files) ──────────────────────────────────────
@@ -398,7 +323,6 @@ export function computeFilesStage(
   const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
   const files = assembleFiles(state, encodedChunks, chunkGrid, variableStats, encodedLayout);
   const writeBytes = concatBytes(files.map((f) => f.bytes));
-  const writeTraces = files.flatMap((f) => f.traces);
   // Write-stage layout: per-file layouts concatenated in file order,
   // re-based (copy with adjusted `start`) to write-stage byte offsets —
   // files are concatenated in the same order above.
@@ -411,7 +335,7 @@ export function computeFilesStage(
     cursor += file.bytes.length;
   }
   const writeLayout: StageLayout = { byteLength: writeBytes.length, shape: state.shape, regions };
-  return { stage: makeStage('Write', writeBytes, writeTraces, writeLayout), files };
+  return { stage: makeStage('Write', writeBytes, writeLayout), files };
 }
 
 // ─── Stage 7: Read ──────────────────────────────────────────────────────────
@@ -440,13 +364,13 @@ export function computeReadStage(
     for (const v of variables) {
       logicalValues.set(v.name, readResult.reconstructedValues.get(v.name) ?? []);
     }
-    const { bytes, traces } = buildLogicalValuesStage(variables, shape, logicalValues);
+    const { bytes } = buildLogicalValuesStage(variables, logicalValues);
     const layout = buildValueBlocksLayout(variables, shape, logicalValues, () => 'float64');
-    return { stage: makeStage('Read', bytes, traces, layout), readResult, logicalValues };
+    return { stage: makeStage('Read', bytes, layout), readResult, logicalValues };
   }
 
   const failureLayout: StageLayout = { byteLength: 0, shape, regions: [] };
-  return { stage: makeStage('Read', new Uint8Array(0), [], failureLayout), readResult, logicalValues: new Map() };
+  return { stage: makeStage('Read', new Uint8Array(0), failureLayout), readResult, logicalValues: new Map() };
 }
 
 // ─── Full composition (pure; used directly by tests and as the reference

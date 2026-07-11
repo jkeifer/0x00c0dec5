@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { linearizeChunk, buildTraces } from '../../engine/linearize.ts';
+import { linearizeChunk } from '../../engine/linearize.ts';
 import { bytesToValues } from '../../engine/elements.ts';
 import type { Chunk } from '../../types/pipeline.ts';
 
@@ -45,25 +45,6 @@ describe('linearizeChunk - column interleaving', () => {
     expect(bValues[1]).toBeCloseTo(20.0);
     expect(bValues[2]).toBeCloseTo(30.0);
   });
-
-  it('produces traces matching byte count', () => {
-    const chunk = makeChunk();
-    const result = linearizeChunk(chunk, 'column');
-    expect(result.traces.length).toBe(result.bytes.length);
-  });
-
-  it('traces reference correct variable names in column order', () => {
-    const chunk = makeChunk();
-    const result = linearizeChunk(chunk, 'column');
-
-    // First 12 traces should be for 'a', next 12 for 'b'
-    for (let i = 0; i < 12; i++) {
-      expect(result.traces[i].variableName).toBe('a');
-    }
-    for (let i = 12; i < 24; i++) {
-      expect(result.traces[i].variableName).toBe('b');
-    }
-  });
 });
 
 describe('linearizeChunk - row interleaving', () => {
@@ -86,24 +67,6 @@ describe('linearizeChunk - row interleaving', () => {
     const b1 = bytesToValues(result.bytes.slice(12, 16), 'float32');
     expect(a1[0]).toBeCloseTo(2.0);
     expect(b1[0]).toBeCloseTo(20.0);
-  });
-
-  it('produces traces matching byte count', () => {
-    const chunk = makeChunk();
-    const result = linearizeChunk(chunk, 'row');
-    expect(result.traces.length).toBe(result.bytes.length);
-  });
-
-  it('traces interleave variable names per element', () => {
-    const chunk = makeChunk();
-    const result = linearizeChunk(chunk, 'row');
-
-    // Element 0: 4 bytes of 'a', 4 bytes of 'b'
-    for (let i = 0; i < 4; i++) expect(result.traces[i].variableName).toBe('a');
-    for (let i = 4; i < 8; i++) expect(result.traces[i].variableName).toBe('b');
-    // Element 1
-    for (let i = 8; i < 12; i++) expect(result.traces[i].variableName).toBe('a');
-    for (let i = 12; i < 16; i++) expect(result.traces[i].variableName).toBe('b');
   });
 });
 
@@ -134,7 +97,6 @@ describe('linearizeChunk - mixed dtypes in row mode', () => {
     // Element 0: x[0] (4 bytes) + y[0] (1 byte) = 5 bytes
     // Element 1: x[1] (4 bytes) + y[1] (1 byte) = 5 bytes
     expect(result.bytes.length).toBe(10);
-    expect(result.traces.length).toBe(10);
 
     // Check byte layout
     const x0 = bytesToValues(result.bytes.slice(0, 4), 'float32');
@@ -144,39 +106,6 @@ describe('linearizeChunk - mixed dtypes in row mode', () => {
     const x1 = bytesToValues(result.bytes.slice(5, 9), 'float32');
     expect(x1[0]).toBeCloseTo(2.0);
     expect(result.bytes[9]).toBe(20); // y[1]
-  });
-});
-
-describe('buildTraces', () => {
-  it('sets correct byteInValue and byteCount', () => {
-    const chunk = makeChunk();
-    const traces = buildTraces(chunk, 'column');
-
-    // First value of 'a' is float32 (4 bytes)
-    expect(traces[0].byteInValue).toBe(0);
-    expect(traces[0].byteCount).toBe(4);
-    expect(traces[1].byteInValue).toBe(1);
-    expect(traces[2].byteInValue).toBe(2);
-    expect(traces[3].byteInValue).toBe(3);
-  });
-
-  it('sets correct chunkId', () => {
-    const chunk = makeChunk({ coords: [1, 2] });
-    const traces = buildTraces(chunk, 'column');
-    expect(traces[0].chunkId).toBe('chunk:1,2');
-  });
-
-  it('sets correct traceId with coords', () => {
-    const chunk = makeChunk();
-    const traces = buildTraces(chunk, 'column');
-    expect(traces[0].traceId).toBe('a:0');
-    expect(traces[4].traceId).toBe('a:1');
-  });
-
-  it('uses provided chunkId when given', () => {
-    const chunk = makeChunk({ coords: [0] });
-    const traces = buildTraces(chunk, 'column', 'chunk:temperature:0');
-    expect(traces[0].chunkId).toBe('chunk:temperature:0');
   });
 });
 
@@ -198,7 +127,6 @@ describe('linearizeChunk - per-variable chunkId in column mode', () => {
     const result = linearizeChunk(chunk, 'column');
     expect(result.chunkId).toBe('chunk:temperature:0');
     expect(result.variableName).toBe('temperature');
-    expect(result.traces[0].chunkId).toBe('chunk:temperature:0');
   });
 
   it('uses standard chunkId for multi-variable chunk in column mode', () => {

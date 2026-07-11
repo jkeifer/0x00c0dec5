@@ -4,28 +4,32 @@ import { DEFAULT_STATE } from '../../types/state.ts';
 import { STAGE_ORDER } from '../../types/pipeline.ts';
 import { flatGroupCount, flatGroupAt, flatGroupIndexOf, type TraceGroup } from '../../components/viewers/viewerUtils.ts';
 import { isChunkLevelTrace } from '../../engine/trace.ts';
+import { referenceStageTraces } from '../helpers/referenceTraces.ts';
 import type { AppState } from '../../types/state.ts';
 import type { StageLayout, ValueSources } from '../../engine/layout.ts';
-import type { PipelineStage } from '../../types/pipeline.ts';
+import type { ByteTrace } from '../../types/pipeline.ts';
 
 /**
- * TDD reference fixture (Task 9, perf plan): the pre-Task-9 O(bytes)
- * implementation, kept test-local (no longer exported from viewerUtils.ts —
- * production code reads nothing from `stage.traces` after this task) purely
- * to cross-check flatGroupCount/flatGroupAt's region-arithmetic
- * reimplementation against independently-derived ground truth.
+ * TDD reference fixture (Task 9, perf plan; rewired in Task 10): the
+ * pre-Task-9 O(bytes) implementation, kept test-local (no longer exported
+ * from viewerUtils.ts — production code reads nothing from materialized
+ * traces after Task 10) purely to cross-check flatGroupCount/flatGroupAt's
+ * region-arithmetic reimplementation against independently-derived ground
+ * truth. Since Task 10 deleted `PipelineStage.traces`, this now takes the
+ * stage's bytes plus its reference-tracer traces (referenceTraces.ts)
+ * directly, rather than reading `stage.traces`.
  */
-function groupBytesByTrace(stage: PipelineStage): TraceGroup[] {
+function groupBytesByTrace(bytes: Uint8Array, traces: ByteTrace[]): TraceGroup[] {
   const groups: TraceGroup[] = [];
-  if (stage.traces.length === 0) return groups;
+  if (traces.length === 0) return groups;
 
-  let currentId = stage.traces[0].traceId;
+  let currentId = traces[0].traceId;
   let startOffset = 0;
 
-  for (let i = 1; i <= stage.traces.length; i++) {
-    const traceId = i < stage.traces.length ? stage.traces[i].traceId : null;
+  for (let i = 1; i <= traces.length; i++) {
+    const traceId = i < traces.length ? traces[i].traceId : null;
     if (traceId !== currentId) {
-      const trace = stage.traces[startOffset];
+      const trace = traces[startOffset];
       groups.push({
         traceId: trace.traceId,
         variableName: trace.variableName,
@@ -36,10 +40,10 @@ function groupBytesByTrace(stage: PipelineStage): TraceGroup[] {
         chunkId: trace.chunkId,
         byteOffset: startOffset,
         byteCount: i - startOffset,
-        bytes: stage.bytes.slice(startOffset, i),
+        bytes: bytes.slice(startOffset, i),
         isChunkLevel: isChunkLevelTrace(trace.traceId),
       });
-      if (i < stage.traces.length) {
+      if (i < traces.length) {
         currentId = traceId!;
         startOffset = i;
       }
@@ -54,11 +58,11 @@ function groupBytesByTrace(stage: PipelineStage): TraceGroup[] {
 // region kind FlatView renders — values (fixed-width and text), a
 // value-preserving chunk stage (column and row interleaving), and an
 // entropy/chunk-level stage.
-function checkMatchesGroupBytesByTrace(stage: PipelineStage, layout: StageLayout, sources: ValueSources) {
-  const expected = groupBytesByTrace(stage);
+function checkMatchesGroupBytesByTrace(bytes: Uint8Array, traces: ByteTrace[], layout: StageLayout, sources: ValueSources) {
+  const expected = groupBytesByTrace(bytes, traces);
   expect(flatGroupCount(layout)).toBe(expected.length);
   for (let i = 0; i < expected.length; i++) {
-    const actual = flatGroupAt(layout, stage.bytes, sources, i);
+    const actual = flatGroupAt(layout, bytes, sources, i);
     const exp = expected[i];
     expect(actual.traceId, `group ${i} traceId`).toBe(exp.traceId);
     expect(actual.variableName, `group ${i} variableName`).toBe(exp.variableName);
@@ -79,14 +83,16 @@ describe('flatGroupCount / flatGroupAt', () => {
     const result = computePipelineStages(DEFAULT_STATE);
     const stage = result.stages[STAGE_ORDER.indexOf('values')];
     const sources = result.stageSources.get('values')!;
-    checkMatchesGroupBytesByTrace(stage, stage.layout, sources);
+    const reference = referenceStageTraces(DEFAULT_STATE).get('values')!;
+    checkMatchesGroupBytesByTrace(stage.bytes, reference, stage.layout, sources);
   });
 
   it('matches groupBytesByTrace for the DEFAULT_STATE typed stage', () => {
     const result = computePipelineStages(DEFAULT_STATE);
     const stage = result.stages[STAGE_ORDER.indexOf('typed')];
     const sources = result.stageSources.get('typed')!;
-    checkMatchesGroupBytesByTrace(stage, stage.layout, sources);
+    const reference = referenceStageTraces(DEFAULT_STATE).get('typed')!;
+    checkMatchesGroupBytesByTrace(stage.bytes, reference, stage.layout, sources);
   });
 
   it('matches groupBytesByTrace for a column-interleaved linearized stage', () => {
@@ -94,7 +100,8 @@ describe('flatGroupCount / flatGroupAt', () => {
     const result = computePipelineStages(state);
     const stage = result.stages[STAGE_ORDER.indexOf('linearized')];
     const sources = result.stageSources.get('linearized')!;
-    checkMatchesGroupBytesByTrace(stage, stage.layout, sources);
+    const reference = referenceStageTraces(state).get('linearized')!;
+    checkMatchesGroupBytesByTrace(stage.bytes, reference, stage.layout, sources);
   });
 
   it('matches groupBytesByTrace for a row-interleaved linearized stage', () => {
@@ -102,7 +109,8 @@ describe('flatGroupCount / flatGroupAt', () => {
     const result = computePipelineStages(state);
     const stage = result.stages[STAGE_ORDER.indexOf('linearized')];
     const sources = result.stageSources.get('linearized')!;
-    checkMatchesGroupBytesByTrace(stage, stage.layout, sources);
+    const reference = referenceStageTraces(state).get('linearized')!;
+    checkMatchesGroupBytesByTrace(stage.bytes, reference, stage.layout, sources);
   });
 
   it('matches groupBytesByTrace for an entropy-codec (RLE) encoded stage — chunk-level groups', () => {
@@ -116,7 +124,8 @@ describe('flatGroupCount / flatGroupAt', () => {
     const result = computePipelineStages(state);
     const stage = result.stages[STAGE_ORDER.indexOf('encoded')];
     const sources = result.stageSources.get('encoded')!;
-    checkMatchesGroupBytesByTrace(stage, stage.layout, sources);
+    const reference = referenceStageTraces(state).get('encoded')!;
+    checkMatchesGroupBytesByTrace(stage.bytes, reference, stage.layout, sources);
     // Sanity: at least one group is chunk-level (entropy degrades tracing).
     const groups = Array.from({ length: flatGroupCount(stage.layout) }, (_, i) =>
       flatGroupAt(stage.layout, stage.bytes, sources, i));
@@ -134,7 +143,8 @@ describe('flatGroupCount / flatGroupAt', () => {
     const result = computePipelineStages(state);
     const stage = result.stages[STAGE_ORDER.indexOf('values')];
     const sources = result.stageSources.get('values')!;
-    checkMatchesGroupBytesByTrace(stage, stage.layout, sources);
+    const reference = referenceStageTraces(state).get('values')!;
+    checkMatchesGroupBytesByTrace(stage.bytes, reference, stage.layout, sources);
   });
 
   it('matches groupBytesByTrace for a text-variable typed stage', () => {
@@ -148,14 +158,16 @@ describe('flatGroupCount / flatGroupAt', () => {
     const result = computePipelineStages(state);
     const stage = result.stages[STAGE_ORDER.indexOf('typed')];
     const sources = result.stageSources.get('typed')!;
-    checkMatchesGroupBytesByTrace(stage, stage.layout, sources);
+    const reference = referenceStageTraces(state).get('typed')!;
+    checkMatchesGroupBytesByTrace(stage.bytes, reference, stage.layout, sources);
   });
 
   it('matches groupBytesByTrace for the write stage (structural + chunk regions)', () => {
     const result = computePipelineStages(DEFAULT_STATE);
     const stage = result.stages[STAGE_ORDER.indexOf('write')];
     const sources = result.stageSources.get('write')!;
-    checkMatchesGroupBytesByTrace(stage, stage.layout, sources);
+    const reference = referenceStageTraces(DEFAULT_STATE).get('write')!;
+    checkMatchesGroupBytesByTrace(stage.bytes, reference, stage.layout, sources);
   });
 
   it('throws on an out-of-range index', () => {

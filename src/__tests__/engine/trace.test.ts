@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
-  propagateTracesValuePreserving,
-  degradeTracesToChunkLevel,
   isChunkLevelTrace,
   makeTraceId,
   makeChunkTraceId,
   parseTraceId,
 } from '../../engine/trace.ts';
+import {
+  propagateTracesValuePreserving,
+  degradeTracesToChunkLevel,
+} from '../helpers/referenceTraces.ts';
 import type { ByteTrace } from '../../types/pipeline.ts';
 
 function makeTrace(overrides?: Partial<ByteTrace>): ByteTrace {

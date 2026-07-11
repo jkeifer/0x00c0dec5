@@ -25,7 +25,7 @@ function makeLogicalType(generation: GenerationMode, overrides: Partial<LogicalT
 
 /** Encode raw typed bytes through a codec pipeline and return the final byte length. */
 function encodedLength(bytes: Uint8Array, dtype: DtypeKey, steps: CodecStep[]): number {
-  const result = runCodecPipeline(bytes, [], steps, dtype);
+  const result = runCodecPipeline(bytes, steps, dtype);
   return result.bytes.length;
 }
 
@@ -88,7 +88,7 @@ describe('generation modes — compressibility signatures', () => {
     const { bytes: typedBytes } = assignType(values, logicalType, { storageDtype: 'uint32' });
 
     const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
-    const result = runCodecPipeline(typedBytes, [], steps, 'uint32');
+    const result = runCodecPipeline(typedBytes, steps, 'uint32');
 
     const rawEntropy = shannonEntropy(typedBytes);
     const deltaEntropy = shannonEntropy(result.bytes);

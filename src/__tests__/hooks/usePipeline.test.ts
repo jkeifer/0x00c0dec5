@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computePipelineStages } from '../../hooks/usePipeline.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
+import { referenceStageTraces } from '../helpers/referenceTraces.ts';
 import type { AppState } from '../../types/state.ts';
 
 function stateWith(overrides: Partial<AppState>): AppState {
@@ -33,11 +34,11 @@ describe('computePipelineStages', () => {
     }
   });
 
-  it('has traces.length === bytes.length for each stage', () => {
+  it('has layout.byteLength === bytes.length for each stage', () => {
     const { stages } = computePipelineStages(DEFAULT_STATE);
     for (const stage of stages) {
-      // Read stage when failed has 0 bytes and 0 traces — still consistent
-      expect(stage.traces.length).toBe(stage.bytes.length);
+      // Read stage when failed has 0 bytes — still consistent
+      expect(stage.layout.byteLength).toBe(stage.bytes.length);
     }
   });
 
@@ -96,9 +97,9 @@ describe('computePipelineStages', () => {
 describe('Values stage traceId alignment with Linearized stage', () => {
   it('1D traceIds match between Values and Linearized stages', () => {
     const state = stateWith({ shape: [8], chunkShape: [8] });
-    const { stages } = computePipelineStages(state);
-    const valuesTraceIds = new Set(stages[0].traces.map((t) => t.traceId));
-    const linearizedTraceIds = new Set(stages[2].traces.map((t) => t.traceId)); // index 2 = Linearized
+    const reference = referenceStageTraces(state);
+    const valuesTraceIds = new Set(reference.get('values')!.map((t) => t.traceId));
+    const linearizedTraceIds = new Set(reference.get('linearized')!.map((t) => t.traceId));
 
     // Every linearized value traceId should exist in the values stage
     for (const id of linearizedTraceIds) {
@@ -121,9 +122,9 @@ describe('Values stage traceId alignment with Linearized stage', () => {
       ],
       fieldPipelines: { temperature: [] },
     });
-    const { stages } = computePipelineStages(state);
-    const valuesTraceIds = new Set(stages[0].traces.map((t) => t.traceId));
-    const linearizedTraceIds = new Set(stages[2].traces.map((t) => t.traceId));
+    const reference = referenceStageTraces(state);
+    const valuesTraceIds = new Set(reference.get('values')!.map((t) => t.traceId));
+    const linearizedTraceIds = new Set(reference.get('linearized')!.map((t) => t.traceId));
 
     // Every linearized value traceId should exist in the values stage
     for (const id of linearizedTraceIds) {
@@ -133,7 +134,7 @@ describe('Values stage traceId alignment with Linearized stage', () => {
     }
 
     // Verify 2D coordinate format like "temperature:2,3"
-    const sampleId = stages[0].traces[0].traceId;
+    const sampleId = reference.get('values')![0].traceId;
     expect(sampleId).toMatch(/^temperature:\d+,\d+$/);
   });
 
@@ -150,8 +151,8 @@ describe('Values stage traceId alignment with Linearized stage', () => {
       ],
       fieldPipelines: { value: [] },
     });
-    const { stages } = computePipelineStages(state);
-    const sampleId = stages[0].traces[0].traceId;
+    const reference = referenceStageTraces(state);
+    const sampleId = reference.get('values')![0].traceId;
     expect(sampleId).toMatch(/^value:\d+,\d+,\d+$/);
   });
 });
@@ -166,7 +167,7 @@ describe('row-mode codec pipeline', () => {
     // Should still produce valid output without errors
     expect(stages).toHaveLength(7);
     for (const stage of stages) {
-      expect(stage.traces.length).toBe(stage.bytes.length);
+      expect(stage.layout.byteLength).toBe(stage.bytes.length);
     }
   });
 
@@ -190,7 +191,7 @@ describe('row-mode codec pipeline', () => {
     const { stages } = computePipelineStages(state);
     expect(stages).toHaveLength(7);
     for (const stage of stages) {
-      expect(stage.traces.length).toBe(stage.bytes.length);
+      expect(stage.layout.byteLength).toBe(stage.bytes.length);
     }
   });
 });
@@ -224,11 +225,11 @@ describe('column-mode codec pipeline', () => {
       ],
       fieldPipelines: { temperature: [], pressure: [] },
     });
-    const { stages } = computePipelineStages(state);
-    const linearized = stages[2]; // Linearized is index 2
+    const reference = referenceStageTraces(state);
+    const linearizedTraces = reference.get('linearized')!;
 
     // Should have per-variable chunk regions
-    const chunkIds = [...new Set(linearized.traces.map((t) => t.chunkId))];
+    const chunkIds = [...new Set(linearizedTraces.map((t) => t.chunkId))];
     expect(chunkIds).toContain('chunk:temperature:0');
     expect(chunkIds).toContain('chunk:temperature:1');
     expect(chunkIds).toContain('chunk:pressure:0');
@@ -249,11 +250,11 @@ describe('column-mode codec pipeline', () => {
       ],
       fieldPipelines: { a: [{ codec: 'rle', params: {} }] },
     });
-    const { stages } = computePipelineStages(state);
-    const encoded = stages[3]; // Encoded is index 3
+    const reference = referenceStageTraces(state);
+    const encodedTraces = reference.get('encoded')!;
 
     // After RLE (entropy), variable color should be preserved because it's a per-variable chunk
-    for (const t of encoded.traces) {
+    for (const t of encodedTraces) {
       if (t.chunkId.startsWith('chunk:')) {
         expect(t.variableName).toBe('temperature');
         expect(t.variableColor).toBe('#e06c75');
@@ -337,22 +338,22 @@ describe('Read stage', () => {
     expect(readResult.success).toBe(true);
   });
 
-  it('Read stage traces match bytes length', () => {
+  it('Read stage layout byteLength matches bytes length', () => {
     const state = stateWith({
       write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
     });
     const { stages } = computePipelineStages(state);
     const readStage = stages[6];
-    expect(readStage.traces.length).toBe(readStage.bytes.length);
+    expect(readStage.layout.byteLength).toBe(readStage.bytes.length);
   });
 
   it('Read stage traceIds use same format as Values stage', () => {
     const state = stateWith({
       write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
     });
-    const { stages } = computePipelineStages(state);
-    const valuesTraceIds = new Set(stages[0].traces.map((t) => t.traceId));
-    const readTraceIds = new Set(stages[6].traces.map((t) => t.traceId));
+    const reference = referenceStageTraces(state);
+    const valuesTraceIds = new Set(reference.get('values')!.map((t) => t.traceId));
+    const readTraceIds = new Set(reference.get('read')!.map((t) => t.traceId));
     // All Read traceIds should match Values traceIds
     for (const id of readTraceIds) {
       expect(valuesTraceIds.has(id)).toBe(true);
@@ -360,8 +361,8 @@ describe('Read stage', () => {
   });
 });
 
-describe('sidecar files have traces', () => {
-  it('sidecar metadata file has non-empty traces', () => {
+describe('sidecar files have non-empty bytes with matching layouts', () => {
+  it('sidecar metadata file layout byteLength matches bytes length', () => {
     const state = stateWith({
       write: {
         ...DEFAULT_STATE.write,
@@ -372,10 +373,10 @@ describe('sidecar files have traces', () => {
     const { files } = computePipelineStages(state);
     const sidecar = files.find((f) => f.name === 'metadata');
     expect(sidecar).toBeDefined();
-    expect(sidecar!.traces.length).toBe(sidecar!.bytes.length);
+    expect(sidecar!.layout.byteLength).toBe(sidecar!.bytes.length);
   });
 
-  it('per-chunk sidecar metadata file has non-empty traces', () => {
+  it('per-chunk sidecar metadata file layout byteLength matches bytes length', () => {
     const state = stateWith({
       write: {
         ...DEFAULT_STATE.write,
@@ -386,6 +387,6 @@ describe('sidecar files have traces', () => {
     const { files } = computePipelineStages(state);
     const sidecar = files.find((f) => f.name === 'metadata');
     expect(sidecar).toBeDefined();
-    expect(sidecar!.traces.length).toBe(sidecar!.bytes.length);
+    expect(sidecar!.layout.byteLength).toBe(sidecar!.bytes.length);
   });
 });

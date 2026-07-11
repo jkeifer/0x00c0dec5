@@ -5,7 +5,7 @@ import { chunkData, chunkDataPerVariable, computeChunkGrid } from '../../engine/
 import { linearizeChunk } from '../../engine/linearize.ts';
 import { runCodecPipeline } from '../../engine/codecs.ts';
 import { assembleFiles } from '../../engine/write.ts';
-import { isChunkLevelTrace } from '../../engine/trace.ts';
+import { encodedChunkMeta } from '../../engine/layout.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
 import type { AppState } from '../../types/state.ts';
 import type { EncodedChunk } from '../../types/pipeline.ts';
@@ -51,12 +51,11 @@ function runFullPipeline(state: AppState) {
     if (state.interleaving === 'column') {
       const cv = chunk.variables[0];
       const steps = state.fieldPipelines[cv.variableName] ?? [];
-      const result = runCodecPipeline(linearized.bytes, linearized.traces, steps, cv.dtype as DtypeKey);
+      const result = runCodecPipeline(linearized.bytes, steps, cv.dtype as DtypeKey);
       return {
         chunkId: linearized.chunkId,
         coords: linearized.coords,
         bytes: result.bytes,
-        traces: result.traces,
         variableName: linearized.variableName,
       };
     } else {
@@ -67,12 +66,11 @@ function runFullPipeline(state: AppState) {
         : uniqueDtypes.size > 1
           ? 'uint8'
           : chunk.variables[0].dtype as DtypeKey;
-      const result = runCodecPipeline(linearized.bytes, linearized.traces, steps, inputDtype);
+      const result = runCodecPipeline(linearized.bytes, steps, inputDtype);
       return {
         chunkId: linearized.chunkId,
         coords: linearized.coords,
         bytes: result.bytes,
-        traces: result.traces,
       };
     }
   });
@@ -110,7 +108,6 @@ describe('Integration: minimal passthrough (no codecs)', () => {
     expect(files.length).toBeGreaterThanOrEqual(1);
     const mainFile = files[0];
     expect(mainFile.bytes.length).toBeGreaterThan(0);
-    expect(mainFile.traces.length).toBe(mainFile.bytes.length);
 
     // Encoded chunks should preserve original byte count
     const totalElements = state.shape.reduce((a, b) => a * b, 1);
@@ -144,16 +141,17 @@ describe('Integration: full codec chain (delta + shuffle + rle)', () => {
       chunkPipeline: [],
     };
 
-    const { files, encodedChunks } = runFullPipeline(state);
+    const { files } = runFullPipeline(state);
     expect(files.length).toBeGreaterThanOrEqual(1);
     expect(files[0].bytes.length).toBeGreaterThan(0);
 
-    // After RLE (entropy codec), traces should be chunk-level
-    for (const chunk of encodedChunks) {
-      for (const trace of chunk.traces) {
-        expect(isChunkLevelTrace(trace.traceId)).toBe(true);
-      }
-    }
+    // After RLE (entropy codec), the chunk's pipeline metadata reports
+    // hasEntropy — which is what drives chunk-level (degraded) tracing in
+    // the Encoded stage's layout (buildEncodedLayout in layout.ts). Per-byte
+    // trace-degradation itself is pinned by the layout equivalence suite
+    // (layout.equivalence.test.ts's ENCODED_CASES 'rle (entropy)' case).
+    const meta = encodedChunkMeta(state.fieldPipelines['temp'], 'int16');
+    expect(meta.hasEntropy).toBe(true);
   });
 });
 
@@ -277,7 +275,6 @@ describe('Integration: determinism', () => {
     expect(run1.files.length).toBe(run2.files.length);
     for (let i = 0; i < run1.files.length; i++) {
       expect(Array.from(run1.files[i].bytes)).toEqual(Array.from(run2.files[i].bytes));
-      expect(run1.files[i].traces.length).toBe(run2.files[i].traces.length);
     }
   });
 });

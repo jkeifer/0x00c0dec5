@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { computePipelineStages } from '../../hooks/usePipeline.ts';
 import { generateValues, WORD_SETS } from '../../engine/generate.ts';
 import { deserializeMetadata } from '../../engine/metadata.ts';
+import { referenceStageTraces } from '../helpers/referenceTraces.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
 import type { AppState, Variable } from '../../types/state.ts';
 import type { CodecStep } from '../../types/codecs.ts';
@@ -195,13 +196,14 @@ describe('text variables — write/read roundtrip', () => {
     const words = expectedWords(city, 4);
     const totalLen = words.reduce((sum, w) => sum + w.length, 0);
     expect(values.bytes.length).toBe(totalLen);
-    expect(values.traces.length).toBe(totalLen);
+    const valuesTraces = referenceStageTraces(state).get('values')!;
+    expect(valuesTraces.length).toBe(totalLen);
     // Each value's traces span exactly its own length, and the raw bytes are
     // the word's ASCII (the hex ASCII column shows the words natively).
     let offset = 0;
     for (const w of words) {
-      expect(values.traces[offset].byteCount).toBe(w.length);
-      expect(values.traces[offset].displayValue).toBe(w);
+      expect(valuesTraces[offset].byteCount).toBe(w.length);
+      expect(valuesTraces[offset].displayValue).toBe(w);
       const slice = values.bytes.slice(offset, offset + w.length);
       expect(new TextDecoder().decode(slice)).toBe(w);
       offset += w.length;

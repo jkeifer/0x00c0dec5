@@ -3,21 +3,6 @@ import { reverseCodecPipeline } from '../../engine/decode.ts';
 import { runCodecPipeline } from '../../engine/codecs.ts';
 import { valuesToBytes, bytesToValues } from '../../engine/elements.ts';
 import type { CodecStep } from '../../types/codecs.ts';
-import type { ByteTrace } from '../../types/pipeline.ts';
-
-function makeTraces(byteCount: number): ByteTrace[] {
-  return Array.from({ length: byteCount }, (_, i) => ({
-    traceId: `var:${Math.floor(i / 4)}`,
-    variableName: 'var',
-    variableColor: '#f00',
-    coords: [Math.floor(i / 4)],
-    displayValue: '0',
-    dtype: 'float32',
-    chunkId: 'chunk:0',
-    byteInValue: i % 4,
-    byteCount: 4,
-  }));
-}
 
 describe('reverseCodecPipeline', () => {
   it('empty pipeline is identity', () => {
@@ -31,7 +16,7 @@ describe('reverseCodecPipeline', () => {
     const originalValues = [10, 20, 30, 40];
     const input = valuesToBytes(originalValues, 'int32');
     const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
-    const encoded = runCodecPipeline(input, makeTraces(input.length), steps, 'int32');
+    const encoded = runCodecPipeline(input, steps, 'int32');
 
     const decoded = reverseCodecPipeline(encoded.bytes, steps, 'int32');
     const values = bytesToValues(decoded.bytes, decoded.outputDtype as 'int32');
@@ -41,7 +26,7 @@ describe('reverseCodecPipeline', () => {
   it('reverses single byte-shuffle codec exactly', () => {
     const input = new Uint8Array([0xa0, 0xa1, 0xa2, 0xa3, 0xb0, 0xb1, 0xb2, 0xb3]);
     const steps: CodecStep[] = [{ codec: 'byte-shuffle', params: { elementSize: 4 } }];
-    const encoded = runCodecPipeline(input, makeTraces(input.length), steps, 'float32');
+    const encoded = runCodecPipeline(input, steps, 'float32');
 
     const decoded = reverseCodecPipeline(encoded.bytes, steps, 'float32');
     expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
@@ -50,7 +35,7 @@ describe('reverseCodecPipeline', () => {
   it('reverses single RLE codec exactly', () => {
     const input = new Uint8Array([1, 1, 1, 2, 2, 3]);
     const steps: CodecStep[] = [{ codec: 'rle', params: {} }];
-    const encoded = runCodecPipeline(input, makeTraces(input.length), steps, 'uint8');
+    const encoded = runCodecPipeline(input, steps, 'uint8');
 
     const decoded = reverseCodecPipeline(encoded.bytes, steps, 'uint8');
     expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
@@ -64,7 +49,7 @@ describe('reverseCodecPipeline', () => {
       { codec: 'byte-shuffle', params: { elementSize: 4 } },
       { codec: 'rle', params: {} },
     ];
-    const encoded = runCodecPipeline(input, makeTraces(input.length), steps, 'int32');
+    const encoded = runCodecPipeline(input, steps, 'int32');
 
     const decoded = reverseCodecPipeline(encoded.bytes, steps, 'int32');
     const values = bytesToValues(decoded.bytes, decoded.outputDtype as 'int32');

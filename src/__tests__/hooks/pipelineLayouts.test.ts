@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { computePipelineStages } from '../../hooks/usePipeline.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
 import { chunkRegionsOf, traceAt } from '../../engine/layout.ts';
+import { referenceStageTraces } from '../helpers/referenceTraces.ts';
 import { STAGE_ORDER } from '../../types/pipeline.ts';
 import type { StageName } from '../../types/pipeline.ts';
 
@@ -13,8 +14,9 @@ const NAME_TO_STAGE_NAME: Record<number, StageName> = Object.fromEntries(
 );
 
 describe('pipeline stage layouts', () => {
-  it('every stage layout byteLength matches its bytes, chunkRegions match chunkRegionsOf(layout), and traceAt spot-checks against stage.traces[0]', () => {
+  it('every stage layout byteLength matches its bytes, chunkRegions match chunkRegionsOf(layout), and traceAt spot-checks against the reference tracer', () => {
     const result = computePipelineStages(DEFAULT_STATE);
+    const reference = referenceStageTraces(DEFAULT_STATE);
 
     expect(result.stages).toHaveLength(STAGE_ORDER.length);
 
@@ -28,7 +30,7 @@ describe('pipeline stage layouts', () => {
         const sources = result.stageSources.get(stageName);
         expect(sources).toBeDefined();
         const trace = traceAt(stage.layout, 0, sources!);
-        expect(trace).toEqual(stage.traces[0]);
+        expect(trace).toEqual(reference.get(stageName)![0]);
       }
     });
   });

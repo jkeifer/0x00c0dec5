@@ -9,6 +9,7 @@ import {
   buildMetadataLayout,
 } from '../../engine/layout.ts';
 import { expectTraceEquivalence } from '../helpers/equivalence.ts';
+import { referenceStageTraces, referenceFileTraces } from '../helpers/referenceTraces.ts';
 import type { CodecStep } from '../../types/codecs.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
 import type { AppState } from '../../types/state.ts';
@@ -35,7 +36,8 @@ describe('values-stage layout equivalence', () => {
         c.state.variables, c.state.shape, values.variableValues,
         (name) => (values.variableValues.get(name) ?? []).some((v) => typeof v === 'string') ? 'text' : 'float64',
       );
-      expectTraceEquivalence(layout, { values: values.variableValues, format: 'logical' }, values.stage.traces);
+      const reference = referenceStageTraces(c.state).get('values')!;
+      expectTraceEquivalence(layout, { values: values.variableValues, format: 'logical' }, reference);
     });
   }
 });
@@ -49,7 +51,8 @@ describe('typed-stage layout equivalence', () => {
         c.state.variables, c.state.shape, typed.typedVariableValues,
         (name) => c.state.variables.find((v) => v.name === name)!.typeAssignment.storageDtype,
       );
-      expectTraceEquivalence(layout, { values: typed.typedVariableValues, format: 'typed' }, typed.stage.traces);
+      const reference = referenceStageTraces(c.state).get('typed')!;
+      expectTraceEquivalence(layout, { values: typed.typedVariableValues, format: 'typed' }, reference);
     });
   }
 });
@@ -71,7 +74,8 @@ describe('linearized-stage layout equivalence', () => {
       const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
       const lin = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
       const layout = buildLinearizedLayout(lin.chunks, lin.linearizedChunks, state.interleaving, state.shape, state.chunkShape);
-      expectTraceEquivalence(layout, { values: typed.typedVariableValues, format: 'typed' }, lin.stage.traces);
+      const reference = referenceStageTraces(state).get('linearized')!;
+      expectTraceEquivalence(layout, { values: typed.typedVariableValues, format: 'typed' }, reference);
     });
   }
 
@@ -87,7 +91,8 @@ describe('linearized-stage layout equivalence', () => {
     const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
     const lin = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
     const layout = buildLinearizedLayout(lin.chunks, lin.linearizedChunks, state.interleaving, state.shape, state.chunkShape);
-    expectTraceEquivalence(layout, { values: typed.typedVariableValues, format: 'typed' }, lin.stage.traces);
+    const reference = referenceStageTraces(state).get('linearized')!;
+    expectTraceEquivalence(layout, { values: typed.typedVariableValues, format: 'typed' }, reference);
   });
 });
 
@@ -162,7 +167,8 @@ describe('encoded-stage layout equivalence', () => {
       });
 
       const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, outputDtypes, hasEntropy);
-      expectTraceEquivalence(encLayout, { values: typed.typedVariableValues, format: 'typed' }, enc.stage.traces);
+      const reference = referenceStageTraces(state).get('encoded')!;
+      expectTraceEquivalence(encLayout, { values: typed.typedVariableValues, format: 'typed' }, reference);
     });
   }
 });
@@ -179,7 +185,8 @@ describe('metadata-stage layout equivalence', () => {
 
       const layout = buildMetadataLayout(metadata.stage.bytes.length);
       const sources = { values: new Map(), format: 'logical' as const };
-      expectTraceEquivalence(layout, sources, metadata.stage.traces);
+      const reference = referenceStageTraces(state).get('metadata')!;
+      expectTraceEquivalence(layout, sources, reference);
     });
   }
 });
@@ -240,9 +247,10 @@ describe('write-stage (VirtualFile.layout) equivalence', () => {
       const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, encoded.stage.layout);
 
       const sources = { values: typed.typedVariableValues, format: 'typed' as const };
-      for (const file of files.files) {
-        expectTraceEquivalence(file.layout, sources, file.traces);
-      }
+      const referenceFiles = referenceFileTraces(state);
+      files.files.forEach((file, i) => {
+        expectTraceEquivalence(file.layout, sources, referenceFiles[i].traces);
+      });
     });
   }
 });
@@ -265,7 +273,8 @@ describe('read-stage layout equivalence', () => {
       state.variables, state.shape, read.logicalValues,
       () => 'float64',
     );
-    expectTraceEquivalence(layout, { values: read.logicalValues, format: 'logical' }, read.stage.traces);
+    const reference = referenceStageTraces(state).get('read')!;
+    expectTraceEquivalence(layout, { values: read.logicalValues, format: 'logical' }, reference);
   });
 
   it('failed read produces an empty layout', () => {
@@ -280,7 +289,7 @@ describe('read-stage layout equivalence', () => {
     const read = computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber);
 
     expect(read.readResult.success).toBe(false);
-    expect(read.stage.traces.length).toBe(0);
+    expect(referenceStageTraces(state).get('read')!.length).toBe(0);
     const layout = buildValueBlocksLayout(state.variables, state.shape, new Map(), () => 'float64');
     expect(layout.byteLength).toBe(0);
   });

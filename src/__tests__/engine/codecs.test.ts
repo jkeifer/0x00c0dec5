@@ -7,23 +7,7 @@ import {
   stepWarnings,
 } from '../../engine/codecs.ts';
 import { valuesToBytes, bytesToValues } from '../../engine/elements.ts';
-import { isChunkLevelTrace } from '../../engine/trace.ts';
-import type { ByteTrace } from '../../types/pipeline.ts';
 import type { CodecStep } from '../../types/codecs.ts';
-
-function makeSimpleTraces(byteCount: number, chunkId: string = 'chunk:0'): ByteTrace[] {
-  return Array.from({ length: byteCount }, (_, i) => ({
-    traceId: `var:${Math.floor(i / 4)}`,
-    variableName: 'var',
-    variableColor: '#f00',
-    coords: [Math.floor(i / 4)],
-    displayValue: '0',
-    dtype: 'float32',
-    chunkId,
-    byteInValue: i % 4,
-    byteCount: 4,
-  }));
-}
 
 describe('codec registry', () => {
   it('contains only delta, byte-shuffle, rle, lz', () => {
@@ -223,69 +207,56 @@ describe('lz codec', () => {
   });
 });
 
+// Per-byte tracing through runCodecPipeline (value-preserving propagation for
+// reordering codecs, chunk-level degradation for entropy codecs) is no
+// longer computed here — it's derived on demand from the Encoded stage's
+// StageLayout (buildEncodedLayout in layout.ts). That behavior is pinned by
+// src/__tests__/engine/layout.equivalence.test.ts's ENCODED_CASES (which
+// exercises both value-preserving and entropy/chunk-level cases against the
+// reference tracer) and unit-tested directly at
+// src/__tests__/engine/trace.test.ts (propagateTracesValuePreserving /
+// degradeTracesToChunkLevel, now sourced from
+// src/__tests__/helpers/referenceTraces.ts).
 describe('runCodecPipeline', () => {
   it('runs empty pipeline (identity)', () => {
     const bytes = valuesToBytes([1, 2, 3], 'float32');
-    const traces = makeSimpleTraces(bytes.length);
-    const result = runCodecPipeline(bytes, traces, [], 'float32');
+    const result = runCodecPipeline(bytes, [], 'float32');
 
     expect(result.bytes).toEqual(bytes);
-    expect(result.traces).toEqual(traces);
-    expect(result.stages).toHaveLength(0);
     expect(result.outputDtype).toBe('float32');
   });
 
   it('chains codecs sequentially', () => {
     const bytes = valuesToBytes([100, 200, 300], 'int32');
-    const traces = makeSimpleTraces(bytes.length);
     const steps: import('../../types/codecs.ts').CodecStep[] = [
       { codec: 'delta', params: { order: 1 } },
     ];
 
-    const result = runCodecPipeline(bytes, traces, steps, 'int32');
-    expect(result.stages).toHaveLength(1);
+    const result = runCodecPipeline(bytes, steps, 'int32');
     expect(result.outputDtype).toBe('int32');
 
     const finalValues = bytesToValues(result.bytes, 'int32');
     expect(finalValues).toEqual([100, 100, 100]);
   });
 
-  it('preserves traces through mapping/reordering codecs', () => {
-    const bytes = valuesToBytes([1, 2, 3], 'int32');
-    const traces = makeSimpleTraces(bytes.length);
-    const steps: import('../../types/codecs.ts').CodecStep[] = [
-      { codec: 'delta', params: { order: 1 } },
-    ];
-
-    const result = runCodecPipeline(bytes, traces, steps, 'int32');
-    // Traces should be preserved (same count, not chunk-level)
-    expect(result.traces.length).toBe(bytes.length);
-    for (const t of result.traces) {
-      expect(isChunkLevelTrace(t.traceId)).toBe(false);
-    }
-  });
-
-  it('degrades traces through entropy codecs', () => {
+  it('collapses to uint8 output dtype through entropy codecs', () => {
     const bytes = new Uint8Array([1, 1, 1, 2, 2, 3]);
-    const traces = makeSimpleTraces(bytes.length, 'chunk:0');
     const steps: import('../../types/codecs.ts').CodecStep[] = [
       { codec: 'rle', params: {} },
     ];
 
-    const result = runCodecPipeline(bytes, traces, steps, 'uint8');
-    for (const t of result.traces) {
-      expect(isChunkLevelTrace(t.traceId)).toBe(true);
-    }
+    const result = runCodecPipeline(bytes, steps, 'uint8');
+    expect(result.outputDtype).toBe('uint8');
+    expect(Array.from(result.bytes)).toEqual([3, 1, 2, 2, 1, 3]);
   });
 
   it('skips unknown codecs', () => {
     const bytes = valuesToBytes([1], 'int32');
-    const traces = makeSimpleTraces(bytes.length);
     const steps: import('../../types/codecs.ts').CodecStep[] = [
       { codec: 'nonexistent', params: {} },
     ];
 
-    const result = runCodecPipeline(bytes, traces, steps, 'int32');
+    const result = runCodecPipeline(bytes, steps, 'int32');
     expect(result.bytes).toEqual(bytes);
   });
 });
@@ -635,7 +606,7 @@ describe('codecs on charN input', () => {
 
   it('delta-on-char roundtrips through runCodecPipeline + reverseCodecPipeline dtype flow', () => {
     const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
-    const result = runCodecPipeline(charBytes, makeSimpleTraces(charBytes.length), steps, 'char8');
+    const result = runCodecPipeline(charBytes, steps, 'char8');
     expect(result.outputDtype).toBe('char8');
     const decoded = CODEC_REGISTRY['delta'].decode(result.bytes, 'char8', { order: 1 });
     expect(Array.from(decoded.bytes)).toEqual(Array.from(charBytes));

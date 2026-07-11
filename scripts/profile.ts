@@ -45,9 +45,9 @@ for (const size of SIZES) {
     const values = measure('values', () => computeValuesStage(state.shape, state.variables), rows);
     const typed = measure('typed', () => computeTypedStage(state.shape, state.variables, values.variableValues), rows);
     const lin = measure('linearized', () => computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues), rows);
-    const enc = measure('encoded', () => computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline), rows);
+    const enc = measure('encoded', () => computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, lin.stage.layout), rows);
     measure('metadata', () => computeMetadataStage(state, enc.encodedChunks, typed.variableStats), rows);
-    const files = measure('write', () => computeFilesStage(state, enc.encodedChunks, typed.variableStats), rows);
+    const files = measure('write', () => computeFilesStage(state, enc.encodedChunks, typed.variableStats, enc.stage.layout), rows);
     measure('read', () => computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber), rows);
   } catch (err) {
     rows.push(['FAILED', String(err instanceof Error ? err.message : err), '']);

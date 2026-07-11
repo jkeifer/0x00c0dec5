@@ -9,17 +9,6 @@ function makeEncodedChunk(coords: number[], data: number[]): EncodedChunk {
     chunkId: `chunk:${coords.join(',')}`,
     coords,
     bytes: new Uint8Array(data),
-    traces: data.map((_, i) => ({
-      traceId: `var:${i}`,
-      variableName: 'var',
-      variableColor: '#f00',
-      coords: [i],
-      displayValue: String(data[i]),
-      dtype: 'uint8',
-      chunkId: `chunk:${coords.join(',')}`,
-      byteInValue: 0,
-      byteCount: 1,
-    })),
   };
 }
 

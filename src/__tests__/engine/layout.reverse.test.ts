@@ -10,7 +10,7 @@ import {
   type StageLayout, type ValueSources,
 } from '../../engine/layout.ts';
 import { buildChunkRegions } from '../../components/viewers/viewerUtils.ts';
-import type { PipelineStage } from '../../types/pipeline.ts';
+import { referenceStageTraces, referenceFileTraces } from '../helpers/referenceTraces.ts';
 import type { AppState } from '../../types/state.ts';
 import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
 
@@ -85,8 +85,8 @@ function buildStages(c: MatrixCase) {
   return {
     state,
     typedSources: { values: typed.typedVariableValues, format: 'typed' as const } satisfies ValueSources,
-    linLayout, linStage: lin.stage,
-    encLayout, encStage: enc.stage,
+    linLayout,
+    encLayout,
     files: files.files,
   };
 }
@@ -131,21 +131,24 @@ describe('byteRangesForTrace inverts traceAt', () => {
 describe('chunkRegionsOf equivalence', () => {
   for (const c of MATRIX) {
     it(`${c.name}: linearized stage`, () => {
-      const { linLayout, linStage } = buildStages(c);
-      expect(chunkRegionsOf(linLayout)).toEqual(buildChunkRegions(linStage.traces));
+      const { state, linLayout } = buildStages(c);
+      const reference = referenceStageTraces(state).get('linearized')!;
+      expect(chunkRegionsOf(linLayout)).toEqual(buildChunkRegions(reference));
     });
 
     it(`${c.name}: encoded stage`, () => {
-      const { encLayout, encStage } = buildStages(c);
-      expect(chunkRegionsOf(encLayout)).toEqual(buildChunkRegions(encStage.traces));
+      const { state, encLayout } = buildStages(c);
+      const reference = referenceStageTraces(state).get('encoded')!;
+      expect(chunkRegionsOf(encLayout)).toEqual(buildChunkRegions(reference));
     });
   }
 
   it('write stage (per file)', () => {
-    const { files } = buildStages(MATRIX[0]);
-    for (const file of files) {
-      expect(chunkRegionsOf(file.layout)).toEqual(buildChunkRegions(file.traces as PipelineStage['traces']));
-    }
+    const { state, files } = buildStages(MATRIX[0]);
+    const referenceFiles = referenceFileTraces(state);
+    files.forEach((file, i) => {
+      expect(chunkRegionsOf(file.layout)).toEqual(buildChunkRegions(referenceFiles[i].traces));
+    });
   });
 
   for (const c of VALUES_CASES) {
@@ -155,7 +158,8 @@ describe('chunkRegionsOf equivalence', () => {
         c.state.variables, c.state.shape, values.variableValues,
         (name) => (values.variableValues.get(name) ?? []).some((v) => typeof v === 'string') ? 'text' : 'float64',
       );
-      expect(chunkRegionsOf(layout)).toEqual(buildChunkRegions(values.stage.traces));
+      const reference = referenceStageTraces(c.state).get('values')!;
+      expect(chunkRegionsOf(layout)).toEqual(buildChunkRegions(reference));
     });
 
     it(`${c.name}: typed stage`, () => {
@@ -165,7 +169,8 @@ describe('chunkRegionsOf equivalence', () => {
         c.state.variables, c.state.shape, typed.typedVariableValues,
         (name) => c.state.variables.find((v) => v.name === name)!.typeAssignment.storageDtype,
       );
-      expect(chunkRegionsOf(layout)).toEqual(buildChunkRegions(typed.stage.traces));
+      const reference = referenceStageTraces(c.state).get('typed')!;
+      expect(chunkRegionsOf(layout)).toEqual(buildChunkRegions(reference));
     });
   }
 

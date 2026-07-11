@@ -1,15 +1,17 @@
-import type { Chunk, LinearizedChunk, ByteTrace } from '../types/pipeline.ts';
+import type { Chunk, LinearizedChunk } from '../types/pipeline.ts';
 import { valuesToBytes } from './elements.ts';
-import { formatValue } from './elements.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
-import { getDtype } from '../types/dtypes.ts';
-import { makeTraceId, makeChunkTraceId } from './trace.ts';
+import { makeChunkTraceId } from './trace.ts';
 import { concatBytes } from './bytes.ts';
 
 /**
- * Linearize a chunk's variables into a flat byte array with traces.
+ * Linearize a chunk's variables into a flat byte array.
  * Column/BSQ: all bytes for var0, then var1, etc.
  * Row/BIP: for each element i, var0[i] then var1[i] then var2[i].
+ *
+ * Per-byte tracing for this stage is computed on demand from the Linearized
+ * stage's StageLayout (buildLinearizedLayout in layout.ts), not materialized
+ * here — see CLAUDE.md pitfall 1.
  */
 export function linearizeChunk(
   chunk: Chunk,
@@ -21,65 +23,9 @@ export function linearizeChunk(
     ? makeChunkTraceId(`${chunk.variables[0].variableName}:${chunk.coords.join(',')}`)
     : makeChunkTraceId(chunk.coords.join(','));
   const variableName = isSingleVarColumn ? chunk.variables[0].variableName : undefined;
-  const traces = buildTraces(chunk, interleaving, chunkId);
   const bytes = buildBytes(chunk, interleaving);
 
-  return { chunkId, coords: chunk.coords, bytes, traces, variableName };
-}
-
-/** Build per-byte traces for the linearized chunk. */
-export function buildTraces(
-  chunk: Chunk,
-  interleaving: 'row' | 'column',
-  chunkId?: string,
-): ByteTrace[] {
-  const resolvedChunkId = chunkId ?? makeChunkTraceId(chunk.coords.join(','));
-  const traces: ByteTrace[] = [];
-
-  if (interleaving === 'column') {
-    for (const cv of chunk.variables) {
-      const dtypeInfo = getDtype(cv.dtype as DtypeKey);
-      for (let i = 0; i < cv.values.length; i++) {
-        const traceId = makeTraceId(cv.variableName, cv.sourceCoords[i]);
-        for (let b = 0; b < dtypeInfo.size; b++) {
-          traces.push({
-            traceId,
-            variableName: cv.variableName,
-            variableColor: cv.variableColor,
-            coords: cv.sourceCoords[i],
-            displayValue: formatValue(cv.values[i], cv.dtype as DtypeKey),
-            dtype: cv.dtype,
-            chunkId: resolvedChunkId,
-            byteInValue: b,
-            byteCount: dtypeInfo.size,
-          });
-        }
-      }
-    }
-  } else {
-    const elementCount = chunk.variables.length > 0 ? chunk.variables[0].values.length : 0;
-    for (let i = 0; i < elementCount; i++) {
-      for (const cv of chunk.variables) {
-        const dtypeInfo = getDtype(cv.dtype as DtypeKey);
-        const traceId = makeTraceId(cv.variableName, cv.sourceCoords[i]);
-        for (let b = 0; b < dtypeInfo.size; b++) {
-          traces.push({
-            traceId,
-            variableName: cv.variableName,
-            variableColor: cv.variableColor,
-            coords: cv.sourceCoords[i],
-            displayValue: formatValue(cv.values[i], cv.dtype as DtypeKey),
-            dtype: cv.dtype,
-            chunkId: resolvedChunkId,
-            byteInValue: b,
-            byteCount: dtypeInfo.size,
-          });
-        }
-      }
-    }
-  }
-
-  return traces;
+  return { chunkId, coords: chunk.coords, bytes, variableName };
 }
 
 function buildBytes(chunk: Chunk, interleaving: 'row' | 'column'): Uint8Array {

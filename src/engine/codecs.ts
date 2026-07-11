@@ -1,9 +1,7 @@
 import type { CodecDefinition, CodecStep } from '../types/codecs.ts';
-import type { ByteTrace } from '../types/pipeline.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
 import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import { bytesToValues, valuesToBytes } from './elements.ts';
-import { propagateTracesValuePreserving, degradeTracesToChunkLevel } from './trace.ts';
 
 // ─── Delta ──────────────────────────────────────────────────────────────
 
@@ -387,53 +385,37 @@ export function stepWarnings(steps: CodecStep[], inputDtype: DtypeKey): string[]
 
 export interface CodecPipelineResult {
   bytes: Uint8Array;
-  traces: ByteTrace[];
-  stages: { name: string; bytes: Uint8Array; traces: ByteTrace[] }[];
   outputDtype: string;
 }
 
 /**
- * Run a sequence of codec steps on input bytes, propagating traces.
+ * Run a sequence of codec steps on input bytes.
+ *
+ * Per-byte tracing through this pipeline is computed on demand from the
+ * Encoded stage's StageLayout (buildEncodedLayout in layout.ts), not
+ * threaded through here — see CLAUDE.md pitfall 1. The dtype-flow rule this
+ * pipeline follows (entropy codecs -> uint8, everything else preserves
+ * dtype) is exactly what buildEncodedLayout mirrors via outputDtypeFor.
  */
 export function runCodecPipeline(
   inputBytes: Uint8Array,
-  inputTraces: ByteTrace[],
   steps: CodecStep[],
   inputDtype: DtypeKey,
 ): CodecPipelineResult {
   let currentBytes = inputBytes;
-  let currentTraces = inputTraces;
   let currentDtype: DtypeKey = inputDtype;
-  const stages: { name: string; bytes: Uint8Array; traces: ByteTrace[] }[] = [];
 
   for (const step of steps) {
     const codec = CODEC_REGISTRY[step.codec];
     if (!codec) continue;
 
     const result = codec.encode(currentBytes, currentDtype, step.params);
-
-    const outputDtype = result.outputDtype as DtypeKey;
-
-    if (codec.category === 'entropy') {
-      currentTraces = degradeTracesToChunkLevel(currentTraces, result.bytes.length);
-    } else {
-      currentTraces = propagateTracesValuePreserving(currentTraces, currentDtype, outputDtype);
-    }
-
     currentBytes = result.bytes;
-    currentDtype = outputDtype;
-
-    stages.push({
-      name: codec.label,
-      bytes: new Uint8Array(currentBytes),
-      traces: [...currentTraces],
-    });
+    currentDtype = result.outputDtype as DtypeKey;
   }
 
   return {
     bytes: currentBytes,
-    traces: currentTraces,
-    stages,
     outputDtype: currentDtype,
   };
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { hexToBytes, orderChunks, assembleFiles } from '../../engine/write.ts';
 import { deserializeMetadata } from '../../engine/metadata.ts';
+import { chunkRegionsOf } from '../../engine/layout.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
 import type { EncodedChunk } from '../../types/pipeline.ts';
 
@@ -9,17 +10,6 @@ function makeEncodedChunk(coords: number[], data: number[]): EncodedChunk {
     chunkId: `chunk:${coords.join(',')}`,
     coords,
     bytes: new Uint8Array(data),
-    traces: data.map((_, i) => ({
-      traceId: `var:${i}`,
-      variableName: 'var',
-      variableColor: '#f00',
-      coords: [i],
-      displayValue: String(data[i]),
-      dtype: 'uint8',
-      chunkId: `chunk:${coords.join(',')}`,
-      byteInValue: 0,
-      byteCount: 1,
-    })),
   };
 }
 
@@ -281,14 +271,14 @@ describe('assembleFiles', () => {
     expect(files[4].name).toBe('metadata');
   });
 
-  it('trace count matches byte count', () => {
+  it('layout byteLength matches file byte count', () => {
     const state = {
       ...DEFAULT_STATE,
       write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' as const },
     };
     const files = assembleFiles(state, [chunk], [1]);
     const mainFile = files[0];
-    expect(mainFile.traces.length).toBe(mainFile.bytes.length);
+    expect(mainFile.layout.byteLength).toBe(mainFile.bytes.length);
   });
 
   it('handles empty magic number', () => {
@@ -300,20 +290,20 @@ describe('assembleFiles', () => {
     expect(files[0].bytes.length).toBeGreaterThan(0);
   });
 
-  it('sidecar metadata file has traces matching byte count', () => {
+  it('sidecar metadata file layout matches byte count and is a single metadata region', () => {
     const state = {
       ...DEFAULT_STATE,
       write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'sidecar' as const },
     };
     const files = assembleFiles(state, [chunk], [1]);
     const sidecar = files.find((f) => f.name === 'metadata')!;
-    expect(sidecar.traces.length).toBe(sidecar.bytes.length);
-    for (const t of sidecar.traces) {
-      expect(t.traceId).toBe('metadata');
-    }
+    expect(sidecar.layout.byteLength).toBe(sidecar.bytes.length);
+    const regions = chunkRegionsOf(sidecar.layout);
+    expect(regions.every((r) => r.label === 'metadata')).toBe(true);
+    expect(regions.reduce((acc, r) => acc + r.byteCount, 0)).toBe(sidecar.bytes.length);
   });
 
-  it('per-chunk sidecar metadata file has traces', () => {
+  it('per-chunk sidecar metadata file layout matches byte count', () => {
     const chunks = [
       makeEncodedChunk([0], [0x01, 0x02]),
       makeEncodedChunk([1], [0x03, 0x04]),
@@ -324,10 +314,10 @@ describe('assembleFiles', () => {
     };
     const files = assembleFiles(state, chunks, [2]);
     const sidecar = files.find((f) => f.name === 'metadata')!;
-    expect(sidecar.traces.length).toBe(sidecar.bytes.length);
-    for (const t of sidecar.traces) {
-      expect(t.traceId).toBe('metadata');
-    }
+    expect(sidecar.layout.byteLength).toBe(sidecar.bytes.length);
+    const regions = chunkRegionsOf(sidecar.layout);
+    expect(regions.every((r) => r.label === 'metadata')).toBe(true);
+    expect(regions.reduce((acc, r) => acc + r.byteCount, 0)).toBe(sidecar.bytes.length);
   });
 
   it('chunk index offsets are correct', () => {

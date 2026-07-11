@@ -55,7 +55,6 @@ export interface ChunkRegion {
 export interface PipelineStage {
   name: string;
   bytes: Uint8Array;
-  traces: ByteTrace[];
   chunkRegions: ChunkRegion[];
   layout: StageLayout;
   stats: {
@@ -82,7 +81,6 @@ export interface LinearizedChunk {
   chunkId: string;
   coords: number[];
   bytes: Uint8Array;
-  traces: ByteTrace[];
   variableName?: string;
 }
 
@@ -90,14 +88,12 @@ export interface EncodedChunk {
   chunkId: string;
   coords: number[];
   bytes: Uint8Array;
-  traces: ByteTrace[];
   variableName?: string;
 }
 
 export interface VirtualFile {
   name: string;
   bytes: Uint8Array;
-  traces: ByteTrace[];      // removed in Task 10
   layout: StageLayout;      // per-file regions (Task 5)
 }
 
