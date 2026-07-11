@@ -105,4 +105,32 @@ describe('ReadProcessView', () => {
     expect(skippedRow.textContent).toContain('not reached');
     expect(skippedRow.style.color).toBe('var(--text-tertiary)');
   });
+
+  it('renders detail text even for ok steps (assume-identity caveat on decode-chunks)', () => {
+    const stepsWithOkDetail: ReadStep[] = STEP_IDS.map((id) => {
+      if (id === 'decode-chunks') {
+        return {
+          id,
+          label: LABELS[id],
+          needed: LABELS[id] + ' needed text',
+          found: LABELS[id] + ' found text',
+          outcome: 'ok',
+          detail: 'no codec info — assumed raw bytes (honest if none were applied at write time; garbled if they were)',
+        };
+      }
+      return okStep(id);
+    });
+
+    render(<ReadProcessView steps={stepsWithOkDetail} />);
+
+    // All steps should render as ok
+    for (const id of STEP_IDS) {
+      const row = screen.getByTestId(`read-step-${id}`);
+      expect(row.textContent).toContain('✓');
+    }
+
+    // decode-chunks, ok but with detail, must show the detail in the banner
+    const decodeRow = screen.getByTestId('read-step-decode-chunks');
+    expect(decodeRow.textContent).toContain('no codec info — assumed raw bytes (honest if none were applied at write time; garbled if they were)');
+  });
 });

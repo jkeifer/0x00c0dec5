@@ -79,7 +79,7 @@ The reader:
 1. Locates the metadata based on placement (check header, then footer, then sidecar file) — see `docs/design.md`'s "Footer Locator (D1)" for how footer placement is actually found (a trailer-length seek, or a best-effort scan that can legitimately fail)
 2. Deserializes the metadata (JSON or binary, determined by inspecting the bytes or by the format indicator in the metadata itself)
 3. Extracts structural information: schema, shape, chunk shape, interleaving, codec pipelines, chunk index, byte order
-4. Uses the chunk index to locate each chunk's bytes in the file — or, if the index was omitted (`includeChunkIndex: false`, D3), computes offsets from chunk shape and dtype size when every codec pipeline in play is size-preserving
+4. Uses the chunk index to locate each chunk's bytes in the file — or, if the index was omitted (`includeChunkIndex: false` (now `metadata.include.chunkIndex`), D3), computes offsets from chunk shape and dtype size when every codec pipeline in play is size-preserving
 5. For each chunk, reverses the codec pipeline (see Codec Decode Functions below)
 6. Deinterleaves and reassembles the full dataset
 7. Produces reconstructed values

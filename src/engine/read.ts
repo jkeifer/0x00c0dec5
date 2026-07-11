@@ -10,6 +10,7 @@ import {
   serializeMetadataBinary,
   type MetadataEntry,
   type ChunkIndexEntry,
+  METADATA_KEY_GROUPS,
 } from './metadata.ts';
 import { reverseCodecPipeline } from './decode.ts';
 import { reverseTypeAssignment } from './typeAssign.ts';
@@ -350,12 +351,7 @@ function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructure {
  * counts as descriptive content having been included. */
 function describeSchemaFound(structure: ParsedStructure, entries: MetadataEntry[]): string {
   const base = `${structure.schema.length} variable(s): ${structure.schema.map((s) => s.name).join(', ')}`;
-  const knownKeys = new Set([
-    'schema', 'type_assignments', 'logical_types',
-    'shape', 'chunk_shape', 'chunk_grid', 'chunk_order', 'partitioning', 'interleaving',
-    'codec_pipelines', 'chunk_index',
-    'metadata_format', 'byte_order',
-  ]);
+  const knownKeys = new Set([...Object.keys(METADATA_KEY_GROUPS), 'metadata_format', 'byte_order']);
   const hasDescriptive = entries.some((e) => e.key === 'variable_statistics' || !knownKeys.has(e.key));
   if (hasDescriptive) return base;
   return `${base} (statistics and custom entries were absent — not needed to read the schema)`;
