@@ -14,45 +14,79 @@
 type StageName = 'values' | 'typed' | 'linearized' | 'encoded' | 'metadata' | 'write' | 'read';
 ```
 
-Each stage is a pure function in `src/hooks/usePipeline.ts`, composed two ways:
-
-- **`computePipelineStages(state)`** — a plain synchronous composition of the same 7 stage
-  functions, used by tests and as the reference implementation.
-- **`usePipeline(state)`** — the same composition wrapped in chained `useMemo`s with real
-  dependency boundaries, so e.g. editing a metadata custom entry doesn't re-run
-  generation/typing/chunking/encoding.
+Each stage is a pure function in `src/engine/pipelineCompute.ts` (react-free, so it can be
+bundled into a Web Worker without pulling react along). `src/hooks/usePipeline.ts` is now a
+one-line re-export shim (`export * from '../engine/pipelineCompute.ts'`) kept permanently so
+every existing import path continues to work.
 
 | # | Stage function | Reads | Produces |
 |---|-----------------|-------|----------|
 | 1 | `computeValuesStage(shape, variables)` | `shape`, each variable's `name`/`color`/`logicalType` | Human-readable values per variable (`generateValues`), as float64 display bytes |
 | 2 | `computeTypedStage(shape, variables, variableValues)` | stage 1's values, each variable's `logicalType`/`typeAssignment` | Storage-dtype bytes per variable (`assignType`), plus `VariableStats` (min/max/mean/clipped/rounded/nanCount/isLossy) |
-| 3 | `computeLinearizedStage(shape, chunkShape, interleaving, variables, typedVariableValues)` | stage 2's typed values, `chunkShape`, `interleaving` | Chunked + interleaved bytes (`chunkData`/`chunkDataPerVariable` + `linearizeChunk`), plus `chunkTraceMap`/`traceChunkMap` |
+| 3 | `computeLinearizedStage(shape, chunkShape, interleaving, variables, typedVariableValues)` | stage 2's typed values, `chunkShape`, `interleaving` | Chunked + interleaved bytes (`chunkData`/`chunkDataPerVariable` + `linearizeChunk`), plus a `StageLayout` descriptor for on-demand trace/chunk lookups (see below) |
 | 4 | `computeEncodedStage(chunks, linearizedChunks, interleaving, variables, fieldPipelines, chunkPipeline)` | stage 3's chunks, `fieldPipelines` (id-keyed) or `chunkPipeline` | Codec-pipeline output per chunk (`runCodecPipeline`) |
 | 5 | `computeMetadataStage(state, encodedChunks, variableStats)` | full `state` (re-derives schema/shape/codec config directly — not from prior stage outputs) + stage 4's chunks/stats | Serialized metadata bytes (`collectMetadata` + `serializeMetadata`) |
 | 6 | `computeFilesStage(state, encodedChunks, variableStats)` | full `state` + stage 4's chunks/stats | Assembled `VirtualFile[]` (`assembleFiles`) |
 | 7 | `computeReadStage(files, shape, variables, magicNumber)` | stage 6's files, `shape`, variables, magic | `ReadFileResult` (success or one of 6 failure reasons) + reconstructed logical values |
 
-### The Memo Boundary Table
+`computePipelineStages(state)` composes all 7 in sequence — a plain synchronous call, used by
+tests and as the reference implementation.
+
+### Where Compute Runs: Worker + Coalescing Client
+
+`computePipelineStages` runs off the main thread, inside `src/worker/pipeline.worker.ts`. The
+main thread talks to it through `src/worker/client.ts`'s `PipelineWorkerClient`: a latest-wins
+coalescing client that holds at most one in-flight request and one queued state (a newer
+`compute()` call while a request is in flight replaces the queued slot rather than piling up),
+respawns the worker and reposts on a crash, and arms a watchdog timer that forces a respawn if a
+queued state is waiting behind a compute that never returns. `src/hooks/useWorkerPipeline.ts`
+wraps the client in a hook: it posts every state change, keeps the last-good `PipelineResult`
+mounted while a newer computation is in flight (stale-view UX — the UI never blanks out
+mid-recompute), and exposes a `computing` flag surfaced in the UI as
+`data-testid="pipeline-computing-indicator"`.
+
+### Per-Stage Memoization
 
 This is what actually stops a metadata-field keystroke from re-running the whole pipeline.
-Each row is a `useMemo` in `usePipeline`; its dependency array is exactly the state slice the
-stage function above reads — nothing more:
+`createPipelineComputer()` (`src/engine/pipelineCompute.ts`) returns a stateful closure — one
+instance lives for the worker's lifetime — that memoizes each stage independently: every stage's
+cache key is a JSON string of exactly the state slice that stage's compute function reads (per
+the table above), with the upstream stage's key folded into the downstream key so an upstream
+change invalidates every stage after it:
 
-| Memo | Recomputes when... | Does NOT recompute on... |
-|------|---------------------|----------------------------|
-| `values` | `shape`, `variables` change | chunkShape, interleaving, codecs, metadata, write config |
-| `typed` | `shape`, `variables`, `values.variableValues` change | chunkShape, interleaving, codecs, metadata, write config |
-| `linearized` | `shape`, `chunkShape`, `interleaving`, `variables`, `typed.typedVariableValues` change | codecs, metadata, write config |
-| `encoded` | `linearized.chunks`/`linearizedChunks`, `interleaving`, `variables`, `fieldPipelines`, `chunkPipeline` change | metadata, write config |
-| `metadata` | the whole `state` object, `encoded.encodedChunks`, `typed.variableStats` change | — (state changes on every edit, but this memo is downstream of `encoded`, which itself won't have changed if only e.g. a custom metadata entry changed) |
-| `files` | same deps as `metadata` | — |
-| `read` | `files.files`, `shape`, `variables`, `write.magicNumber` change | metadata edits that don't affect written bytes (they do, in practice, since metadata is embedded — but *unrelated* write/UI state does not retrigger this) |
+| Stage | Memo key includes | Does NOT recompute on... |
+|-------|---------------------|----------------------------|
+| `values` | `shape`, `variables` | chunkShape, interleaving, codecs, metadata, write config |
+| `typed` | `valuesKey`, `shape`, `variables` | chunkShape, interleaving, codecs, metadata, write config |
+| `linearized` | `typedKey`, `shape`, `chunkShape`, `interleaving`, `variables` | codecs, metadata, write config |
+| `encoded` | `linearizedKey`, `interleaving`, `variables`, `fieldPipelines`, `chunkPipeline` | metadata, write config |
+| `metadata` | `encodedKey`, `typedKey`, the whole `state` object | — (`state` changes on every edit, but this key is downstream of `encodedKey`, which won't change if only e.g. a custom metadata entry changed) |
+| `write` (files) | same key shape as `metadata` | — |
+| `read` | `filesKey`, `shape`, `variables`, `write.magicNumber` | metadata edits that don't affect written bytes (they do, in practice, since metadata is embedded — but *unrelated* write/UI state does not retrigger this) |
 
 Net effect: typing in the magic-number field or a metadata custom-entry value re-runs stages
-5–7 (metadata, files, read) but not 1–4 (values, typed, linearized, encoded) — the expensive
-generation/chunking/codec work. A `usePipeline.memo.test.tsx`-style test (via `renderHook`)
-verifies this by asserting stage byte arrays keep the same object reference (`===`) across a
-metadata-only rerender.
+5–7 (metadata, write, read) but not 1–4 (values, typed, linearized, encoded) — the expensive
+generation/chunking/codec work. `tests/unit/hooks/pipelineComputer.memo.test.ts` verifies this
+by asserting stage objects keep the same reference (`===`) across a metadata-only recompute.
+
+Because the worker keeps reusing the same `ArrayBuffer` instances for cache-hit stages, results
+are sent back to the main thread via structured clone rather than `postMessage`'s transfer list:
+a transferred buffer is detached from the worker thread, so a later cache hit would hand back a
+reference to already-detached memory and crash the next `postMessage` — transfer and per-stage
+memoization can't share the same buffers, and memoization avoiding recompute is worth more than
+transfer avoiding a clone of already-small serialized bytes.
+
+### Per-Byte Traces: Computed On Demand, Not Precomputed
+
+There is no precomputed trace map. `src/engine/layout.ts` produces a `StageLayout` descriptor
+per stage (built alongside stages 3 and 4's chunk/encode work) describing byte regions in terms
+of chunk/element coordinates. Three functions answer trace questions against that descriptor on
+demand: `traceAt(layout, byteIndex, sources)` (byte → `ByteTrace`), `byteRangesForTrace(layout,
+traceId)` (trace → byte ranges, the inverse), and `chunkRegionsOf(layout)` (chunk membership via
+coordinate math, replacing the old chunk↔trace maps). `chunkIdForElement`/`elementInChunk` do the
+equivalent lookups for hover-linking in viewers that work in element space rather than byte
+space. Consumers (`HoverBar.tsx`, `viewerUtils.ts`) call these directly instead of reading a
+precomputed map out of `PipelineResult`.
 
 ## Where Each Concern Lives
 
@@ -93,7 +127,7 @@ metadata-only rerender.
   `migrateState` → `deepMergeDefaults` (over a `structuredClone` of `DEFAULT_STATE`, never a
   live reference) → `validateState`, so nothing malformed or missing reaches the engine.
 - **`PipelineContext.tsx`** — `PipelineProvider`/`usePipelineContext`. Wraps a `PipelineResult`
-  (from `usePipeline`) plus `showDiff`, split into two memos so a `showDiff`-only toggle doesn't
+  (from `useWorkerPipeline`) plus `showDiff`, split into two memos so a `showDiff`-only toggle doesn't
   invalidate consumers that only read pipeline data, and vice versa. This is what removed ~10
   drilled props from each `<StagePane>` in `App.tsx`.
 
@@ -116,7 +150,8 @@ metadata-only rerender.
 
 ### Hooks (`src/hooks/`)
 
-`usePipeline.ts` (the stage functions + memoized hook, described above), `useHover.ts`
+`usePipeline.ts` (permanent re-export shim over `src/engine/pipelineCompute.ts`, described
+above), `useWorkerPipeline.ts` (worker-backed pipeline hook, described above), `useHover.ts`
 (cross-pane hover state keyed by trace/data indices, not DOM refs), `useContainerWidth.ts`.
 
 ## File Formats Produced

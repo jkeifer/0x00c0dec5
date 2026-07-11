@@ -12,6 +12,9 @@ export interface WorkerDiagnostics {
 
 export interface WorkerLike { // structural subset of Worker, for test fakes
   postMessage(msg: unknown, transfer?: Transferable[]): void;
+  // Structural subset shared with test fakes (FakeWorker); a typed event here would force
+  // casts in the pinned fixture.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   addEventListener(type: 'message' | 'error', fn: (e: any) => void): void;
   terminate(): void;
 }
