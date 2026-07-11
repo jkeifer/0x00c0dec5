@@ -63,4 +63,22 @@ describe('lz hash-chain encoder', () => {
     // Generous CI bound — this is a cliff detector, not a benchmark.
     expect(ms).toBeLessThan(3_000);
   });
+
+  it('encodes incompressible data at a large window in bounded time (cliff detector)', () => {
+    // Random bytes = every match attempt fails after the hash probe; window
+    // 32768 makes an O(n*window) scan take ~12s here vs ~17ms for the
+    // hash-chain (measured on the review machine). The 2s bound is ~100x
+    // headroom for slow CI while still failing an O(n*window) regression
+    // by a factor of ~6.
+    const rng = createPRNG(1337);
+    const b = new Uint8Array(300_000);
+    for (let i = 0; i < b.length; i++) b[i] = Math.floor(rng() * 256);
+    const t0 = performance.now();
+    const enc = lz.encode(b, 'uint8', { windowSize: 32768 });
+    const ms = performance.now() - t0;
+    expect(ms).toBeLessThan(2_000);
+    // And it still roundtrips:
+    const dec = lz.decode(enc.bytes, 'uint8', { windowSize: 32768 });
+    expect(Array.from(dec.bytes)).toEqual(Array.from(b));
+  });
 });
