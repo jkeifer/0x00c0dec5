@@ -255,6 +255,7 @@ export function MetadataEditor({
               onChange={(v) => onIncludeChange(key, v === 'yes')}
               size="sm"
               disabled={metadataDisabled}
+              testIdPrefix={`${testid}-opt`}
             />
             <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>{hint}</span>
           </div>

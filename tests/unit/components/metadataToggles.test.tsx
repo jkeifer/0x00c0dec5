@@ -11,6 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { AppStateProvider, useAppState } from '../../../src/state/useAppState.ts';
 import { MetadataEditor } from '../../../src/components/config/MetadataEditor.tsx';
+import { colors } from '../../../src/theme.ts';
 
 // Thin wrapper mirroring Sidebar.tsx's MetadataEditor wiring, so the test
 // exercises the real dispatch idiom rather than a mock callback. Default
@@ -58,11 +59,19 @@ describe('MetadataEditor include-group toggles', () => {
 
     for (const group of GROUPS) {
       const row = screen.getByTestId(`include-${group}-toggle`);
-      expect(row).toBeTruthy();
-      // Radio's active option renders as the "Yes" button; default state has
-      // every include flag true.
-      const yesBtn = row.querySelector('button[data-testid$="-yes"], button');
+      const yesBtn = row.querySelector(`button[data-testid="include-${group}-toggle-opt-yes"]`) as HTMLButtonElement;
+      const noBtn = row.querySelector(`button[data-testid="include-${group}-toggle-opt-no"]`) as HTMLButtonElement;
       expect(yesBtn).toBeTruthy();
+      expect(noBtn).toBeTruthy();
+
+      // Default AppState has every include flag true, so "Yes" is active:
+      // its color is the accent color, and it's visually distinct from "No".
+      expect(yesBtn.style.color).toBe(colors.accent);
+      expect(noBtn.style.color).not.toBe(colors.accent);
+
+      // Both options are enabled (write.includeMetadata forced true above).
+      expect(yesBtn.disabled).toBe(false);
+      expect(noBtn.disabled).toBe(false);
     }
 
     // No "metadata is not being written" note when includeMetadata is true (default).
@@ -72,16 +81,19 @@ describe('MetadataEditor include-group toggles', () => {
   it('clicking the schema toggle flips its checked state via real dispatch', () => {
     renderEditor();
 
-    const schemaRow = screen.getByTestId('include-schema-toggle');
-    const noBtn = Array.from(schemaRow.querySelectorAll('button')).find(
-      (b) => b.textContent === 'No',
-    )!;
+    const yesBtn = screen.getByTestId('include-schema-toggle-opt-yes') as HTMLButtonElement;
+    const noBtn = screen.getByTestId('include-schema-toggle-opt-no') as HTMLButtonElement;
+
+    // Before the click, "Yes" is active (default state has schema: true).
+    expect(yesBtn.style.color).toBe(colors.accent);
+    expect(noBtn.style.color).not.toBe(colors.accent);
+
     fireEvent.click(noBtn);
 
-    // After the click, the "No" option should now be the active/selected one.
-    // Radio marks the active button via color/background rather than a
-    // disabled attribute, so assert through the accent color used for active.
-    expect(noBtn.style.color).not.toBe('');
+    // After the click, "No" must be the active one and "Yes" must not be —
+    // this fails if onIncludeChange/dispatch is a no-op.
+    expect(noBtn.style.color).toBe(colors.accent);
+    expect(yesBtn.style.color).not.toBe(colors.accent);
   });
 
   it('disables all five toggles and shows a note when write.includeMetadata is false', () => {
