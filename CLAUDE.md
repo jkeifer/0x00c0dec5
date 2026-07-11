@@ -131,6 +131,7 @@ node tests/ui/scenario-hover-linking.mjs
 node tests/ui/scenario-pane-defaults.mjs
 node tests/ui/scenario-worker-pipeline.mjs
 node tests/ui/scenario-large-array.mjs
+node tests/ui/scenario-read-process.mjs
 kill %1                                          # stop the dev server when done
 ```
 

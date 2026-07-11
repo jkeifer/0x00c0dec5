@@ -43,7 +43,6 @@ export function ReadProcessView({ steps }: ReadProcessViewProps) {
         What the reader did
       </div>
       {steps.map((step) => {
-        const isFailed = step.outcome === 'failed';
         const isSkipped = step.outcome === 'skipped';
         const iconColor =
           step.outcome === 'ok' ? colors.success : step.outcome === 'failed' ? colors.error : colors.textTertiary;
@@ -70,7 +69,11 @@ export function ReadProcessView({ steps }: ReadProcessViewProps) {
               <div>Needed: {step.needed}</div>
               <div>Found: {step.found}</div>
             </div>
-            {isFailed && step.detail && (
+            {/* Render detail whenever the engine attached one — failed steps
+                carry the failure message, and ok steps can carry a caveat
+                (decode-chunks' assume-identity "assumed raw bytes" note,
+                read plan Task 3) that must be just as visible. */}
+            {step.detail && (
               <div
                 style={{
                   marginLeft: spacing.lg,
