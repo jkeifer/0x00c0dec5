@@ -1,11 +1,17 @@
 import { useMemo } from 'react';
-import type { ByteTrace, ChunkRegion } from '../../types/pipeline.ts';
-import { buildChunkRegions, buildTraceIndex, buildChunkIndex } from './viewerUtils.ts';
+import type { ChunkRegion } from '../../types/pipeline.ts';
+import type { StageLayout, ValueSources } from '../../engine/layout.ts';
+import { chunkRegionsOf, byteRangesForTrace } from '../../engine/layout.ts';
 
 /** One section of hex-viewable bytes: a single stage's bytes, or one file's
  * bytes when a Write-stage view has multiple output files. `header` is
  * present only when the section should render a sticky name/size header
- * (multi-section mode); single-section views omit it. */
+ * (multi-section mode); single-section views omit it.
+ *
+ * Task 8 (perf plan): carries `layout`/`sources` instead of a materialized
+ * `traces` array — per-byte trace info is derived on demand via `traceAt`/
+ * `traceGroupsInRange` (viewerUtils.ts), scoped to the visible window,
+ * instead of reading a precomputed `ByteTrace[]`. */
 export interface HexSection {
   /** Stable key across renders — file name for multi-file sections, or the
    * stage name for single-section views. NOT an index (task 3.5 / UI-18: index
@@ -14,7 +20,8 @@ export interface HexSection {
   key: string;
   header?: { name: string; size: number };
   bytes: Uint8Array;
-  traces: ByteTrace[];
+  layout: StageLayout;
+  sources: ValueSources;
   chunkRegions?: ChunkRegion[];
 }
 
@@ -22,12 +29,11 @@ export interface HexSectionData {
   key: string;
   header?: { name: string; size: number };
   bytes: Uint8Array;
-  traces: ByteTrace[];
+  layout: StageLayout;
+  sources: ValueSources;
   chunkRegions: ChunkRegion[];
   regionByByte: Uint8Array;
   regionBoundaries: Set<number>;
-  traceIndex: Map<string, number>;
-  chunkIndex: Map<string, number>;
   rowCount: number;
   /** Row offset (in ROW_HEIGHT units) of this section's first row within the
    * combined virtual scroll space — i.e. sum of prior sections' header rows
@@ -48,8 +54,11 @@ export interface HexData {
   showHeaders: boolean;
 }
 
-function computeRegions(bytes: Uint8Array, traces: ByteTrace[], chunkRegions?: ChunkRegion[]) {
-  const regions = chunkRegions ?? buildChunkRegions(traces);
+function computeRegions(bytes: Uint8Array, layout: StageLayout, chunkRegions?: ChunkRegion[]) {
+  // computeRegions builds regionByByte: Uint8Array — O(bytes) but 1 byte/byte;
+  // kept as-is for now per the brief (cheap), just re-derived from
+  // chunkRegionsOf(layout) instead of the materialized traces array.
+  const regions = chunkRegions ?? chunkRegionsOf(layout);
   const regionByByte = new Uint8Array(bytes.length);
   for (let r = 0; r < regions.length; r++) {
     const region = regions[r];
@@ -62,6 +71,27 @@ function computeRegions(bytes: Uint8Array, traces: ByteTrace[], chunkRegions?: C
     if (region.startByte > 0) regionBoundaries.add(region.startByte);
   }
   return { regions, regionByByte, regionBoundaries };
+}
+
+/** Byte offset of the first byte belonging to `traceId` (or `chunkId` as a
+ * fallback) in this section's layout — replaces the old traceIndex/chunkIndex
+ * Maps (task 8) with a direct `byteRangesForTrace` lookup, computed only when
+ * a cross-pane hover needs to scroll to it (HexView's effect), not
+ * precomputed for every section on every render. */
+export function firstByteForTrace(
+  layout: StageLayout,
+  traceId: string | undefined,
+  chunkId: string | undefined,
+): number | undefined {
+  if (traceId) {
+    const ranges = byteRangesForTrace(layout, traceId);
+    if (ranges.length > 0) return ranges[0].start;
+  }
+  if (chunkId) {
+    const ranges = byteRangesForTrace(layout, chunkId);
+    if (ranges.length > 0) return ranges[0].start;
+  }
+  return undefined;
 }
 
 /**
@@ -78,7 +108,7 @@ export function useHexData(sections: HexSection[], bytesPerRow: number): HexData
     const sectionData: HexSectionData[] = sections.map((section) => {
       const { regions, regionByByte, regionBoundaries } = computeRegions(
         section.bytes,
-        section.traces,
+        section.layout,
         section.chunkRegions,
       );
       const rowCount = Math.max(1, Math.ceil(section.bytes.length / bytesPerRow));
@@ -86,12 +116,11 @@ export function useHexData(sections: HexSection[], bytesPerRow: number): HexData
         key: section.key,
         header: section.header,
         bytes: section.bytes,
-        traces: section.traces,
+        layout: section.layout,
+        sources: section.sources,
         chunkRegions: regions,
         regionByByte,
         regionBoundaries,
-        traceIndex: buildTraceIndex(section.traces),
-        chunkIndex: buildChunkIndex(section.traces),
         rowCount,
         rowOffset,
       };

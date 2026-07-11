@@ -2,6 +2,8 @@ import type { PipelineStage, ByteTrace, ChunkRegion } from '../../types/pipeline
 import type { LogicalValue } from '../../types/dtypes.ts';
 import { isChunkLevelTrace } from '../../engine/trace.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
+import type { StageLayout, ValueSources } from '../../engine/layout.ts';
+import { traceAt } from '../../engine/layout.ts';
 
 export { formatByteCount };
 
@@ -48,6 +50,62 @@ export function groupBytesByTrace(stage: PipelineStage): TraceGroup[] {
         currentId = traceId!;
         startOffset = i;
       }
+    }
+  }
+
+  return groups;
+}
+
+/**
+ * TraceGroups intersecting [startByte, endByte) — the layout-based
+ * replacement for `groupBytesByTrace` used by the hex row renderer (task 8):
+ * walks `traceAt` only across the visible window (~16 bytes/row * visible
+ * rows) instead of materializing every stage's `traces` array up front.
+ *
+ * Groups are window-local: a run of same-traceId bytes that extends before
+ * `startByte` or after `endByte` is clipped to the window, so `byteOffset`/
+ * `byteCount`/`bytes` describe only the portion inside [startByte, endByte) —
+ * unlike `groupBytesByTrace`, which sees the whole stage and never clips.
+ * This is safe because the only consumer, HexRowRenderer, reads groups
+ * strictly per-row (one row's worth of bytes at a time) and never relies on a
+ * group's extent reaching beyond the row it's rendering.
+ */
+export function traceGroupsInRange(
+  layout: StageLayout,
+  bytes: Uint8Array,
+  sources: ValueSources,
+  startByte: number,
+  endByte: number,
+): TraceGroup[] {
+  const groups: TraceGroup[] = [];
+  const end = Math.min(endByte, layout.byteLength, bytes.length);
+  if (startByte >= end) return groups;
+
+  let current: ByteTrace | null = null;
+  let groupStart = startByte;
+
+  for (let i = startByte; i <= end; i++) {
+    const trace = i < end ? traceAt(layout, i, sources) : null;
+    const traceId = trace?.traceId ?? null;
+    const currentId = current?.traceId ?? null;
+    if (traceId !== currentId) {
+      if (current) {
+        groups.push({
+          traceId: current.traceId,
+          variableName: current.variableName,
+          variableColor: current.variableColor,
+          coords: current.coords,
+          displayValue: current.displayValue,
+          dtype: current.dtype,
+          chunkId: current.chunkId,
+          byteOffset: groupStart,
+          byteCount: i - groupStart,
+          bytes: bytes.slice(groupStart, i),
+          isChunkLevel: isChunkLevelTrace(current.traceId),
+        });
+      }
+      current = trace;
+      groupStart = i;
     }
   }
 

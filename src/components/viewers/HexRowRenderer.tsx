@@ -1,4 +1,5 @@
-import type { ByteTrace } from '../../types/pipeline.ts';
+import type { StageLayout, ValueSources } from '../../engine/layout.ts';
+import { traceAt } from '../../engine/layout.ts';
 import { byteToHex, formatOffset, byteToAscii } from './viewerUtils.ts';
 import { colors, displayColor, spacing } from '../../theme.ts';
 
@@ -8,7 +9,8 @@ interface HexRowRendererProps {
   byteEnd: number;
   bytesPerRow: number;
   bytes: Uint8Array;
-  traces: ByteTrace[];
+  layout: StageLayout;
+  sources: ValueSources;
   regionByByte: Uint8Array;
   regionBoundaries: Set<number>;
   offsetWidth: number;
@@ -25,7 +27,8 @@ export function HexRowRenderer({
   byteEnd,
   bytesPerRow,
   bytes,
-  traces,
+  layout,
+  sources,
   regionByByte,
   regionBoundaries,
   offsetWidth,
@@ -40,6 +43,17 @@ export function HexRowRenderer({
     { length: Math.min(bytesPerRow, byteEnd - byteStart) },
     (_, col) => regionBoundaries.has(byteStart + col),
   ).some(Boolean);
+
+  // Task 8 (perf plan): per-byte trace info for this row (at most
+  // `bytesPerRow` bytes) via windowed traceAt lookups instead of reading a
+  // materialized ByteTrace[] — cheap enough to recompute per row since a row
+  // is only 8-16 bytes.
+  const rowTraces = Array.from(
+    { length: Math.min(bytesPerRow, byteEnd - byteStart) },
+    (_, col) => traceAt(layout, byteStart + col, sources),
+  );
+
+  const chunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
 
   return (
     <>
@@ -68,9 +82,8 @@ export function HexRowRenderer({
             // so the ASCII column stays aligned on partial final rows (UI-1).
             return <span key={col}>{'  '}</span>;
           }
-          const trace = traces[byteIdx] as typeof traces[0] | undefined;
+          const trace = rowTraces[col];
           const isValueHovered = trace != null && hoveredTraceId !== null && trace.traceId === hoveredTraceId;
-          const chunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
           const isChunkHovered = !isValueHovered && trace != null && (
             (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && trace.chunkId === hoveredChunkId)
             || (chunkTraceIds != null && chunkTraceIds.has(trace.traceId))
@@ -109,12 +122,11 @@ export function HexRowRenderer({
         {Array.from({ length: bytesPerRow }, (_, col) => {
           const byteIdx = byteStart + col;
           if (byteIdx >= byteEnd) return <span key={col}> </span>;
-          const trace = traces[byteIdx] as typeof traces[0] | undefined;
+          const trace = rowTraces[col];
           const isValueHovered = trace != null && hoveredTraceId !== null && trace.traceId === hoveredTraceId;
-          const asciiChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
           const isChunkHovered = !isValueHovered && trace != null && (
             (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && trace.chunkId === hoveredChunkId)
-            || (asciiChunkTraceIds != null && asciiChunkTraceIds.has(trace.traceId))
+            || (chunkTraceIds != null && chunkTraceIds.has(trace.traceId))
           );
 
           return (

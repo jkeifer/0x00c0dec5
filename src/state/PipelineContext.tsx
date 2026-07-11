@@ -1,7 +1,8 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import type { PipelineResult } from '../hooks/usePipeline.ts';
-import type { PipelineStage, VirtualFile, ReadFileResult, VariableStats } from '../types/pipeline.ts';
+import type { PipelineStage, VirtualFile, ReadFileResult, VariableStats, StageName } from '../types/pipeline.ts';
 import type { LogicalValue } from '../types/dtypes.ts';
+import type { ValueSources } from '../engine/layout.ts';
 
 /**
  * PipelineContext (remediation-plan.md, Phase 3.9): carries the pipeline's
@@ -30,6 +31,9 @@ export interface PipelineContextValue {
   logicalValues: Map<string, LogicalValue[]>;
   /** D6: Typed-stage source arrays, keyed by variable name. */
   typedValues: Map<string, LogicalValue[]>;
+  /** Task 8 (perf plan): per-stage ValueSources for traceAt/traceGroupsInRange
+   *  — see usePipeline.ts's buildStageSources. */
+  stageSources: Map<StageName, ValueSources>;
   showDiff: boolean;
   /**
    * Alias of `logicalValues` (see App.tsx's prior inline comment, D6 Phase
@@ -68,6 +72,7 @@ export function PipelineProvider({
       variableStats: pipeline.variableStats,
       logicalValues: pipeline.logicalValues,
       typedValues: pipeline.typedValues,
+      stageSources: pipeline.stageSources,
       originalValues: pipeline.logicalValues,
     }),
     [pipeline],

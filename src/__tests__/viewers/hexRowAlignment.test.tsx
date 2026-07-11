@@ -2,24 +2,18 @@
 import { describe, it, expect } from 'vitest';
 import { render } from '@testing-library/react';
 import { HexRowRenderer } from '../../components/viewers/HexRowRenderer.tsx';
-import type { ByteTrace } from '../../types/pipeline.ts';
-
-function makeTraces(count: number): ByteTrace[] {
-  return Array.from({ length: count }, (_, i) => ({
-    traceId: `v:${i}`,
-    variableName: 'v',
-    variableColor: '#e06c75',
-    coords: [i],
-    displayValue: String(i),
-    dtype: 'uint8',
-    chunkId: '',
-    byteInValue: 0,
-    byteCount: 1,
-  }));
-}
+import { buildValueBlocksLayout, type ValueSources } from '../../engine/layout.ts';
 
 function renderRow(byteStart: number, byteEnd: number, totalBytes: number): string {
   const bytes = new Uint8Array(totalBytes).map((_, i) => i);
+  const values = Array.from({ length: totalBytes }, (_, i) => i);
+  const layout = buildValueBlocksLayout(
+    [{ name: 'v', color: '#e06c75' }],
+    [totalBytes],
+    new Map([['v', values]]),
+    () => 'uint8',
+  );
+  const sources: ValueSources = { values: new Map([['v', values]]), format: 'typed' };
   const { container } = render(
     <div>
       <HexRowRenderer
@@ -28,7 +22,8 @@ function renderRow(byteStart: number, byteEnd: number, totalBytes: number): stri
         byteEnd={byteEnd}
         bytesPerRow={16}
         bytes={bytes}
-        traces={makeTraces(totalBytes)}
+        layout={layout}
+        sources={sources}
         regionByByte={new Uint8Array(totalBytes)}
         regionBoundaries={new Set()}
         offsetWidth={8}

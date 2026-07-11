@@ -90,6 +90,7 @@ export function StagePane({
     originalValues,
     logicalValues,
     typedValues,
+    stageSources,
   } = usePipelineContext();
 
   // Task 3.8 (D5, fixes SW-2/SW-6/SW-10): stage identity is a name; resolve
@@ -140,16 +141,24 @@ export function StagePane({
   // section wrapping that stage's own bytes/traces, keyed by stage name.
   const hexSections: HexSection[] = useMemo(() => {
     if (isWriteStage && files && files.length >= 1) {
+      // Per-file layouts (VirtualFile.layout, task 5) each describe their own
+      // file's bytes; sources are shared (buildStageSources maps 'write' ->
+      // the typed-stage source arrays, same as the combined Write stage).
+      const writeSources = stageSources.get('write');
+      if (!writeSources) return [];
       return files.map((f) => ({
         key: f.name,
         header: { name: f.name, size: f.bytes.length },
         bytes: f.bytes,
-        traces: f.traces,
+        layout: f.layout,
+        sources: writeSources,
       }));
     }
     if (!stage) return [];
-    return [{ key: stage.name, bytes: stage.bytes, traces: stage.traces, chunkRegions: stage.chunkRegions }];
-  }, [isWriteStage, files, stage]);
+    const sources = stageSources.get(selectedStage);
+    if (!sources) return [];
+    return [{ key: stage.name, bytes: stage.bytes, layout: stage.layout, sources, chunkRegions: stage.chunkRegions }];
+  }, [isWriteStage, files, stage, stageSources, selectedStage]);
 
   function renderViewer() {
     if (!stage) {

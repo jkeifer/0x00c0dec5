@@ -4,7 +4,7 @@ import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
 import { HexRowRenderer } from './HexRowRenderer.tsx';
-import { useHexData, type HexSection, type HexSectionData } from './useHexData.ts';
+import { useHexData, firstByteForTrace, type HexSection, type HexSectionData } from './useHexData.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 
 export type { HexSection };
@@ -140,7 +140,8 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
                   byteEnd={byteEnd}
                   bytesPerRow={bytesPerRow}
                   bytes={sectionData.bytes}
-                  traces={sectionData.traces}
+                  layout={sectionData.layout}
+                  sources={sectionData.sources}
                   regionByByte={sectionData.regionByByte}
                   regionBoundaries={sectionData.regionBoundaries}
                   offsetWidth={offsetWidth}
@@ -204,10 +205,7 @@ export function HexView({ sections, paneId, chunkTraceMap, traceChunkMap }: HexV
     if (hoveredTraceId && hoverSource !== paneId) {
       for (let si = 0; si < hexData.sections.length; si++) {
         const sd = hexData.sections[si];
-        let byteIdx = sd.traceIndex.get(hoveredTraceId);
-        if (byteIdx === undefined && hoveredChunkId) {
-          byteIdx = sd.chunkIndex.get(hoveredChunkId);
-        }
+        const byteIdx = firstByteForTrace(sd.layout, hoveredTraceId, hoveredChunkId ?? undefined);
         if (byteIdx !== undefined) {
           const rowIdx = Math.floor(byteIdx / bytesPerRow);
           sectionRefs.current[si]?.scrollToRow(rowIdx);
