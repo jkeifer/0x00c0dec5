@@ -216,37 +216,78 @@ const lz: CodecDefinition = {
       return { bytes: new Uint8Array(0), outputDtype: 'uint8' };
     }
 
-    const output: number[] = [];
-    let i = 0;
+    // Hash-chain LZ77 (how real encoders find matches): a head table maps a
+    // 3-byte-prefix hash to the most recent position, chained through prev[].
+    // Replaces the O(n*window) backward scan; format unchanged (see decode).
+    const HASH_BITS = 16;
+    const HASH_SIZE = 1 << HASH_BITS;
+    const MAX_CHAIN = 64; // candidates examined per position; quality/speed knob
+    const head = new Int32Array(HASH_SIZE).fill(-1);
+    const prev = new Int32Array(bytes.length).fill(-1);
+    const hashAt = (i: number) =>
+      ((bytes[i] << 10) ^ (bytes[i + 1] << 5) ^ bytes[i + 2]) & (HASH_SIZE - 1);
+    const insert = (i: number) => {
+      if (i + 2 >= bytes.length) return;
+      const h = hashAt(i);
+      prev[i] = head[h];
+      head[h] = i;
+    };
 
+    // Growable output (number[] push on multi-MB inputs is the old cliff).
+    let out = new Uint8Array(Math.max(64, bytes.length >> 2));
+    let outLen = 0;
+    const push = (...vals: number[]) => {
+      if (outLen + vals.length > out.length) {
+        const next = new Uint8Array(out.length * 2 + vals.length);
+        next.set(out.subarray(0, outLen));
+        out = next;
+      }
+      for (const v of vals) out[outLen++] = v;
+    };
+
+    let i = 0;
     while (i < bytes.length) {
       let bestLen = 0;
       let bestOffset = 0;
-
-      const searchStart = Math.max(0, i - windowSize);
-      for (let j = searchStart; j < i; j++) {
-        let matchLen = 0;
-        while (i + matchLen < bytes.length && bytes[j + matchLen] === bytes[i + matchLen] && matchLen < 255) {
-          matchLen++;
-        }
-        if (matchLen >= 3 && matchLen > bestLen) {
-          bestLen = matchLen;
-          bestOffset = i - j;
+      if (i + 2 < bytes.length) {
+        let candidate = head[hashAt(i)];
+        let chain = 0;
+        const windowStart = i - windowSize;
+        while (candidate >= 0 && candidate >= windowStart && chain < MAX_CHAIN) {
+          let matchLen = 0;
+          while (
+            i + matchLen < bytes.length &&
+            bytes[candidate + matchLen] === bytes[i + matchLen] &&
+            matchLen < 255
+          ) {
+            matchLen++;
+          }
+          if (matchLen >= 3 && matchLen > bestLen) {
+            bestLen = matchLen;
+            bestOffset = i - candidate;
+            if (matchLen === 255) break;
+          }
+          candidate = prev[candidate];
+          chain++;
         }
       }
 
       if (bestLen >= 3) {
-        // Match: [length, offset_hi, offset_lo]
-        output.push(bestLen, (bestOffset >> 8) & 0xff, bestOffset & 0xff);
+        // Match: [length, offset_hi, offset_lo] — candidates are always < i, so
+        // bytes[candidate + matchLen] may read at/past i; that's the legal
+        // overlapping-match case the decoder already supports byte-by-byte.
+        push(bestLen, (bestOffset >> 8) & 0xff, bestOffset & 0xff);
+        for (let k = 0; k < bestLen; k++) insert(i + k);
         i += bestLen;
       } else {
         // Literal: [0x00, byte]
-        output.push(0x00, bytes[i]);
+        push(0x00, bytes[i]);
+        insert(i);
         i++;
       }
     }
 
-    return { bytes: new Uint8Array(output), outputDtype: 'uint8' };
+    return { bytes: out.slice(0, outLen), outputDtype: 'uint8' };
   },
   decode(bytes, _encodedDtype) {
     if (bytes.length === 0) {
