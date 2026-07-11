@@ -8,6 +8,7 @@ import { elementInChunk, chunkIdForElement, type ValueArray } from '../../engine
 import { useHover } from '../../hooks/useHover.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 import { computeMaxAbsDiff, computeDiffSummary, scrollOffsetForCell } from './viewerUtils.ts';
+import { valueToColor, diffToColor } from './gridImage.ts';
 
 interface GridViewProps {
   variables: Variable[];
@@ -29,44 +30,6 @@ interface GridViewProps {
 
 const CELL_SIZE = 20;
 const MAX_CELLS = 10000;
-
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-function diffToColor(diff: number, maxAbsDiff: number): string {
-  if (maxAbsDiff === 0) return 'rgb(40,40,40)';
-  const t = Math.max(-1, Math.min(1, diff / maxAbsDiff));
-  // Diverging: negative = blue, zero = neutral gray, positive = red
-  if (t >= 0) {
-    const r = Math.round(lerp(40, 224, t));
-    const g = Math.round(lerp(40, 108, t));
-    const b = Math.round(lerp(40, 117, t));
-    return `rgb(${r},${g},${b})`;
-  } else {
-    const at = -t;
-    const r = Math.round(lerp(40, 97, at));
-    const g = Math.round(lerp(40, 175, at));
-    const b = Math.round(lerp(40, 239, at));
-    return `rgb(${r},${g},${b})`;
-  }
-}
-
-// ponytail: heatmap fills stay dark-based in both themes — the lerp math needs
-// literal hex (Variable.color), and a dark-to-color ramp reads fine on a light
-// page. Add a light ramp only if a real complaint surfaces.
-function valueToColor(value: number, min: number, max: number, baseColor: string): string {
-  if (min === max) return baseColor;
-  const t = Math.max(0, Math.min(1, (value - min) / (max - min)));
-  // Blend from dark to the variable color based on intensity
-  const r = parseInt(baseColor.slice(1, 3), 16);
-  const g = parseInt(baseColor.slice(3, 5), 16);
-  const b = parseInt(baseColor.slice(5, 7), 16);
-  const outR = Math.round(lerp(20, r, t));
-  const outG = Math.round(lerp(20, g, t));
-  const outB = Math.round(lerp(20, b, t));
-  return `rgb(${outR},${outG},${outB})`;
-}
 
 export function GridView({ variables, shape, paneId, values: valuesByName, chunkShape, interleaving, diffValues, showDiff }: GridViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
