@@ -108,6 +108,29 @@ export function createPRNG(seed: number): () => number {
 }
 
 /**
+ * Arithmetic replacement for Number(x.toPrecision(sig)) — the generation hot
+ * path (3M string round-trips at the 1M-element target dominated the values
+ * stage's ~1s in the Phase 1-3 exit profile). Matches toPrecision exactly in
+ * the overwhelming majority of cases; may differ by 1 ulp when the scale
+ * factor is not exactly representable. Determinism is unaffected (pure
+ * arithmetic, same inputs -> same outputs).
+ */
+export function roundToSigFigs(x: number, sigFigs: number): number {
+  if (x === 0 || !Number.isFinite(x)) return x;
+  const mag = Math.floor(Math.log10(Math.abs(x)));
+  const factor = Math.pow(10, sigFigs - 1 - mag);
+  const rounded = Math.round(x * factor) / factor;
+  // log10 can land one off at exact-power boundaries (e.g. 999.9999 -> mag 2
+  // but rounds to 1000, which has mag 3). One corrective pass keeps the
+  // digit count honest.
+  if (Math.abs(rounded) >= Math.pow(10, mag + 1)) {
+    const factor2 = Math.pow(10, sigFigs - 2 - mag);
+    return Math.round(x * factor2) / factor2;
+  }
+  return rounded;
+}
+
+/**
  * Generate deterministic logical values for a variable.
  * Returns JS numbers with exact logical precision (no binary dtype artifacts).
  *
@@ -160,7 +183,7 @@ export function generateValues(
       const uniform01 = generateUniform01(rng, mode, count);
       for (let i = 0; i < count; i++) {
         const raw = uniform01[i] * range + logicalType.min;
-        values[i] = Number(raw.toPrecision(sigFigs));
+        values[i] = roundToSigFigs(raw, sigFigs);
       }
       return values;
     }
