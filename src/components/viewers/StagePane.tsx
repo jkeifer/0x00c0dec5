@@ -10,6 +10,7 @@ import { HexView, type HexSection } from './HexView.tsx';
 import { FlatView } from './FlatView.tsx';
 import { TableView } from './TableView.tsx';
 import { GridView } from './GridView.tsx';
+import { ReadProcessView } from './ReadProcessView.tsx';
 
 // Task 4.4 (remediation-plan.md, Phase 4; fixes UI-6): per spec, every
 // non-Values stage offers Hex AND Flat; Values/Typed/Read additionally offer
@@ -29,11 +30,15 @@ const TYPED_VIEW_MODES = [
   { value: 'flat', label: 'Flat' },
 ];
 
+// Task 4 (read plan): Read additionally offers 'process' — the narrated
+// 8-step read log (ReadProcessView) — available only on this stage, per
+// spec. No other stage has a process log to show.
 const READ_VIEW_MODES = [
   { value: 'table', label: 'Table' },
   { value: 'grid', label: 'Grid' },
   { value: 'hex', label: 'Hex' },
   { value: 'flat', label: 'Flat' },
+  { value: 'process', label: 'Process' },
 ];
 
 const DEFAULT_VIEW_MODES = [
@@ -184,29 +189,13 @@ export function StagePane({
       );
     }
 
-    // Read stage: show failure message or route to value viewers
-    if (isReadStage && !readResult.success) {
-      return (
-        <div
-          style={{
-            flex: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: spacing.xl,
-            textAlign: 'center',
-          }}
-        >
-          <div style={{ maxWidth: 400 }}>
-            <div style={{ color: colors.error, fontSize: fontSizes.lg, fontWeight: 700, marginBottom: spacing.sm }}>
-              Cannot read file
-            </div>
-            <div style={{ color: colors.textSecondary, fontSize: fontSizes.sm, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
-              {readResult.message}
-            </div>
-          </div>
-        </div>
-      );
+    // Read stage: a failed read always shows the process checklist (Task 4,
+    // read plan) regardless of the selected view mode — the checklist IS the
+    // failure explanation now, so there's no separate plain-message path.
+    // Success + 'process' mode shows the same checklist for the successful
+    // read. Neither case falls through to the value/hex/flat viewers below.
+    if (isReadStage && (!readResult.success || effectiveView === 'process')) {
+      return <ReadProcessView steps={readResult.steps} />;
     }
 
     switch (effectiveView) {
