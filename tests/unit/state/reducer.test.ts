@@ -365,7 +365,7 @@ describe('UPDATE_METADATA_CONFIG', () => {
 
   it('sets serialization to json', () => {
     const state = makeState({
-      metadata: { customEntries: [], serialization: 'binary', includeChunkIndex: true },
+      metadata: { customEntries: [], serialization: 'binary', include: DEFAULT_STATE.metadata.include },
     });
     const result = reducer(state, {
       type: 'UPDATE_METADATA_CONFIG',
@@ -374,24 +374,24 @@ describe('UPDATE_METADATA_CONFIG', () => {
     expect(result.metadata.serialization).toBe('json');
   });
 
-  it('sets includeChunkIndex to false', () => {
+  it('sets include.chunkIndex to false', () => {
     const state = makeState();
     const result = reducer(state, {
       type: 'UPDATE_METADATA_CONFIG',
-      changes: { includeChunkIndex: false },
+      changes: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
     });
-    expect(result.metadata.includeChunkIndex).toBe(false);
+    expect(result.metadata.include.chunkIndex).toBe(false);
   });
 
-  it('sets includeChunkIndex back to true', () => {
+  it('sets include.chunkIndex back to true', () => {
     const state = makeState({
-      metadata: { ...DEFAULT_STATE.metadata, includeChunkIndex: false },
+      metadata: { ...DEFAULT_STATE.metadata, include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
     });
     const result = reducer(state, {
       type: 'UPDATE_METADATA_CONFIG',
-      changes: { includeChunkIndex: true },
+      changes: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: true } },
     });
-    expect(result.metadata.includeChunkIndex).toBe(true);
+    expect(result.metadata.include.chunkIndex).toBe(true);
   });
 
   it('merges a partial patch without touching customEntries', () => {
@@ -399,7 +399,7 @@ describe('UPDATE_METADATA_CONFIG', () => {
       metadata: {
         customEntries: [{ key: 'a', value: 'b' }],
         serialization: 'json',
-        includeChunkIndex: true,
+        include: DEFAULT_STATE.metadata.include,
       },
     });
     const result = reducer(state, {
@@ -407,7 +407,7 @@ describe('UPDATE_METADATA_CONFIG', () => {
       changes: { serialization: 'binary' },
     });
     expect(result.metadata.serialization).toBe('binary');
-    expect(result.metadata.includeChunkIndex).toBe(true);
+    expect(result.metadata.include.chunkIndex).toBe(true);
     expect(result.metadata.customEntries).toEqual([{ key: 'a', value: 'b' }]);
   });
 
@@ -415,10 +415,10 @@ describe('UPDATE_METADATA_CONFIG', () => {
     const state = makeState();
     const result = reducer(state, {
       type: 'UPDATE_METADATA_CONFIG',
-      changes: { serialization: 'binary', includeChunkIndex: false },
+      changes: { serialization: 'binary', include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
     });
     expect(result.metadata.serialization).toBe('binary');
-    expect(result.metadata.includeChunkIndex).toBe(false);
+    expect(result.metadata.include.chunkIndex).toBe(false);
   });
 });
 
@@ -435,7 +435,7 @@ describe('ADD_METADATA_ENTRY', () => {
       metadata: {
         customEntries: [{ key: 'a', value: 'b' }],
         serialization: 'json',
-        includeChunkIndex: true,
+        include: DEFAULT_STATE.metadata.include,
       },
     });
     const result = reducer(state, { type: 'ADD_METADATA_ENTRY' });
@@ -452,7 +452,7 @@ describe('REMOVE_METADATA_ENTRY', () => {
           { key: 'b', value: '2' },
         ],
         serialization: 'json',
-        includeChunkIndex: true,
+        include: DEFAULT_STATE.metadata.include,
       },
     });
     const result = reducer(state, { type: 'REMOVE_METADATA_ENTRY', index: 0 });
@@ -467,7 +467,7 @@ describe('UPDATE_METADATA_ENTRY', () => {
       metadata: {
         customEntries: [{ key: '', value: 'v' }],
         serialization: 'json',
-        includeChunkIndex: true,
+        include: DEFAULT_STATE.metadata.include,
       },
     });
     const result = reducer(state, { type: 'UPDATE_METADATA_ENTRY', index: 0, key: 'mykey' });
@@ -480,7 +480,7 @@ describe('UPDATE_METADATA_ENTRY', () => {
       metadata: {
         customEntries: [{ key: 'k', value: '' }],
         serialization: 'json',
-        includeChunkIndex: true,
+        include: DEFAULT_STATE.metadata.include,
       },
     });
     const result = reducer(state, { type: 'UPDATE_METADATA_ENTRY', index: 0, value: 'myval' });
@@ -493,7 +493,7 @@ describe('UPDATE_METADATA_ENTRY', () => {
       metadata: {
         customEntries: [{ key: '', value: '' }],
         serialization: 'json',
-        includeChunkIndex: true,
+        include: DEFAULT_STATE.metadata.include,
       },
     });
     const result = reducer(state, {

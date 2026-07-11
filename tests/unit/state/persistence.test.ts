@@ -128,8 +128,12 @@ describe('loadState — default-merge for missing fields', () => {
 
   // Phase 2 tasks 2.3/2.13 (D1/D3): a save from before these fields existed
   // (or one that simply omits them) must default-merge cleanly rather than
-  // leaving `write.footerLocator`/`metadata.includeChunkIndex` undefined.
-  it('fills in missing write.footerLocator and metadata.includeChunkIndex with defaults', () => {
+  // leaving `write.footerLocator`/`metadata.include` undefined. (Read plan
+  // Task 1: `includeChunkIndex` itself is now migrated to `include` by
+  // `migrateState` — see tests/unit/state/metadataMigration.test.ts for
+  // dedicated coverage of that migration; this test keeps its original
+  // "still-missing-entirely" default-merge focus.)
+  it('fills in missing write.footerLocator and metadata.include with defaults', () => {
     const partial = {
       dataModel: 'tabular',
       shape: [16],
@@ -141,7 +145,7 @@ describe('loadState — default-merge for missing fields', () => {
       metadata: {
         customEntries: [],
         serialization: 'json',
-        // includeChunkIndex intentionally omitted
+        // include intentionally omitted
       },
       write: {
         magicNumber: 'DEADBEEF',
@@ -159,8 +163,8 @@ describe('loadState — default-merge for missing fields', () => {
     expect(result).not.toBeNull();
     expect(result!.write.footerLocator).toBe(DEFAULT_STATE.write.footerLocator);
     expect(result!.write.footerLocator).toBe('trailer');
-    expect(result!.metadata.includeChunkIndex).toBe(DEFAULT_STATE.metadata.includeChunkIndex);
-    expect(result!.metadata.includeChunkIndex).toBe(true);
+    expect(result!.metadata.include).toEqual(DEFAULT_STATE.metadata.include);
+    expect(result!.metadata.include.chunkIndex).toBe(true);
     // Sibling fields still preserved through the merge.
     expect(result!.write.magicNumber).toBe('DEADBEEF');
     expect(result!.write.metadataPlacement).toBe('footer');

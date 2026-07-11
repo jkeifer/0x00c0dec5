@@ -103,6 +103,26 @@ function migrateState(raw: Record<string, unknown>): AppState | null {
       }
     }
 
+    // Read plan Task 1: legacy `metadata.includeChunkIndex` -> `metadata.include`.
+    // A save with `metadata` but no `include` yet is pre-migration: synthesize
+    // `include` with every group defaulting true, honoring a legacy
+    // `includeChunkIndex: false` for the `chunkIndex` key specifically, then
+    // drop the legacy field. (Any group still missing after this — e.g. a
+    // save with `metadata` omitted entirely — is filled by the default-merge
+    // pass that runs after migrateState.)
+    if (isPlainObject(state.metadata) && !('include' in state.metadata)) {
+      const legacyMeta = state.metadata as unknown as Record<string, unknown>;
+      const legacyChunkIndex = legacyMeta.includeChunkIndex;
+      (state.metadata as unknown as Record<string, unknown>).include = {
+        schema: true,
+        layout: true,
+        codecs: true,
+        chunkIndex: legacyChunkIndex === false ? false : true,
+        descriptive: true,
+      };
+      delete legacyMeta.includeChunkIndex;
+    }
+
     return state;
   } catch {
     return null;

@@ -57,7 +57,13 @@
       }
     ],
     "serialization": "json",
-    "includeChunkIndex": true
+    "include": {
+      "schema": true,
+      "layout": true,
+      "codecs": true,
+      "chunkIndex": true,
+      "descriptive": true
+    }
   },
   "write": {
     "includeMetadata": true,

@@ -801,18 +801,18 @@ describe('roundtrip matrix — D1 footerLocator', () => {
   );
 });
 
-// ─── D3 axis — includeChunkIndex ──────────────────────────────────────────
+// ─── D3 axis — metadata.include.chunkIndex ─────────────────────────────────
 
-describe('roundtrip matrix — D3 includeChunkIndex', () => {
-  it('metadata.includeChunkIndex=true (default) round-trips exactly, chunk_index present in metadata', () => {
+describe('roundtrip matrix — D3 metadata.include.chunkIndex', () => {
+  it('metadata.include.chunkIndex=true (default) round-trips exactly, chunk_index present in metadata', () => {
     const state = stateWith({
       shape: [4, 4],
       chunkShape: [2, 2],
       variables: [uintVar('humidity')],
       fieldPipelines: { humidity: [] },
-      metadata: { includeChunkIndex: true },
+      metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: true } },
     });
-    expect(state.metadata.includeChunkIndex).toBe(true);
+    expect(state.metadata.include.chunkIndex).toBe(true);
     const { files } = computePipelineStages(state);
     const metaFile = files.find((f) => f.name === 'data') ?? files.find((f) => f.name === 'metadata');
     const text = new TextDecoder().decode(metaFile!.bytes);
@@ -822,7 +822,7 @@ describe('roundtrip matrix — D3 includeChunkIndex', () => {
   });
 
   it(
-    'metadata.includeChunkIndex=false with a size-preserving pipeline ([delta] or [byte-shuffle]) ' +
+    'metadata.include.chunkIndex=false with a size-preserving pipeline ([delta] or [byte-shuffle]) ' +
     'round-trips exactly via computed offsets (chunkShape x dtype size)',
     () => {
       const deltaState = stateWith({
@@ -830,7 +830,7 @@ describe('roundtrip matrix — D3 includeChunkIndex', () => {
         chunkShape: [2, 2],
         variables: [uintVar('humidity')],
         fieldPipelines: { humidity: [{ codec: 'delta', params: { order: 1 } }] },
-        metadata: { includeChunkIndex: false },
+        metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
       });
       expectExactRoundTrip(runRoundTrip(deltaState), ['humidity']);
 
@@ -839,14 +839,14 @@ describe('roundtrip matrix — D3 includeChunkIndex', () => {
         chunkShape: [2, 2],
         variables: [uintVar('humidity')],
         fieldPipelines: { humidity: [{ codec: 'byte-shuffle', params: { elementSize: 2 } }] },
-        metadata: { includeChunkIndex: false },
+        metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
       });
       expectExactRoundTrip(runRoundTrip(shuffleState), ['humidity']);
     },
   );
 
   it(
-    'metadata.includeChunkIndex=false with a size-changing codec ([rle] or [lz]) fails with reason ' +
+    'metadata.include.chunkIndex=false with a size-changing codec ([rle] or [lz]) fails with reason ' +
     '"no-chunk-index" ("the chunks have variable size after compression and nothing in the file records ' +
     'where each one starts")',
     () => {
@@ -855,7 +855,7 @@ describe('roundtrip matrix — D3 includeChunkIndex', () => {
         chunkShape: [2, 2],
         variables: [uintVar('humidity')],
         fieldPipelines: { humidity: [{ codec: 'rle', params: {} }] },
-        metadata: { includeChunkIndex: false },
+        metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
       });
       const { readResult: rleResult } = computePipelineStages(rleState);
       expect(rleResult.success).toBe(false);
@@ -869,7 +869,7 @@ describe('roundtrip matrix — D3 includeChunkIndex', () => {
         chunkShape: [2, 2],
         variables: [uintVar('humidity')],
         fieldPipelines: { humidity: [{ codec: 'lz', params: { windowSize: 256 } }] },
-        metadata: { includeChunkIndex: false },
+        metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
       });
       const { readResult: lzResult } = computePipelineStages(lzState);
       expect(lzResult.success).toBe(false);

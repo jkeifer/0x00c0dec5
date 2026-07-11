@@ -1,4 +1,4 @@
-import type { AppState } from '../types/state.ts';
+import type { AppState, MetadataIncludeConfig } from '../types/state.ts';
 import type { VariableStats } from '../types/pipeline.ts';
 import { computeChunkGrid } from './chunk.ts';
 
@@ -6,6 +6,24 @@ export interface MetadataEntry {
   key: string;
   value: string;
 }
+
+/**
+ * Read plan Task 1: maps each auto-generated metadata key `collectMetadata`
+ * can emit to the `MetadataIncludeConfig` group that gates it. `custom`
+ * entries and `variable_statistics` gate on `descriptive` inline at their
+ * push sites rather than through this map (they aren't fixed single keys).
+ * `metadata_format` and `byte_order` are envelope keys: always written,
+ * never gated (they describe the metadata blob itself; parse-metadata needs
+ * them regardless of which groups are on).
+ */
+export const METADATA_KEY_GROUPS: Record<string, keyof MetadataIncludeConfig> = {
+  schema: 'schema', type_assignments: 'schema', logical_types: 'schema',
+  shape: 'layout', chunk_shape: 'layout', chunk_grid: 'layout',
+  chunk_order: 'layout', partitioning: 'layout', interleaving: 'layout',
+  codec_pipelines: 'codecs',
+  chunk_index: 'chunkIndex',
+  variable_statistics: 'descriptive',
+};
 
 /**
  * Collect all auto-generated metadata entries from the pipeline state.
@@ -25,73 +43,95 @@ export function collectMetadata(
 ): MetadataEntry[] {
   const entries: MetadataEntry[] = [];
 
+  const include = state.metadata.include;
+
   // Schema — uses storageDtype for binary compatibility
-  const schema = state.variables.map((v) => ({
-    name: v.name,
-    dtype: v.typeAssignment.storageDtype,
-  }));
-  entries.push({ key: 'schema', value: JSON.stringify(schema) });
+  if (include.schema) {
+    const schema = state.variables.map((v) => ({
+      name: v.name,
+      dtype: v.typeAssignment.storageDtype,
+    }));
+    entries.push({ key: 'schema', value: JSON.stringify(schema) });
+  }
 
   // Shape
-  entries.push({ key: 'shape', value: JSON.stringify(state.shape) });
+  if (include.layout) {
+    entries.push({ key: 'shape', value: JSON.stringify(state.shape) });
+  }
 
   // Chunk shape
-  entries.push({ key: 'chunk_shape', value: JSON.stringify(state.chunkShape) });
+  if (include.layout) {
+    entries.push({ key: 'chunk_shape', value: JSON.stringify(state.chunkShape) });
+  }
 
   // Chunk grid
-  const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
-  entries.push({ key: 'chunk_grid', value: JSON.stringify(chunkGrid) });
+  if (include.layout) {
+    const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
+    entries.push({ key: 'chunk_grid', value: JSON.stringify(chunkGrid) });
+  }
 
   // Chunk index (byte offsets) — D3: user-facing toggle. When off, the reader
   // must compute offsets itself (possible only for size-preserving codec
   // pipelines); see 'no-chunk-index' in ReadFailureReason.
-  if (chunkOffsets && state.metadata.includeChunkIndex) {
+  if (chunkOffsets && include.chunkIndex) {
     entries.push({ key: 'chunk_index', value: JSON.stringify(chunkOffsets) });
   }
 
   // Chunk order (spatial ordering of chunks within the file/index)
-  entries.push({ key: 'chunk_order', value: state.write.chunkOrder });
+  if (include.layout) {
+    entries.push({ key: 'chunk_order', value: state.write.chunkOrder });
+  }
 
   // Partitioning (single file vs one file per chunk)
-  entries.push({ key: 'partitioning', value: state.write.partitioning });
+  if (include.layout) {
+    entries.push({ key: 'partitioning', value: state.write.partitioning });
+  }
 
   // Codec pipelines. fieldPipelines is keyed by Variable.id (D5 — Phase 3.1),
   // but the file format keys codec_pipelines by variable NAME (the format
   // doesn't change); translate id -> name here, at the serialization boundary.
-  if (state.interleaving === 'column') {
-    const byName: Record<string, unknown> = {};
-    for (const v of state.variables) {
-      byName[v.name] = state.fieldPipelines[v.id] ?? [];
+  if (include.codecs) {
+    if (state.interleaving === 'column') {
+      const byName: Record<string, unknown> = {};
+      for (const v of state.variables) {
+        byName[v.name] = state.fieldPipelines[v.id] ?? [];
+      }
+      entries.push({ key: 'codec_pipelines', value: JSON.stringify(byName) });
+    } else {
+      entries.push({ key: 'codec_pipelines', value: JSON.stringify(state.chunkPipeline) });
     }
-    entries.push({ key: 'codec_pipelines', value: JSON.stringify(byName) });
-  } else {
-    entries.push({ key: 'codec_pipelines', value: JSON.stringify(state.chunkPipeline) });
   }
 
   // Interleaving
-  entries.push({ key: 'interleaving', value: state.interleaving });
+  if (include.layout) {
+    entries.push({ key: 'interleaving', value: state.interleaving });
+  }
 
   // Type assignments (per-variable)
-  const typeAssignments: Record<string, { storageDtype: string; scale?: number; offset?: number; keepBits?: number }> = {};
-  for (const v of state.variables) {
-    typeAssignments[v.name] = {
-      storageDtype: v.typeAssignment.storageDtype,
-      ...(v.typeAssignment.scale !== undefined && v.typeAssignment.scale !== 1 ? { scale: v.typeAssignment.scale } : {}),
-      ...(v.typeAssignment.offset !== undefined && v.typeAssignment.offset !== 0 ? { offset: v.typeAssignment.offset } : {}),
-      ...(v.typeAssignment.keepBits !== undefined ? { keepBits: v.typeAssignment.keepBits } : {}),
-    };
+  if (include.schema) {
+    const typeAssignments: Record<string, { storageDtype: string; scale?: number; offset?: number; keepBits?: number }> = {};
+    for (const v of state.variables) {
+      typeAssignments[v.name] = {
+        storageDtype: v.typeAssignment.storageDtype,
+        ...(v.typeAssignment.scale !== undefined && v.typeAssignment.scale !== 1 ? { scale: v.typeAssignment.scale } : {}),
+        ...(v.typeAssignment.offset !== undefined && v.typeAssignment.offset !== 0 ? { offset: v.typeAssignment.offset } : {}),
+        ...(v.typeAssignment.keepBits !== undefined ? { keepBits: v.typeAssignment.keepBits } : {}),
+      };
+    }
+    entries.push({ key: 'type_assignments', value: JSON.stringify(typeAssignments) });
   }
-  entries.push({ key: 'type_assignments', value: JSON.stringify(typeAssignments) });
 
   // Logical types (per-variable)
-  const logicalTypes: Record<string, unknown> = {};
-  for (const v of state.variables) {
-    logicalTypes[v.name] = v.logicalType;
+  if (include.schema) {
+    const logicalTypes: Record<string, unknown> = {};
+    for (const v of state.variables) {
+      logicalTypes[v.name] = v.logicalType;
+    }
+    entries.push({ key: 'logical_types', value: JSON.stringify(logicalTypes) });
   }
-  entries.push({ key: 'logical_types', value: JSON.stringify(logicalTypes) });
 
   // Variable statistics
-  if (variableStats && variableStats.size > 0) {
+  if (include.descriptive && variableStats && variableStats.size > 0) {
     const statsObj: Record<string, VariableStats> = {};
     for (const [name, stats] of variableStats) {
       statsObj[name] = stats;
@@ -99,25 +139,31 @@ export function collectMetadata(
     entries.push({ key: 'variable_statistics', value: JSON.stringify(statsObj) });
   }
 
-  // Metadata format
+  // Metadata format — envelope key: always written (describes the metadata
+  // blob itself; parse-metadata needs it regardless of which groups are on).
   entries.push({ key: 'metadata_format', value: state.metadata.serialization });
 
-  // Byte order
+  // Byte order — envelope key: always written (see above).
   entries.push({ key: 'byte_order', value: 'little' });
 
-  // Append custom entries. DC-5: a custom entry whose key collides with one of
-  // the auto-generated keys above would otherwise silently shadow it once
-  // entries collapse into a key->value object at serialization (last write
-  // wins), corrupting the file's self-description (e.g. a custom `shape` key
-  // overwriting the real dataset shape). Deterministically rename any
-  // colliding custom key to `user_<key>` (re-prefixing again if the user's
-  // own key is literally already `user_<autoKey>`, so the rename itself can
-  // never introduce a new collision) — auto keys always win their name, and
-  // no information is lost. MetadataEditor surfaces a warning on these rows.
-  const autoKeys = new Set(entries.map((e) => e.key));
-  for (const entry of state.metadata.customEntries) {
-    if (entry.key) {
-      entries.push({ key: dedupeCustomKey(entry.key, autoKeys), value: entry.value });
+  // Append custom entries, gated on `descriptive` (same group as
+  // variable_statistics — both are "descriptive" content layered on top of
+  // the structural self-description). DC-5: a custom entry whose key
+  // collides with one of the auto-generated keys above would otherwise
+  // silently shadow it once entries collapse into a key->value object at
+  // serialization (last write wins), corrupting the file's self-description
+  // (e.g. a custom `shape` key overwriting the real dataset shape).
+  // Deterministically rename any colliding custom key to `user_<key>`
+  // (re-prefixing again if the user's own key is literally already
+  // `user_<autoKey>`, so the rename itself can never introduce a new
+  // collision) — auto keys always win their name, and no information is
+  // lost. MetadataEditor surfaces a warning on these rows.
+  if (include.descriptive) {
+    const autoKeys = new Set(entries.map((e) => e.key));
+    for (const entry of state.metadata.customEntries) {
+      if (entry.key) {
+        entries.push({ key: dedupeCustomKey(entry.key, autoKeys), value: entry.value });
+      }
     }
   }
 

@@ -146,7 +146,7 @@ describe('text variables — write/read roundtrip', () => {
         shape: [8], chunkShape: [8],
         variables: [city, HUMIDITY],
         fieldPipelines: { city: [], humidity: [] },
-        metadata: { customEntries: [], serialization, includeChunkIndex: true },
+        metadata: { customEntries: [], serialization, include: DEFAULT_STATE.metadata.include },
       });
       const { stages, readResult } = computePipelineStages(state);
 
@@ -173,7 +173,7 @@ describe('text variables — write/read roundtrip', () => {
       shape: [16], chunkShape: [4], // 4 chunks — offsets actually matter
       variables: [city, HUMIDITY],
       fieldPipelines: { city: [], humidity: [] },
-      metadata: { customEntries: [], serialization: 'json', includeChunkIndex: false },
+      metadata: { customEntries: [], serialization: 'json', include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
     });
     const { readResult } = computePipelineStages(state);
     expect(readResult.success).toBe(true);

@@ -109,7 +109,7 @@ describe('preset contents — D10 shape', () => {
     expect(s.write.metadataPlacement).toBe('footer');
     expect(s.write.footerLocator).toBe('trailer');
     expect(s.write.includeMetadata).toBe(true);
-    expect(s.metadata.includeChunkIndex).toBe(true);
+    expect(s.metadata.include.chunkIndex).toBe(true);
     expect(s.metadata.customEntries).toContainEqual({ key: 'created_by', value: '0x00C0DEC5' });
     // A visibly-working codec pipeline on the stepped uint variable...
     expect(s.fieldPipelines.humidity.length).toBeGreaterThan(0);

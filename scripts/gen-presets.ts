@@ -79,7 +79,7 @@ const basicallyParquet: AppState = {
   metadata: {
     customEntries: [{ key: 'created_by', value: '0x00C0DEC5' }],
     serialization: 'json',
-    includeChunkIndex: true,
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true },
   },
   write: {
     includeMetadata: true,
@@ -135,7 +135,7 @@ const basicallyGeotiff: AppState = {
       { key: 'transform', value: '[0.1, 0.0, -180.0, 0.0, -0.1, 90.0]' },
     ],
     serialization: 'json',
-    includeChunkIndex: true,
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true },
   },
   write: {
     includeMetadata: true,
@@ -187,7 +187,7 @@ const basicallyZarr: AppState = {
   metadata: {
     customEntries: [],
     serialization: 'json',
-    includeChunkIndex: true,
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true },
   },
   write: {
     includeMetadata: true,

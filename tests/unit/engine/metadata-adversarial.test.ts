@@ -154,7 +154,7 @@ describe('metadata adversarial — unicode keys and values', () => {
       metadata: {
         customEntries: [{ key: 'キー', value: 'значение' }],
         serialization: 'binary',
-        includeChunkIndex: true,
+        include: DEFAULT_STATE.metadata.include,
       },
     };
     const { files } = computePipelineStages(state);

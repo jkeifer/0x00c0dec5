@@ -69,7 +69,7 @@ export function MetadataEditor({
         { ...state, metadata: { ...state.metadata, customEntries: [] } },
         [],
         undefined,
-        state.metadata.includeChunkIndex ? buildPlaceholderChunkIndex(state) : undefined,
+        state.metadata.include.chunkIndex ? buildPlaceholderChunkIndex(state) : undefined,
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -82,7 +82,7 @@ export function MetadataEditor({
       state.write.chunkOrder,
       state.write.partitioning,
       state.metadata.serialization,
-      state.metadata.includeChunkIndex,
+      state.metadata.include,
     ],
   );
 
@@ -110,7 +110,7 @@ export function MetadataEditor({
       state,
       [],
       undefined,
-      state.metadata.includeChunkIndex ? buildPlaceholderChunkIndex(state) : undefined,
+      state.metadata.include.chunkIndex ? buildPlaceholderChunkIndex(state) : undefined,
     ),
     [state],
   );
@@ -118,7 +118,7 @@ export function MetadataEditor({
     () => serializeMetadata(allEntries, metadata.serialization).length,
     [allEntries, metadata.serialization],
   );
-  const chunkIndexIsEstimate = state.metadata.includeChunkIndex;
+  const chunkIndexIsEstimate = state.metadata.include.chunkIndex;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
@@ -231,7 +231,7 @@ export function MetadataEditor({
             { value: 'yes', label: 'Yes' },
             { value: 'no', label: 'No' },
           ]}
-          value={state.metadata.includeChunkIndex ? 'yes' : 'no'}
+          value={state.metadata.include.chunkIndex ? 'yes' : 'no'}
           onChange={(v) => onIncludeChunkIndexChange(v === 'yes')}
           size="sm"
         />

@@ -232,7 +232,10 @@ describe('write-stage (VirtualFile.layout) equivalence', () => {
         interleaving: useEntropy ? 'row' : 'column',
         chunkShape: useEntropy ? [16] : DEFAULT_STATE.chunkShape,
         chunkPipeline: useEntropy ? [{ codec: 'rle', params: {} }] : DEFAULT_STATE.chunkPipeline,
-        metadata: { ...DEFAULT_STATE.metadata, includeChunkIndex: c.includeChunkIndex },
+        metadata: {
+          ...DEFAULT_STATE.metadata,
+          include: { ...DEFAULT_STATE.metadata.include, chunkIndex: c.includeChunkIndex },
+        },
         write: {
           ...DEFAULT_STATE.write,
           partitioning: c.partitioning,

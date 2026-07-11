@@ -49,6 +49,19 @@ export interface Variable {
   color: string;
 }
 
+/**
+ * Read plan Task 1: which groups of auto-generated metadata get collected.
+ * Each key maps to a specific reader-step failure when off — see
+ * `METADATA_KEY_GROUPS` in `engine/metadata.ts`.
+ */
+export interface MetadataIncludeConfig {
+  schema: boolean; // schema, type_assignments, logical_types
+  layout: boolean; // shape, chunk_shape, chunk_grid, chunk_order, partitioning, interleaving
+  codecs: boolean; // codec_pipelines
+  chunkIndex: boolean; // chunk_index (absorbs legacy includeChunkIndex — D3 semantics unchanged)
+  descriptive: boolean; // variable_statistics + ALL customEntries
+}
+
 export interface AppState {
   dataModel: 'tabular' | 'array';
   shape: number[];
@@ -68,13 +81,17 @@ export interface AppState {
     customEntries: { key: string; value: string }[];
     serialization: 'json' | 'binary';
     /**
-     * D3 (remediation-plan.md): whether `chunk_index` (coords/offset/size per
-     * chunk) is included in collected metadata. Default true. When false, the
-     * reader must compute chunk offsets from chunkShape x dtype size, which is
-     * only possible when every codec in play is size-preserving — see
-     * `no-chunk-index` in `ReadFailureReason`.
+     * Read plan Task 1: five per-group metadata toggles, replacing the old
+     * single all-or-nothing `includeChunkIndex` boolean. Each group maps to
+     * a specific reader-step failure when off — see `METADATA_KEY_GROUPS` in
+     * `engine/metadata.ts` for the key->group mapping. `chunkIndex` absorbs
+     * the old `includeChunkIndex` field (D3 semantics unchanged: when false,
+     * the reader must compute chunk offsets from chunkShape x dtype size,
+     * possible only when every codec in play is size-preserving — see
+     * `no-chunk-index` in `ReadFailureReason`). Legacy saves with
+     * `includeChunkIndex` migrate via `migrateState` in `state/persistence.ts`.
      */
-    includeChunkIndex: boolean;
+    include: MetadataIncludeConfig;
   };
   write: {
     includeMetadata: boolean;
@@ -138,7 +155,7 @@ export const DEFAULT_STATE: AppState = {
   metadata: {
     customEntries: [],
     serialization: 'json',
-    includeChunkIndex: true,
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true },
   },
   write: {
     includeMetadata: false,

@@ -297,7 +297,7 @@ describe('Write stage includes all files', () => {
 describe('metadata stage', () => {
   it('produces metadata bytes with json serialization', () => {
     const state = stateWith({
-      metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'json', includeChunkIndex: true },
+      metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'json', include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true } },
     });
     const { stages } = computePipelineStages(state);
     const metaStage = stages[4]; // Metadata is index 4
@@ -307,7 +307,7 @@ describe('metadata stage', () => {
 
   it('produces metadata bytes with binary serialization', () => {
     const state = stateWith({
-      metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'binary', includeChunkIndex: true },
+      metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'binary', include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true } },
     });
     const { stages } = computePipelineStages(state);
     const metaStage = stages[4];
