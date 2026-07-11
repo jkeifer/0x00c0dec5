@@ -9,6 +9,7 @@ import { useHover } from '../../hooks/useHover.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 import { computeMaxAbsDiff, computeDiffSummary, scrollOffsetForCell } from './viewerUtils.ts';
 import { valueToColor, diffToColor } from './gridImage.ts';
+import { GridCanvas } from './GridCanvas.tsx';
 
 interface GridViewProps {
   variables: Variable[];
@@ -106,7 +107,30 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
   const rows = shape.length >= 2 ? shape[0] : 1;
   const cols = shape.length >= 2 ? shape[1] : shape[0] ?? 0;
   const is1D = shape.length < 2;
+  const useCanvas = values.length > MAX_CELLS;
+  // DOM path only needs the truncated count; canvas renders every element
+  // (buildGridImage itself bounds by colorValues.length).
   const cellCount = Math.min(values.length, MAX_CELLS);
+
+  // Task 5 (viewers plan): per-element diff arrays for GridCanvas, built once
+  // per values/origVarVals change rather than per-pixel inside the canvas
+  // component. Number-only, mirroring the DOM path's diffActive/diff
+  // computation at GridView.tsx's cell-render loop below.
+  const canvasDiffs = useMemo(() => {
+    if (!useCanvas || !showDiff || !origVarVals) return undefined;
+    const n = values.length;
+    const diffs = new Float64Array(n);
+    const diffActive = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const val = values[i];
+      const orig = i < origVarVals.length ? origVarVals[i] : undefined;
+      if (typeof val === 'number' && typeof orig === 'number') {
+        diffs[i] = val - orig;
+        diffActive[i] = 1;
+      }
+    }
+    return { diffs, diffActive, maxAbsDiff };
+  }, [useCanvas, showDiff, origVarVals, values, maxAbsDiff]);
 
   // Cross-pane auto-scroll. Must check parseTraceId's `kind` before treating
   // the remainder as coordinates — a chunk-level id like 'chunk:0,1'
@@ -230,7 +254,27 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
         </div>
       )}
 
-      {/* Grid */}
+      {/* Task 5 (viewers plan): above MAX_CELLS the DOM grid previously
+          silently TRUNCATED to the first MAX_CELLS cells. GridCanvas replaces
+          that truncation with full one-pixel-per-element rendering — no cap,
+          no data loss. Below the threshold this is entirely unchanged. */}
+      {useCanvas ? (
+        <GridCanvas
+          rows={rows}
+          cols={cols}
+          values={values}
+          colorValues={colorValues}
+          min={min}
+          max={max}
+          variable={selectedVar}
+          chunkShape={chunkShape}
+          interleaving={interleaving}
+          paneId={paneId}
+          shape={shape}
+          diffs={canvasDiffs}
+        />
+      ) : (
+      /* Grid */
       <div
         ref={gridRef}
         style={{
@@ -296,6 +340,7 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
           })}
         </div>
       </div>
+      )}
     </div>
   );
 }
