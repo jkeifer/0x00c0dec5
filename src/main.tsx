@@ -1,3 +1,6 @@
+// MUST be the first import: flips react-dom's dev-only perf-track gate
+// before react-dom initializes (see the module's doc comment).
+import './devDisableReactPerfTrack.ts'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
