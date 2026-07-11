@@ -1,6 +1,7 @@
 // scripts/profile.ts — per-stage timing/heap harness (spec Phase 1).
 // Run: npm run profile            (all sizes; 1M may OOM pre-lazy-traces — that IS the baseline finding)
 //      npm run profile -- --sizes=10000,100000
+//      npm run profile -- --lz     (every variable gets an LZ codec step — Phase 4-5 exit measurement)
 // For heap numbers, prefix: NODE_OPTIONS=--expose-gc
 import { DEFAULT_STATE } from '../src/types/state.ts';
 import type { AppState } from '../src/types/state.ts';
@@ -13,12 +14,19 @@ const sizesArg = process.argv.find((a) => a.startsWith('--sizes='));
 const SIZES = sizesArg
   ? sizesArg.slice('--sizes='.length).split(',').map(Number)
   : [10_000, 100_000, 1_000_000];
+const USE_LZ = process.argv.includes('--lz');
 
 function makeState(totalElements: number): AppState {
   // Square-ish 2D array shape; 3 variables from DEFAULT_STATE keep the run
   // representative (float dtypes, default pipelines).
   const side = Math.round(Math.sqrt(totalElements));
-  return { ...DEFAULT_STATE, dataModel: 'array', shape: [side, side], chunkShape: [side, side] };
+  const state: AppState = { ...DEFAULT_STATE, dataModel: 'array', shape: [side, side], chunkShape: [side, side] };
+  if (USE_LZ) {
+    state.fieldPipelines = Object.fromEntries(
+      state.variables.map((v) => [v.id, [{ codec: 'lz', params: { windowSize: 4096 } }]]),
+    );
+  }
+  return state;
 }
 
 function heap(): number {
