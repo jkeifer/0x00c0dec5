@@ -57,9 +57,9 @@ function buildStages(c: MatrixCase) {
   const values = computeValuesStage(state.shape, state.variables);
   const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
   const lin = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
-  const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
-
   const linLayout = buildLinearizedLayout(lin.chunks, lin.linearizedChunks, state.interleaving, state.shape, state.chunkShape);
+
+  const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linLayout);
 
   const nameToId = new Map(state.variables.map((v) => [v.name, v.id]));
   const outputDtypes: string[] = [];
@@ -80,7 +80,7 @@ function buildStages(c: MatrixCase) {
   });
   const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, outputDtypes, hasEntropy);
 
-  const files = computeFilesStage(state, enc.encodedChunks, typed.variableStats, lin);
+  const files = computeFilesStage(state, enc.encodedChunks, typed.variableStats, encLayout);
 
   return {
     state,

@@ -39,6 +39,7 @@ function makeStage(bytes: number[], traces: ByteTrace[]): PipelineStage {
     bytes: b,
     traces,
     chunkRegions: buildChunkRegions(traces),
+    layout: { byteLength: b.length, shape: [], regions: [] },
     stats: { byteCount: b.length, entropy: 0 },
   };
 }

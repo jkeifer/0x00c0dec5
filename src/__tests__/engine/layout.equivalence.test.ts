@@ -140,8 +140,8 @@ describe('encoded-stage layout equivalence', () => {
       const values = computeValuesStage(state.shape, state.variables);
       const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
       const lin = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
-      const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
       const linLayout = buildLinearizedLayout(lin.chunks, lin.linearizedChunks, state.interleaving, state.shape, state.chunkShape);
+      const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linLayout);
 
       const nameToId = new Map(state.variables.map((v) => [v.name, v.id]));
       const outputDtypes: string[] = [];
@@ -174,7 +174,7 @@ describe('metadata-stage layout equivalence', () => {
       const values = computeValuesStage(state.shape, state.variables);
       const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
       const linearized = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
-      const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
+      const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linearized.stage.layout);
       const metadata = computeMetadataStage(state, encoded.encodedChunks, typed.variableStats);
 
       const layout = buildMetadataLayout(metadata.stage.bytes.length);
@@ -236,8 +236,8 @@ describe('write-stage (VirtualFile.layout) equivalence', () => {
       const values = computeValuesStage(state.shape, state.variables);
       const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
       const linearized = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
-      const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
-      const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, linearized);
+      const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linearized.stage.layout);
+      const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, encoded.stage.layout);
 
       const sources = { values: typed.typedVariableValues, format: 'typed' as const };
       for (const file of files.files) {
@@ -256,8 +256,8 @@ describe('read-stage layout equivalence', () => {
     const values = computeValuesStage(state.shape, state.variables);
     const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
     const linearized = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
-    const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
-    const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, linearized);
+    const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linearized.stage.layout);
+    const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, encoded.stage.layout);
     const read = computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber);
 
     expect(read.readResult.success).toBe(true);
@@ -275,8 +275,8 @@ describe('read-stage layout equivalence', () => {
     const values = computeValuesStage(state.shape, state.variables);
     const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
     const linearized = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
-    const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
-    const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, linearized);
+    const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linearized.stage.layout);
+    const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, encoded.stage.layout);
     const read = computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber);
 
     expect(read.readResult.success).toBe(false);

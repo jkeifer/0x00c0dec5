@@ -57,6 +57,7 @@ export interface PipelineStage {
   bytes: Uint8Array;
   traces: ByteTrace[];
   chunkRegions: ChunkRegion[];
+  layout: StageLayout;
   stats: {
     byteCount: number;
     entropy: number;
