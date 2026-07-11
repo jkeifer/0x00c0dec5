@@ -47,6 +47,7 @@ export function valueToRGB(value: number, min: number, max: number, baseColor: s
 }
 
 export function valueToColor(value: number, min: number, max: number, baseColor: string): string {
+  if (min === max) return baseColor;
   const [r, g, b] = valueToRGB(value, min, max, baseColor);
   return `rgb(${r},${g},${b})`;
 }

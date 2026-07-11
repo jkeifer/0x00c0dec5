@@ -15,6 +15,9 @@ describe('color ramp parity', () => {
     }
     expect(diffToColor(1, 0)).toBe('rgb(40,40,40)');
   });
+  it('min === max returns literal baseColor hex string', () => {
+    expect(valueToColor(7, 7, 7, '#61afef')).toBe('#61afef');
+  });
 });
 
 describe('buildGridImage', () => {
