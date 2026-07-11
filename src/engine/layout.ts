@@ -1,9 +1,9 @@
-import type { ByteTrace } from '../types/pipeline.ts';
+import type { ByteTrace, Chunk, LinearizedChunk } from '../types/pipeline.ts';
 import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
 import { getDtype } from '../types/dtypes.ts';
 import { makeTraceId } from './trace.ts';
 import { formatValue, formatLogicalValue } from './elements.ts';
-import { flatIndexToCoords } from './chunk.ts';
+import { flatIndexToCoords, coordsToFlatIndex } from './chunk.ts';
 
 export type ValueArray = LogicalValue[] | Float64Array;
 
@@ -102,6 +102,61 @@ export function buildValueBlocksLayout(
   return { byteLength: cursor, shape, regions };
 }
 
+/** Build the Linearized stage layout from the already-computed chunks.
+ *  chunkShape is needed for origin computation; chunk element order must
+ *  mirror chunkData/chunkDataPerVariable's sourceCoords enumeration. */
+export function buildLinearizedLayout(
+  chunks: Chunk[],
+  linearizedChunks: LinearizedChunk[],
+  interleaving: 'row' | 'column',
+  shape: number[],
+  chunkShape: number[],
+): StageLayout {
+  const regions: LayoutRegion[] = [];
+  let cursor = 0;
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const lc = linearizedChunks[i];
+    const elementDims = chunk.coords.map((c, d) =>
+      Math.min(chunkShape[d], shape[d] - c * chunkShape[d]));
+    const origin = chunk.coords.map((c, d) => c * chunkShape[d]);
+    const fields: ChunkFieldLayout[] = [];
+    if (interleaving === 'column') {
+      let fieldOffset = 0;
+      for (const cv of chunk.variables) {
+        const size = getDtype(cv.dtype as DtypeKey).size;
+        fields.push({ variableName: cv.variableName, variableColor: cv.variableColor, dtype: cv.dtype, size, offset: fieldOffset });
+        fieldOffset += size * cv.values.length;
+      }
+    } else {
+      let rec = 0;
+      for (const cv of chunk.variables) {
+        const size = getDtype(cv.dtype as DtypeKey).size;
+        fields.push({ variableName: cv.variableName, variableColor: cv.variableColor, dtype: cv.dtype, size, offset: rec });
+        rec += size;
+      }
+    }
+    const isSingleVar = interleaving === 'column' && chunk.variables.length === 1;
+    regions.push({
+      kind: 'chunk', start: cursor, byteLength: lc.bytes.length,
+      chunkId: lc.chunkId,
+      variableName: isSingleVar ? chunk.variables[0].variableName : '',
+      variableColor: isSingleVar ? chunk.variables[0].variableColor : '',
+      mode: 'value-preserving', interleaving, fields, origin, elementDims,
+    });
+    cursor += lc.bytes.length;
+  }
+  return { byteLength: cursor, shape, regions };
+}
+
+/** Chunk-local flat element index -> global coords. Must mirror the
+ *  enumeration order chunkData/chunkDataPerVariable use for sourceCoords
+ *  (row-major over elementDims) — the equivalence tests are the check. */
+export function chunkElementCoords(origin: number[], elementDims: number[], elemFlat: number): number[] {
+  const local = flatIndexToCoords(elemFlat, elementDims);
+  return local.map((l, d) => origin[d] + l);
+}
+
 export function regionAt(layout: StageLayout, byteIndex: number): LayoutRegion | null {
   if (byteIndex < 0 || byteIndex >= layout.byteLength) return null;
   let lo = 0, hi = layout.regions.length - 1;
@@ -156,6 +211,39 @@ export function traceAt(layout: StageLayout, byteIndex: number, sources: ValueSo
       dtype: r.dtype, chunkId: '', byteInValue: rel % stride, byteCount: stride,
     };
   }
-  // 'chunk' and 'structural' regions: implemented in Tasks 3–5.
+  if (r.kind === 'chunk' && r.mode === 'value-preserving') {
+    const rel = byteIndex - r.start;
+    const elementCount = r.elementDims.reduce((a, b) => a * b, 1);
+    let field: ChunkFieldLayout; let elemFlat: number; let byteInValue: number;
+    if (r.interleaving === 'column') {
+      // fields are consecutive blocks: find by offset range
+      let f = r.fields.length - 1;
+      while (f > 0 && rel < r.fields[f].offset) f--;
+      field = r.fields[f];
+      const fieldRel = rel - field.offset;
+      elemFlat = Math.floor(fieldRel / field.size);
+      byteInValue = fieldRel % field.size;
+    } else {
+      const recordSize = r.fields.reduce((a, f) => a + f.size, 0);
+      elemFlat = Math.floor(rel / recordSize);
+      const inRecord = rel % recordSize;
+      let f = r.fields.length - 1;
+      while (f > 0 && inRecord < r.fields[f].offset) f--;
+      field = r.fields[f];
+      byteInValue = inRecord - field.offset;
+    }
+    if (elemFlat >= elementCount) return null;
+    const coords = chunkElementCoords(r.origin, r.elementDims, elemFlat);
+    const arr = sources.values.get(field.variableName) ?? [];
+    const globalFlat = coordsToFlatIndex(coords, layout.shape);
+    return {
+      traceId: makeTraceId(field.variableName, coords),
+      variableName: field.variableName, variableColor: field.variableColor,
+      coords, displayValue: formatDisplay(arr[globalFlat], field.dtype, sources.format),
+      dtype: field.dtype, chunkId: r.chunkId,
+      byteInValue, byteCount: field.size,
+    };
+  }
+  // 'structural' regions: implemented in Task 5.
   return null;
 }

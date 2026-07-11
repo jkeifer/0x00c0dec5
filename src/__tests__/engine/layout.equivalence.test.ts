@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_STATE } from '../../types/state.ts';
-import { computeValuesStage, computeTypedStage } from '../../hooks/usePipeline.ts';
-import { buildValueBlocksLayout, traceAt } from '../../engine/layout.ts';
+import { computeValuesStage, computeTypedStage, computeLinearizedStage } from '../../hooks/usePipeline.ts';
+import { buildValueBlocksLayout, buildLinearizedLayout, traceAt } from '../../engine/layout.ts';
 import { expectTraceEquivalence } from '../helpers/equivalence.ts';
 
 // A text variable exercises the variable-stride offsets path.
@@ -43,6 +43,43 @@ describe('typed-stage layout equivalence', () => {
       expectTraceEquivalence(layout, { values: typed.typedVariableValues, format: 'typed' }, typed.stage.traces);
     });
   }
+});
+
+const LINEARIZED_CASES = [
+  { name: 'column single chunk', interleaving: 'column' as const, shape: [4, 8], chunkShape: [4, 8] },
+  { name: 'column multi chunk', interleaving: 'column' as const, shape: [4, 8], chunkShape: [2, 4] },
+  { name: 'column clipped edge chunks', interleaving: 'column' as const, shape: [5, 7], chunkShape: [2, 4] },
+  { name: 'row multi chunk', interleaving: 'row' as const, shape: [4, 8], chunkShape: [2, 4] },
+  { name: 'row clipped', interleaving: 'row' as const, shape: [5, 7], chunkShape: [2, 4] },
+  { name: 'tabular 1d', interleaving: 'row' as const, shape: [13], chunkShape: [4] },
+];
+
+describe('linearized-stage layout equivalence', () => {
+  for (const c of LINEARIZED_CASES) {
+    it(c.name, () => {
+      const state = { ...DEFAULT_STATE, shape: c.shape, chunkShape: c.chunkShape, interleaving: c.interleaving };
+      const values = computeValuesStage(state.shape, state.variables);
+      const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
+      const lin = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
+      const layout = buildLinearizedLayout(lin.chunks, lin.linearizedChunks, state.interleaving, state.shape, state.chunkShape);
+      expectTraceEquivalence(layout, { values: typed.typedVariableValues, format: 'typed' }, lin.stage.traces);
+    });
+  }
+
+  it('with text var', () => {
+    const state = {
+      ...DEFAULT_STATE,
+      shape: [4, 8],
+      chunkShape: [2, 4],
+      interleaving: 'row' as const,
+      variables: [...DEFAULT_STATE.variables, TEXT_VAR],
+    };
+    const values = computeValuesStage(state.shape, state.variables);
+    const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
+    const lin = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
+    const layout = buildLinearizedLayout(lin.chunks, lin.linearizedChunks, state.interleaving, state.shape, state.chunkShape);
+    expectTraceEquivalence(layout, { values: typed.typedVariableValues, format: 'typed' }, lin.stage.traces);
+  });
 });
 
 describe('traceAt bounds', () => {
