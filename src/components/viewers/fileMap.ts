@@ -31,21 +31,32 @@ function colorForRegion(layout: StageLayout, regionIndex: number): [number, numb
   return STRUCTURAL_GRAY;
 }
 
+/** The byte a strip column samples: the byte under the column's center.
+ * This is the single sampling rule for the strip — fileMapColors renders
+ * column x with this byte's region color, and fileMapByteAt returns this
+ * same byte for a click on column x, so a click always jumps to the byte
+ * whose color the user saw. (Note: the naive round-trip identity
+ * floor(byte/byteLength*width) === x is deliberately NOT the contract —
+ * that expression finds the column containing a byte's left edge, which
+ * differs from center sampling whenever byteLength/width isn't integral.) */
+export function columnByte(byteLength: number, width: number, x: number): number {
+  if (byteLength === 0) return 0;
+  const byte = Math.floor(((x + 0.5) / width) * byteLength);
+  return Math.max(0, Math.min(byteLength - 1, byte));
+}
+
 /** One RGBA px-column per horizontal pixel: each column colored by the
- *  region owning the byte at that column's *center*
- *  ((col + 0.5) / width * byteLength). values/chunk regions -> the region's
- *  variableColor (fallback: alternate neutral grays when variableColor is
- *  ''); structural regions -> fixed distinct grays (magic bright, metadata
- *  mid). Returns width*4 RGBA; empty layout -> fully transparent. */
+ *  region owning the byte at that column's center (columnByte). values/chunk
+ *  regions -> the region's variableColor (fallback: alternate neutral grays
+ *  when variableColor is ''); structural regions -> fixed distinct grays
+ *  (magic bright, metadata mid). Returns width*4 RGBA; empty layout -> fully
+ *  transparent. */
 export function fileMapColors(layout: StageLayout, width: number): Uint8ClampedArray {
   const buffer = new Uint8ClampedArray(width * 4);
   if (layout.byteLength === 0 || layout.regions.length === 0) return buffer;
 
   for (let x = 0; x < width; x++) {
-    const byteIndex = Math.min(
-      layout.byteLength - 1,
-      Math.floor(((x + 0.5) / width) * layout.byteLength),
-    );
+    const byteIndex = columnByte(layout.byteLength, width, x);
     const region = regionAt(layout, byteIndex);
     const o = x * 4;
     if (!region) continue; // leave transparent (shouldn't happen for a contiguous layout)
@@ -59,10 +70,8 @@ export function fileMapColors(layout: StageLayout, width: number): Uint8ClampedA
   return buffer;
 }
 
-/** Byte offset at pixel x (inverse of the column mapping, clamped).
- *  0 for empty layouts. */
+/** Byte offset at pixel x: the same center-sampled byte fileMapColors used
+ *  to color column x (columnByte). 0 for empty layouts. */
 export function fileMapByteAt(layout: StageLayout, width: number, x: number): number {
-  if (layout.byteLength === 0) return 0;
-  const byte = Math.floor(((x + 0.5) / width) * layout.byteLength);
-  return Math.max(0, Math.min(layout.byteLength - 1, byte));
+  return columnByte(layout.byteLength, width, x);
 }
