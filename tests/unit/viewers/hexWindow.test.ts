@@ -10,6 +10,13 @@ describe('hex window math', () => {
   it('rowCount below one window pins start to 0', () => {
     expect(clampWindowStart(50, 100)).toBe(0);
   });
+  it('shrink-safe: a persisted windowStart from a larger shape clamps against the new, smaller rowCount', () => {
+    // Simulates a shape shrink that leaves a section still windowed: the
+    // component reads windowStart from parent state (unchanged since the
+    // shrink) but must clamp it against the CURRENT rowCount at the read
+    // site (HexView.tsx), not the rowCount the value was set under.
+    expect(clampWindowStart(500_000, 300_000)).toBe(300_000 - WINDOW_ROWS);
+  });
   it('windowStartForByte centers the target row', () => {
     const start = windowStartForByte(8_000_000, 16, 1_000_000); // row 500,000
     expect(start).toBe(500_000 - WINDOW_ROWS / 2);

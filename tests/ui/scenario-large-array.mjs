@@ -10,7 +10,7 @@
 // Run 1: ARRAY model, shape [1024, 1024] (1,048,576 cells; 2 numeric
 // variables -> 2,097,152 values, over MAX_CELLS=10,000 and over
 // WINDOWED_SECTION_ROWS=262,144 rows at the Values stage's 16 B/row, under
-// SOFT_ELEMENT_CAP=8,388,608):
+// SOFT_ELEMENT_CAP=8,000,000):
 //   (a) no page errors
 //   (b) grid-canvas renders in the grid-view pane
 //   (c) hex-overview renders in the other (hex-view) pane
@@ -174,14 +174,15 @@ async function main() {
 
   // ── Run 2: seed a fast-settling array shape, then LIVE-EDIT the shape
   // inputs up to [3000, 3000] x 2 vars = 18,000,000 values (over
-  // SOFT_ELEMENT_CAP=8,388,608). ────────────────────────────────────────────
+  // SOFT_ELEMENT_CAP=8,000,000). ────────────────────────────────────────────
   //
   // Deviation from the brief's literal "second seeded run": profiling this
   // scenario (see task-v8-report.md) found a real, reproducible pipeline
   // stall on a *fresh boot* seeded directly at any shape whose total value
   // count exceeds ~8.37M — not proportional to size, a hard cliff (8,372,232
-  // settles in ~22s; 8,380,418, barely 8K values more and still UNDER
-  // SOFT_ELEMENT_CAP, hangs 9+ minutes with no error). MainLayout renders
+  // settles in ~22s; 8,380,418, barely 8K values more and still under the old
+  // 8,388,608 cap, hangs 9+ minutes with no error; the cap is now 8,000,000,
+  // below this stall zone, so the advisory banner precedes it). MainLayout renders
   // nothing (not even the sidebar/banner) until the worker's first result
   // arrives (App.tsx's `pipeline-booting` gate), so a fresh over-cliff seed
   // can't prove the "advisory, not blocking" point in reasonable CI time —

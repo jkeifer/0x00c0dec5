@@ -170,6 +170,7 @@ export function useHexData(sections: HexSection[], bytesPerRow: number): HexData
         rowOffset,
         rowOffsetExtraPx: extraPx,
       };
+      // eslint-disable-next-line react-hooks/immutability -- local accumulator inside the memo callback, not render-scoped state
       rowOffset += visibleRowCount + (showHeaders ? 1 : 0);
       if (windowed) extraPx += WINDOW_CONTROLS_HEIGHT;
       if (section.bytes.length > maxBytes) maxBytes = section.bytes.length;

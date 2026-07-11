@@ -186,7 +186,7 @@ in `tests/ui/` for reference; prefer the `scenario-*.mjs` files and
 - `about-performance-toggle` — the About modal's collapsed-by-default Performance section toggle
 - `grid-canvas` — GridView's canvas render, used above `MAX_CELLS` (10,000 cells) in place of the DOM grid; `grid-canvas-status` — its hover status line (`variable[row,col] = value`)
 - `hex-overview` — HexView's FileMapStrip, shown for windowed sections above `WINDOWED_SECTION_ROWS` (262,144 rows); click-to-jump. `hex-offset-input` — the paired offset-jump text input (accepts hex like `0x100000`, Enter to jump)
-- `element-cap-warning` — the Schema section's advisory banner when total values (shape product × variable count) exceed `SOFT_ELEMENT_CAP` (8,388,608); does not block anything
+- `element-cap-warning` — the Schema section's advisory banner when total values (shape product × variable count) exceed `SOFT_ELEMENT_CAP` (8,000,000); does not block anything
 
 New UI work should keep adding testids per these conventions rather than relying on text/structure selectors.
 
@@ -209,7 +209,7 @@ Use inline styles with values from `src/theme.ts`. The design doc specifies all 
 - Memoize all pipeline stage computations. A change to codec params should not recompute chunking or interleaving.
 - Virtual scrolling for all list-type views. Use `@tanstack/react-virtual`.
 - Debounce localStorage saves at 500ms.
-- Keep the total element count reasonable (soft warn above `SOFT_ELEMENT_CAP` = 8,388,608 total values, `src/components/config/SchemaEditor.tsx` — advisory only, does not block).
+- Keep the total element count reasonable (soft warn above `SOFT_ELEMENT_CAP` = 8,000,000 total values, `src/components/config/SchemaEditor.tsx` — advisory only, does not block).
 
 ### Error handling
 

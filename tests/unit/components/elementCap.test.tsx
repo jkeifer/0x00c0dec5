@@ -33,7 +33,7 @@ describe('SchemaEditor element cap warning', () => {
     const shape = [2048, 2048];
     const variables = DEFAULT_VARIABLES; // 3 variables
     const totalValues = shape[0] * shape[1] * variables.length;
-    expect(totalValues).toBeGreaterThan(SOFT_ELEMENT_CAP); // 12.6M > 8.39M
+    expect(totalValues).toBeGreaterThan(SOFT_ELEMENT_CAP); // 12.6M > 8M
 
     render(
       <SchemaEditor

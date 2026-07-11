@@ -45,10 +45,13 @@ const GENERATION_MODES: { value: LogicalTypeConfig['generation']; label: string 
 ];
 
 /** Soft cap on total values (shape product x variable count). Derived from
- * the Phase 1-3 exit profile: 3M values (1024x1024 x 3 vars) computes in
- * ~2.2s with ~1GB peak heap; 8M is roughly the comfort ceiling before
- * recompute latency and memory get hostile. Advisory only — nothing blocks. */
-export const SOFT_ELEMENT_CAP = 8_388_608;
+ * the Phase 1-3 exit profile — comfort data: 3M values (1024x1024 x 3 vars)
+ * computes in ~2.2s with ~1GB peak heap; 8M takes ~20s — AND the open finding
+ * of an unexplained pipeline stall at ~8.37M values that never settles (see
+ * docs/remediation-plan.md open finding added alongside this cap change).
+ * The cap sits below the stall so the advisory precedes it rather than firing
+ * only after the hang zone. Advisory only — nothing blocks. */
+export const SOFT_ELEMENT_CAP = 8_000_000;
 
 export function SchemaEditor({
   variables,

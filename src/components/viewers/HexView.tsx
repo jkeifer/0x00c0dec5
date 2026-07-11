@@ -148,7 +148,14 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
     ref,
   ) {
     const { windowed, rowCount } = sectionData;
-    const visibleCount = windowed ? Math.min(WINDOW_ROWS, rowCount - windowStart) : rowCount;
+    // Clamp against the CURRENT rowCount before any derived math: windowStart
+    // comes from parent state keyed by section key, which persists across a
+    // shape shrink. An unclamped stale value here can exceed rowCount, making
+    // visibleCount negative (useVirtualizer count negative; cross-pane
+    // scrollToRow mis-targets). clampWindowStart is shrink-safe (see
+    // useHexData.ts) — use its output everywhere below, not the raw prop.
+    const clampedWindowStart = windowed ? clampWindowStart(windowStart, rowCount) : windowStart;
+    const visibleCount = windowed ? Math.min(WINDOW_ROWS, rowCount - clampedWindowStart) : rowCount;
 
     const virtualizer = useVirtualizer({
       count: visibleCount,
@@ -166,12 +173,12 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
 
     useImperativeHandle(ref, () => ({
       scrollToRow: (rowIndex: number) => {
-        if (windowed && (rowIndex < windowStart || rowIndex >= windowStart + visibleCount)) {
+        if (windowed && (rowIndex < clampedWindowStart || rowIndex >= clampedWindowStart + visibleCount)) {
           pendingScrollRow.current = rowIndex;
           onWindowStartChange(clampWindowStart(windowStartForByte(rowIndex * bytesPerRow, bytesPerRow, rowCount), rowCount));
           return;
         }
-        virtualizer.scrollToIndex(rowIndex - windowStart, { align: 'auto' });
+        virtualizer.scrollToIndex(rowIndex - clampedWindowStart, { align: 'auto' });
       },
     }));
 
@@ -179,11 +186,11 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
       if (pendingScrollRow.current === null) return;
       const target = pendingScrollRow.current;
       pendingScrollRow.current = null;
-      if (target >= windowStart && target < windowStart + visibleCount) {
-        virtualizer.scrollToIndex(target - windowStart, { align: 'auto' });
+      if (target >= clampedWindowStart && target < clampedWindowStart + visibleCount) {
+        virtualizer.scrollToIndex(target - clampedWindowStart, { align: 'auto' });
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [windowStart]);
+    }, [clampedWindowStart]);
 
     function handleJump(byteOffset: number) {
       onWindowStartChange(clampWindowStart(windowStartForByte(byteOffset, bytesPerRow, rowCount), rowCount));
@@ -219,8 +226,8 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
         {windowed && (
           <HexWindowControls
             layout={sectionData.layout}
-            windowStart={windowStart}
-            windowEnd={windowStart + visibleCount}
+            windowStart={clampedWindowStart}
+            windowEnd={clampedWindowStart + visibleCount}
             bytesPerRow={bytesPerRow}
             onJump={handleJump}
           />
@@ -233,7 +240,7 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
           }}
         >
           {virtualizer.getVirtualItems().map((virtualRow) => {
-            const rowIndex = windowed ? windowStart + virtualRow.index : virtualRow.index;
+            const rowIndex = windowed ? clampedWindowStart + virtualRow.index : virtualRow.index;
             const byteStart = rowIndex * bytesPerRow;
             const byteEnd = Math.min(byteStart + bytesPerRow, sectionData.bytes.length);
 
