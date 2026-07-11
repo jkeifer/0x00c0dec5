@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_STATE } from '../../types/state.ts';
-import { computeValuesStage, computeTypedStage, computeLinearizedStage } from '../../hooks/usePipeline.ts';
-import { buildValueBlocksLayout, buildLinearizedLayout, traceAt } from '../../engine/layout.ts';
+import { computeValuesStage, computeTypedStage, computeLinearizedStage, computeEncodedStage } from '../../hooks/usePipeline.ts';
+import { buildValueBlocksLayout, buildLinearizedLayout, buildEncodedLayout, encodedChunkMeta, traceAt } from '../../engine/layout.ts';
 import { expectTraceEquivalence } from '../helpers/equivalence.ts';
+import type { CodecStep } from '../../types/codecs.ts';
+import type { DtypeKey } from '../../types/dtypes.ts';
 
 // A text variable exercises the variable-stride offsets path.
 const TEXT_VAR = {
@@ -90,4 +92,63 @@ describe('traceAt bounds', () => {
     expect(traceAt(layout, -1, sources)).toBeNull();
     expect(traceAt(layout, layout.byteLength, sources)).toBeNull();
   });
+});
+
+const ENCODED_CASES: { name: string; interleaving: 'row' | 'column'; fieldSteps?: CodecStep[]; chunkSteps?: CodecStep[] }[] = [
+  { name: 'no codecs', interleaving: 'column', fieldSteps: [] },
+  { name: 'delta', interleaving: 'column', fieldSteps: [{ codec: 'delta', params: { order: 1 } }] },
+  { name: 'byte-shuffle', interleaving: 'column', fieldSteps: [{ codec: 'byte-shuffle', params: { elementSize: 4 } }] },
+  {
+    name: 'delta+byte-shuffle', interleaving: 'column',
+    fieldSteps: [{ codec: 'delta', params: { order: 1 } }, { codec: 'byte-shuffle', params: { elementSize: 4 } }],
+  },
+  { name: 'rle (entropy)', interleaving: 'column', fieldSteps: [{ codec: 'rle', params: {} }] },
+  {
+    name: 'byte-shuffle+lz', interleaving: 'column',
+    fieldSteps: [{ codec: 'byte-shuffle', params: { elementSize: 4 } }, { codec: 'lz', params: {} }],
+  },
+  { name: 'row chunk pipeline rle', interleaving: 'row', chunkSteps: [{ codec: 'rle', params: {} }] },
+];
+
+describe('encoded-stage layout equivalence', () => {
+  for (const c of ENCODED_CASES) {
+    it(c.name, () => {
+      const state = {
+        ...DEFAULT_STATE,
+        shape: [4, 8],
+        chunkShape: [2, 4],
+        interleaving: c.interleaving,
+        fieldPipelines: c.fieldSteps
+          ? Object.fromEntries(DEFAULT_STATE.variables.map((v) => [v.id, c.fieldSteps!]))
+          : DEFAULT_STATE.fieldPipelines,
+        chunkPipeline: c.chunkSteps ?? DEFAULT_STATE.chunkPipeline,
+      };
+      const values = computeValuesStage(state.shape, state.variables);
+      const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
+      const lin = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
+      const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
+      const linLayout = buildLinearizedLayout(lin.chunks, lin.linearizedChunks, state.interleaving, state.shape, state.chunkShape);
+
+      const nameToId = new Map(state.variables.map((v) => [v.name, v.id]));
+      const outputDtypes: string[] = [];
+      const hasEntropy: boolean[] = [];
+      lin.chunks.forEach((chunk) => {
+        const steps = state.interleaving === 'column'
+          ? (state.fieldPipelines[nameToId.get(chunk.variables[0].variableName)!] ?? [])
+          : state.chunkPipeline;
+        const uniqueDtypes = new Set(chunk.variables.map((cv) => cv.dtype));
+        const inputDtype = (chunk.variables.length === 0
+          ? 'uint8'
+          : uniqueDtypes.size > 1
+            ? 'uint8'
+            : chunk.variables[0].dtype) as DtypeKey;
+        const meta = encodedChunkMeta(steps, inputDtype);
+        outputDtypes.push(meta.outputDtype);
+        hasEntropy.push(meta.hasEntropy);
+      });
+
+      const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, outputDtypes, hasEntropy);
+      expectTraceEquivalence(encLayout, { values: typed.typedVariableValues, format: 'typed' }, enc.stage.traces);
+    });
+  }
 });

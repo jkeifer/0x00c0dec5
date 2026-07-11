@@ -1,6 +1,8 @@
 import type { ByteTrace, Chunk, LinearizedChunk } from '../types/pipeline.ts';
 import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
 import { getDtype } from '../types/dtypes.ts';
+import type { CodecStep } from '../types/codecs.ts';
+import { CODEC_REGISTRY, outputDtypeFor } from './codecs.ts';
 import { makeTraceId } from './trace.ts';
 import { formatValue, formatLogicalValue } from './elements.ts';
 import { flatIndexToCoords, coordsToFlatIndex } from './chunk.ts';
@@ -149,6 +151,56 @@ export function buildLinearizedLayout(
   return { byteLength: cursor, shape, regions };
 }
 
+export interface EncodedChunkMeta { outputDtype: string; hasEntropy: boolean }
+
+/** Single source of truth for what a codec pipeline does to a chunk's
+ *  tracing: final output dtype (via outputDtypeFor, per CLAUDE.md pitfall 3)
+ *  and whether any entropy step degrades traces to chunk level. */
+export function encodedChunkMeta(steps: CodecStep[], inputDtype: DtypeKey): EncodedChunkMeta {
+  let dtype: DtypeKey = inputDtype;
+  let hasEntropy = false;
+  for (const step of steps) {
+    const codec = CODEC_REGISTRY[step.codec];
+    if (!codec) continue;
+    if (codec.category === 'entropy') hasEntropy = true;
+    dtype = outputDtypeFor(codec, dtype);
+  }
+  return { outputDtype: dtype, hasEntropy };
+}
+
+/** Build the Encoded stage layout from the Linearized layout + computed
+ *  encoded chunks. Entropy anywhere in a chunk's pipeline degrades that
+ *  chunk's region to chunk-level (mirroring degradeTracesToChunkLevel);
+ *  otherwise the linearized region is re-based to the encoded offset with
+ *  field dtypes relabeled to the pipeline's output dtype (non-entropy codecs
+ *  preserve byte size, mirroring propagateTracesValuePreserving's 1:1 copy). */
+export function buildEncodedLayout(
+  linearizedLayout: StageLayout,
+  encodedChunks: { chunkId: string; bytes: Uint8Array }[],
+  outputDtypes: string[],
+  chunkHasEntropy: boolean[],
+): StageLayout {
+  const regions: LayoutRegion[] = [];
+  let cursor = 0;
+  linearizedLayout.regions.forEach((r, i) => {
+    if (r.kind !== 'chunk') throw new Error('linearized layout must be all chunk regions');
+    const encBytes = encodedChunks[i].bytes.length;
+    if (chunkHasEntropy[i]) {
+      regions.push({
+        ...r, start: cursor, byteLength: encBytes,
+        mode: 'chunk-level', fields: [],
+      });
+    } else {
+      regions.push({
+        ...r, start: cursor, byteLength: encBytes,
+        fields: r.fields.map((f) => ({ ...f, dtype: outputDtypes[i] })),
+      });
+    }
+    cursor += encBytes;
+  });
+  return { byteLength: cursor, shape: linearizedLayout.shape, regions };
+}
+
 /** Chunk-local flat element index -> global coords. Must mirror the
  *  enumeration order chunkData/chunkDataPerVariable use for sourceCoords
  *  (row-major over elementDims) — the equivalence tests are the check. */
@@ -242,6 +294,14 @@ export function traceAt(layout: StageLayout, byteIndex: number, sources: ValueSo
       coords, displayValue: formatDisplay(arr[globalFlat], field.dtype, sources.format),
       dtype: field.dtype, chunkId: r.chunkId,
       byteInValue, byteCount: field.size,
+    };
+  }
+  if (r.kind === 'chunk' && r.mode === 'chunk-level') {
+    return {
+      traceId: r.chunkId,
+      variableName: r.variableName, variableColor: r.variableColor,
+      coords: [], displayValue: '', dtype: 'uint8', chunkId: r.chunkId,
+      byteInValue: 0, byteCount: 1,
     };
   }
   // 'structural' regions: implemented in Task 5.
