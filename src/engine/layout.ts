@@ -186,8 +186,12 @@ export function buildEncodedLayout(
     if (r.kind !== 'chunk') throw new Error('linearized layout must be all chunk regions');
     const encBytes = encodedChunks[i].bytes.length;
     if (chunkHasEntropy[i]) {
+      const sampleName = r.fields[0]?.variableName ?? '';
+      const sharedVariable = sampleName !== '' && r.fields.every((f) => f.variableName === sampleName);
       regions.push({
         ...r, start: cursor, byteLength: encBytes,
+        variableName: sharedVariable ? sampleName : '',
+        variableColor: sharedVariable ? r.fields[0].variableColor : '',
         mode: 'chunk-level', fields: [],
       });
     } else {

@@ -94,7 +94,7 @@ describe('traceAt bounds', () => {
   });
 });
 
-const ENCODED_CASES: { name: string; interleaving: 'row' | 'column'; fieldSteps?: CodecStep[]; chunkSteps?: CodecStep[] }[] = [
+const ENCODED_CASES: { name: string; interleaving: 'row' | 'column'; fieldSteps?: CodecStep[]; chunkSteps?: CodecStep[]; variables?: typeof DEFAULT_STATE.variables; chunkShape?: number[] }[] = [
   { name: 'no codecs', interleaving: 'column', fieldSteps: [] },
   { name: 'delta', interleaving: 'column', fieldSteps: [{ codec: 'delta', params: { order: 1 } }] },
   { name: 'byte-shuffle', interleaving: 'column', fieldSteps: [{ codec: 'byte-shuffle', params: { elementSize: 4 } }] },
@@ -108,6 +108,12 @@ const ENCODED_CASES: { name: string; interleaving: 'row' | 'column'; fieldSteps?
     fieldSteps: [{ codec: 'byte-shuffle', params: { elementSize: 4 } }, { codec: 'lz', params: {} }],
   },
   { name: 'row chunk pipeline rle', interleaving: 'row', chunkSteps: [{ codec: 'rle', params: {} }] },
+  {
+    name: 'row chunk pipeline rle, single variable', interleaving: 'row',
+    chunkSteps: [{ codec: 'rle', params: {} }],
+    variables: [DEFAULT_STATE.variables[0]],
+    chunkShape: [2, 4],
+  },
 ];
 
 describe('encoded-stage layout equivalence', () => {
@@ -116,10 +122,11 @@ describe('encoded-stage layout equivalence', () => {
       const state = {
         ...DEFAULT_STATE,
         shape: [4, 8],
-        chunkShape: [2, 4],
+        chunkShape: c.chunkShape ?? [2, 4],
         interleaving: c.interleaving,
+        variables: c.variables ?? DEFAULT_STATE.variables,
         fieldPipelines: c.fieldSteps
-          ? Object.fromEntries(DEFAULT_STATE.variables.map((v) => [v.id, c.fieldSteps!]))
+          ? Object.fromEntries((c.variables ?? DEFAULT_STATE.variables).map((v) => [v.id, c.fieldSteps!]))
           : DEFAULT_STATE.fieldPipelines,
         chunkPipeline: c.chunkSteps ?? DEFAULT_STATE.chunkPipeline,
       };
