@@ -129,6 +129,7 @@ node tests/ui/scenario-crash-inputs.mjs
 node tests/ui/scenario-placement-matrix.mjs
 node tests/ui/scenario-hover-linking.mjs
 node tests/ui/scenario-pane-defaults.mjs
+node tests/ui/scenario-worker-pipeline.mjs
 kill %1                                          # stop the dev server when done
 ```
 
