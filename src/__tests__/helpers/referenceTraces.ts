@@ -23,12 +23,13 @@
 import type { AppState, Variable } from '../../types/state.ts';
 import type { ByteTrace, Chunk, EncodedChunk, StageName, VirtualFile } from '../../types/pipeline.ts';
 import type { CodecStep } from '../../types/codecs.ts';
-import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
+import type { DtypeKey } from '../../types/dtypes.ts';
 import { getDtype } from '../../types/dtypes.ts';
 import { generateValues } from '../../engine/generate.ts';
 import { assignType, type TypeAssignResult } from '../../engine/typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid, flatIndexToCoords } from '../../engine/chunk.ts';
 import { valuesToBytes, bytesToValues, formatValue, formatLogicalValue } from '../../engine/elements.ts';
+import type { ValueArray } from '../../engine/layout.ts';
 import { CODEC_REGISTRY } from '../../engine/codecs.ts';
 import { collectMetadata, serializeMetadata, type ChunkIndexEntry } from '../../engine/metadata.ts';
 import { orderChunks } from '../../engine/write.ts';
@@ -182,7 +183,7 @@ function makeMetadataTraces(length: number): ByteTrace[] {
 function buildLogicalValuesTraces(
   variables: Pick<Variable, 'name' | 'color'>[],
   shape: number[],
-  valuesByName: Map<string, LogicalValue[]>,
+  valuesByName: Map<string, ValueArray>,
 ): ByteTrace[] {
   const traces: ByteTrace[] = [];
   for (const v of variables) {
@@ -237,10 +238,10 @@ function buildLogicalValuesTraces(
 function buildTypedTraces(
   shape: number[],
   variables: Variable[],
-  variableValues: Map<string, LogicalValue[]>,
-): { traces: ByteTrace[]; typedVariableValues: Map<string, LogicalValue[]> } {
+  variableValues: Map<string, ValueArray>,
+): { traces: ByteTrace[]; typedVariableValues: Map<string, ValueArray> } {
   const traces: ByteTrace[] = [];
-  const typedVariableValues = new Map<string, LogicalValue[]>();
+  const typedVariableValues = new Map<string, ValueArray>();
 
   for (const v of variables) {
     const vals = variableValues.get(v.name) ?? [];
@@ -323,7 +324,7 @@ function referenceLinearize(
   chunkShape: number[],
   interleaving: 'row' | 'column',
   variables: Variable[],
-  typedVariableValues: Map<string, LogicalValue[]>,
+  typedVariableValues: Map<string, ValueArray>,
 ): ReferenceChunkResult {
   const chunkVariables = variables.map((v) => ({ ...v, dtype: v.typeAssignment.storageDtype as string }));
   const chunks = interleaving === 'column'
@@ -636,7 +637,7 @@ function referenceAssemblePerChunkFiles(
  *  caring about array index. */
 export function referenceStageTraces(state: AppState): Map<StageName, ByteTrace[]> {
   const totalElements = state.shape.reduce((a, b) => a * b, 1);
-  const variableValues = new Map<string, LogicalValue[]>();
+  const variableValues = new Map<string, ValueArray>();
   for (const v of state.variables) {
     variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }
@@ -676,7 +677,7 @@ export function referenceStageTraces(state: AppState): Map<StageName, ByteTrace[
  *  concatenated Write stage. */
 export function referenceFileTraces(state: AppState): { name: string; traces: ByteTrace[] }[] {
   const totalElements = state.shape.reduce((a, b) => a * b, 1);
-  const variableValues = new Map<string, LogicalValue[]>();
+  const variableValues = new Map<string, ValueArray>();
   for (const v of state.variables) {
     variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }
@@ -692,7 +693,7 @@ export function referenceFileTraces(state: AppState): { name: string; traces: By
 // stats output — needed because collectMetadata's `truncated`/`isLossy`
 // fields feed into the schema JSON (byte count-affecting for header
 // convergence), so metadata trace length must match production exactly.
-function referenceVariableStats(variables: Variable[], variableValues: Map<string, LogicalValue[]>) {
+function referenceVariableStats(variables: Variable[], variableValues: Map<string, ValueArray>) {
   const stats = new Map<string, ReturnType<typeof assignType>['stats']>();
   for (const v of variables) {
     const vals = variableValues.get(v.name) ?? [];
@@ -705,7 +706,7 @@ function referenceVariableStats(variables: Variable[], variableValues: Map<strin
 function referenceReadTraces(
   state: AppState,
   refFiles: { name: string; bytes: Uint8Array; traces: ByteTrace[] }[],
-  logicalValues: Map<string, LogicalValue[]>,
+  logicalValues: Map<string, ValueArray>,
 ): ByteTrace[] {
   // readFile only needs VirtualFile-shaped { name, bytes } — traces/layout
   // are irrelevant to it (confirmed: readFile has no trace dependency).
@@ -719,7 +720,7 @@ function referenceReadTraces(
   const readResult = readFile(asVirtualFiles, { magic: hexToBytes(state.write.magicNumber) });
   if (!readResult.success) return [];
 
-  const reconstructed = new Map<string, LogicalValue[]>();
+  const reconstructed = new Map<string, ValueArray>();
   for (const v of state.variables) {
     reconstructed.set(v.name, readResult.reconstructedValues.get(v.name) ?? logicalValues.get(v.name) ?? []);
   }

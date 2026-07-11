@@ -8,7 +8,7 @@ describe('reverseCodecPipeline', () => {
   it('empty pipeline is identity', () => {
     const input = valuesToBytes([1, 2, 3], 'float32');
     const result = reverseCodecPipeline(input, [], 'float32');
-    expect(bytesToValues(result.bytes, 'float32')).toEqual([1, 2, 3]);
+    expect(Array.from(bytesToValues(result.bytes, 'float32'))).toEqual([1, 2, 3]);
     expect(result.outputDtype).toBe('float32');
   });
 
@@ -20,7 +20,7 @@ describe('reverseCodecPipeline', () => {
 
     const decoded = reverseCodecPipeline(encoded.bytes, steps, 'int32');
     const values = bytesToValues(decoded.bytes, decoded.outputDtype as 'int32');
-    expect(values).toEqual(originalValues);
+    expect(Array.from(values)).toEqual(originalValues);
   });
 
   it('reverses single byte-shuffle codec exactly', () => {
@@ -53,13 +53,13 @@ describe('reverseCodecPipeline', () => {
 
     const decoded = reverseCodecPipeline(encoded.bytes, steps, 'int32');
     const values = bytesToValues(decoded.bytes, decoded.outputDtype as 'int32');
-    expect(values).toEqual(originalValues);
+    expect(Array.from(values)).toEqual(originalValues);
   });
 
   it('skips unknown codecs gracefully', () => {
     const input = valuesToBytes([1, 2, 3], 'int32');
     const steps: CodecStep[] = [{ codec: 'nonexistent', params: {} }];
     const result = reverseCodecPipeline(input, steps, 'int32');
-    expect(bytesToValues(result.bytes, 'int32')).toEqual([1, 2, 3]);
+    expect(Array.from(bytesToValues(result.bytes, 'int32'))).toEqual([1, 2, 3]);
   });
 });

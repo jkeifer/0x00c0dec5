@@ -9,7 +9,8 @@ import { encodedChunkMeta } from '../../engine/layout.ts';
 import { DEFAULT_STATE } from '../../types/state.ts';
 import type { AppState } from '../../types/state.ts';
 import type { EncodedChunk } from '../../types/pipeline.ts';
-import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
+import type { DtypeKey } from '../../types/dtypes.ts';
+import type { ValueArray } from '../../engine/layout.ts';
 
 /**
  * Helper: run the full pipeline from state to virtual files.
@@ -17,7 +18,7 @@ import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
 function runFullPipeline(state: AppState) {
   // 1. Generate logical values
   const totalElements = state.shape.reduce((a, b) => a * b, 1);
-  const variableValues = new Map<string, LogicalValue[]>();
+  const variableValues = new Map<string, ValueArray>();
   for (const v of state.variables) {
     variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }

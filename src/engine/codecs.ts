@@ -37,7 +37,7 @@ const delta: CodecDefinition = {
     // returns strings, and string arithmetic is NaN garbage. Treat char
     // input as raw uint8 bytes instead — byte-wise delta, lossless.
     const dtype = isCharDtype(inputDtype as DtypeKey) ? 'uint8' : inputDtype as DtypeKey;
-    const values = bytesToValues(bytes, dtype) as number[];
+    const values = bytesToValues(bytes, dtype) as Float64Array;
 
     // Integer dtypes: diffs of integers are integers, so no rounding is needed.
     // Typed-array writes below wrap mod 2^N (DataView setters perform ToInt32 /
@@ -60,7 +60,7 @@ const delta: CodecDefinition = {
     const order = Number(params.order ?? 1);
     // Symmetric char guard — see encode above.
     const dtype = isCharDtype(encodedDtype as DtypeKey) ? 'uint8' : encodedDtype as DtypeKey;
-    const values = bytesToValues(bytes, dtype) as number[];
+    const values = bytesToValues(bytes, dtype) as Float64Array;
 
     // Cumulative sum (prefix sum), applied `order` times. No clamping — see the
     // encode-side comment above. The typed-array write in valuesToBytes wraps

@@ -1,8 +1,9 @@
-import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
+import type { DtypeKey } from '../types/dtypes.ts';
 import type { LogicalTypeConfig, TypeAssignment } from '../types/state.ts';
 import type { VariableStats } from '../types/pipeline.ts';
 import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import { valuesToBytes, bytesToValues } from './elements.ts';
+import type { ValueArray } from './layout.ts';
 
 export interface TypeAssignResult {
   bytes: Uint8Array;
@@ -20,7 +21,7 @@ export interface TypeAssignResult {
  * 4. Track statistics: clipped/rounded counts
  */
 export function assignType(
-  values: LogicalValue[],
+  values: ValueArray,
   _logicalType: LogicalTypeConfig,
   assignment: TypeAssignment,
 ): TypeAssignResult {
@@ -65,7 +66,7 @@ export function assignType(
   let min = Infinity;
   let max = -Infinity;
 
-  const transformed: number[] = new Array(values.length);
+  const transformed = new Float64Array(values.length);
 
   for (let i = 0; i < values.length; i++) {
     const original = values[i] as number; // numeric path (char handled above)
@@ -130,7 +131,7 @@ export function assignType(
 
   // For float types, detect rounding by reading back
   if (outInfo.float) {
-    const readBack = bytesToValues(bytes, outDtype) as number[];
+    const readBack = bytesToValues(bytes, outDtype) as Float64Array;
     for (let i = 0; i < values.length; i++) {
       let expected = values[i] as number;
       if (hasScaleOffset) {
@@ -183,7 +184,7 @@ export function assignType(
 export function reverseTypeAssignment(
   bytes: Uint8Array,
   assignment: TypeAssignment,
-): LogicalValue[] {
+): ValueArray {
   let dtype = assignment.storageDtype;
 
   // keepBits is irrecoverable (like bitround), so no reversal needed for it
@@ -206,7 +207,7 @@ export function reverseTypeAssignment(
   const scale = assignment.scale ?? 1;
   const offset = assignment.offset ?? 0;
 
-  return (values as number[]).map((v) => v / scale + offset);
+  return (values as Float64Array).map((v) => v / scale + offset);
 }
 
 /** Apply mantissa bit truncation to float bytes. */

@@ -4,7 +4,7 @@ import type { LogicalValue } from '../../types/dtypes.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { formatLogicalValue } from '../../engine/elements.ts';
-import { elementInChunk, chunkIdForElement } from '../../engine/layout.ts';
+import { elementInChunk, chunkIdForElement, type ValueArray } from '../../engine/layout.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 import { computeMaxAbsDiff, computeDiffSummary, scrollOffsetForCell } from './viewerUtils.ts';
@@ -20,10 +20,10 @@ interface GridViewProps {
    * here. GridView only ever renders the Values/Typed/Read stages (see
    * StagePane's view-mode gating), so this is always populated for it.
    */
-  values: Map<string, LogicalValue[]>;
+  values: Map<string, ValueArray>;
   chunkShape: number[];
   interleaving: 'row' | 'column';
-  diffValues?: Map<string, LogicalValue[]>;
+  diffValues?: Map<string, ValueArray>;
   showDiff?: boolean;
 }
 
@@ -93,18 +93,21 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
     }
     const vals = valuesByName.get(selectedVar.name) ?? [];
 
+    // Text variables always arrive as a plain string[] (never Float64Array —
+    // see ValueArray/generateValues), so this branch can safely narrow.
     if (vals.some((v) => typeof v === 'string')) {
-      const uniq = Array.from(new Set(vals.map((v) => String(v)))).sort();
+      const words = vals as string[];
+      const uniq = Array.from(new Set(words.map((v) => String(v)))).sort();
       const rank = new Map(uniq.map((w, i) => [w, i]));
       return {
-        values: vals,
-        colorValues: vals.map((v) => rank.get(String(v)) ?? 0),
+        values: words,
+        colorValues: words.map((v) => rank.get(String(v)) ?? 0),
         min: 0,
         max: uniq.length - 1,
       };
     }
 
-    const nums = vals as number[];
+    const nums = vals as Float64Array;
     let mn = Infinity;
     let mx = -Infinity;
     for (const v of nums) {

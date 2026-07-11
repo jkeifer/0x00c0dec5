@@ -1,5 +1,5 @@
 import type { LogicalTypeConfig, GenerationMode, WordSetKey } from '../types/state.ts';
-import type { LogicalValue } from '../types/dtypes.ts';
+import type { ValueArray } from './layout.ts';
 
 const DEFAULT_GLOBAL_SEED = 0xc0dec5;
 
@@ -124,22 +124,23 @@ export function generateValues(
   logicalType: LogicalTypeConfig,
   count: number,
   globalSeed: number = DEFAULT_GLOBAL_SEED,
-): LogicalValue[] {
+): ValueArray {
   const seed = hashSeed(variableName + ':' + globalSeed);
   const rng = createPRNG(seed);
-  const values: LogicalValue[] = new Array(count);
   const mode = logicalType.generation ?? 'random';
 
   switch (logicalType.type) {
     case 'integer': {
+      const values = new Float64Array(count);
       const range = logicalType.max - logicalType.min + 1;
       const uniform01 = generateUniform01(rng, mode, count);
       for (let i = 0; i < count; i++) {
         values[i] = Math.floor(uniform01[i] * range) + logicalType.min;
       }
-      break;
+      return values;
     }
     case 'decimal': {
+      const values = new Float64Array(count);
       const places = logicalType.decimalPlaces ?? 1;
       const factor = Math.pow(10, places);
       const minScaled = Math.round(logicalType.min * factor);
@@ -150,9 +151,10 @@ export function generateValues(
         const scaled = Math.floor(uniform01[i] * range) + minScaled;
         values[i] = scaled / factor;
       }
-      break;
+      return values;
     }
     case 'continuous': {
+      const values = new Float64Array(count);
       const sigFigs = logicalType.significantFigures ?? 6;
       const range = logicalType.max - logicalType.min;
       const uniform01 = generateUniform01(rng, mode, count);
@@ -160,22 +162,21 @@ export function generateValues(
         const raw = uniform01[i] * range + logicalType.min;
         values[i] = Number(raw.toPrecision(sigFigs));
       }
-      break;
+      return values;
     }
     case 'text': {
       // Words drawn from a sorted set: the same [0, 1) sequence machinery
       // maps every generation mode onto categorical data for free (see the
       // WORD_SETS comment above). min/max are ignored for text.
+      const values: string[] = new Array(count);
       const words = WORD_SETS[logicalType.wordSet ?? 'names'];
       const uniform01 = generateUniform01(rng, mode, count);
       for (let i = 0; i < count; i++) {
         values[i] = words[Math.min(words.length - 1, Math.floor(uniform01[i] * words.length))];
       }
-      break;
+      return values;
     }
   }
-
-  return values;
 }
 
 /**

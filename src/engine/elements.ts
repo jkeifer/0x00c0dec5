@@ -1,5 +1,6 @@
 import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
+import type { ValueArray } from './layout.ts';
 
 type DataViewSetter = (byteOffset: number, value: number, littleEndian?: boolean) => void;
 type DataViewGetter = (byteOffset: number, littleEndian?: boolean) => number;
@@ -11,7 +12,7 @@ type DataViewGetter = (byteOffset: number, littleEndian?: boolean) => number;
  * truncated to N chars, and space-padded to exactly N bytes. (ASCII-only this
  * phase — UTF-8 truncation mid-codepoint is a great future lesson, out of scope.)
  */
-export function valuesToBytes(values: LogicalValue[], dtype: DtypeKey): Uint8Array {
+export function valuesToBytes(values: ValueArray, dtype: DtypeKey): Uint8Array {
   const info = getDtype(dtype);
   const byteLength = values.length * info.size;
 
@@ -46,7 +47,7 @@ export function valuesToBytes(values: LogicalValue[], dtype: DtypeKey): Uint8Arr
  * charN dtypes: each N-byte slice decodes to an ASCII string with trailing
  * spaces (the padding) trimmed.
  */
-export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): LogicalValue[] {
+export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): ValueArray {
   const info = getDtype(dtype);
   const count = bytes.length / info.size;
   if (!Number.isInteger(count)) {
@@ -63,7 +64,7 @@ export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): LogicalValue[
     );
   }
   if (isCharDtype(dtype)) {
-    const values: LogicalValue[] = new Array(count);
+    const values: string[] = new Array(count);
     for (let i = 0; i < count; i++) {
       let str = '';
       for (let c = 0; c < info.size; c++) {
@@ -75,7 +76,9 @@ export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): LogicalValue[
   }
 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const values: LogicalValue[] = new Array(count);
+  // Numeric dtypes uniformly return Float64Array (brief, Task 11 Step 2):
+  // simplest ValueArray shape regardless of storage dtype width/signedness.
+  const values = new Float64Array(count);
 
   const getter = getDataViewGetter(view, dtype);
   for (let i = 0; i < count; i++) {

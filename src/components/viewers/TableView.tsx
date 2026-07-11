@@ -1,11 +1,11 @@
 import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Variable } from '../../types/state.ts';
-import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
+import type { DtypeKey } from '../../types/dtypes.ts';
 import { formatValue, formatLogicalValue } from '../../engine/elements.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
-import { elementInChunk, chunkIdForElement } from '../../engine/layout.ts';
+import { elementInChunk, chunkIdForElement, type ValueArray } from '../../engine/layout.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
@@ -22,10 +22,10 @@ interface TableViewProps {
    * here. TableView only ever renders the Values/Typed/Read stages (see
    * StagePane's view-mode gating), so this is always populated for it.
    */
-  values: Map<string, LogicalValue[]>;
+  values: Map<string, ValueArray>;
   chunkShape: number[];
   interleaving: 'row' | 'column';
-  diffValues?: Map<string, LogicalValue[]>;
+  diffValues?: Map<string, ValueArray>;
   showDiff?: boolean;
   isLogicalValues?: boolean; // true for Values/Read stage (float64 logical values) — controls display formatting only
 }
@@ -39,7 +39,7 @@ const HEADER_HEIGHT_WITH_DIFF = 42;
 
 interface ColumnData {
   variable: Variable;
-  values: LogicalValue[];
+  values: ValueArray;
   dtype: DtypeKey;
 }
 

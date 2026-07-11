@@ -1,5 +1,6 @@
 import type { Chunk, ChunkVariable } from '../types/pipeline.ts';
 import type { LogicalValue } from '../types/dtypes.ts';
+import type { ValueArray } from './layout.ts';
 
 /** Minimal variable interface needed by chunking — decoupled from state.Variable. */
 export interface ChunkableVariable {
@@ -57,7 +58,7 @@ export function chunkData(
   shape: number[],
   chunkShape: number[],
   variables: ChunkableVariable[],
-  variableValues: Map<string, LogicalValue[]>,
+  variableValues: Map<string, ValueArray>,
 ): Chunk[] {
   const clampedChunkShape = chunkShape.map((cs, d) => Math.min(cs, shape[d]));
   const chunkGrid = computeChunkGrid(shape, chunkShape);
@@ -105,7 +106,7 @@ export function chunkDataPerVariable(
   shape: number[],
   chunkShape: number[],
   variables: ChunkableVariable[],
-  variableValues: Map<string, LogicalValue[]>,
+  variableValues: Map<string, ValueArray>,
 ): Chunk[] {
   const clampedChunkShape = chunkShape.map((cs, d) => Math.min(cs, shape[d]));
   const chunkGrid = computeChunkGrid(shape, chunkShape);
@@ -155,7 +156,7 @@ export function chunkDataPerVariable(
 
 /** Extract values belonging to a specific chunk, returning values and their source coordinates. */
 function extractChunkValues(
-  allValues: LogicalValue[],
+  allValues: ValueArray,
   shape: number[],
   clampedChunkShape: number[],
   chunkCoords: number[],

@@ -11,7 +11,7 @@ import type {
   VariableStats,
   StageName,
 } from '../types/pipeline.ts';
-import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
+import type { DtypeKey } from '../types/dtypes.ts';
 import { generateValues } from '../engine/generate.ts';
 import { assignType } from '../engine/typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid } from '../engine/chunk.ts';
@@ -59,7 +59,7 @@ function makeStage(name: string, bytes: Uint8Array, layout: StageLayout): Pipeli
  */
 function buildLogicalValuesStage(
   variables: Pick<Variable, 'name' | 'color'>[],
-  valuesByName: Map<string, LogicalValue[]>,
+  valuesByName: Map<string, ValueArray>,
 ): { bytes: Uint8Array } {
   const partBytes: Uint8Array[] = [];
   for (const v of variables) {
@@ -95,7 +95,7 @@ function buildLogicalValuesStage(
 
 export interface ValuesStageResult {
   stage: PipelineStage;
-  variableValues: Map<string, LogicalValue[]>;
+  variableValues: Map<string, ValueArray>;
 }
 
 export function computeValuesStage(
@@ -104,7 +104,7 @@ export function computeValuesStage(
 ): ValuesStageResult {
   const totalElements = shape.reduce((a, b) => a * b, 1);
 
-  const variableValues = new Map<string, LogicalValue[]>();
+  const variableValues = new Map<string, ValueArray>();
   for (const v of variables) {
     variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }
@@ -125,18 +125,18 @@ export function computeValuesStage(
 
 export interface TypedStageResult {
   stage: PipelineStage;
-  typedVariableValues: Map<string, LogicalValue[]>;
+  typedVariableValues: Map<string, ValueArray>;
   variableStats: Map<string, VariableStats>;
 }
 
 export function computeTypedStage(
   shape: number[],
   variables: Variable[],
-  variableValues: Map<string, LogicalValue[]>,
+  variableValues: Map<string, ValueArray>,
 ): TypedStageResult {
   const typedPartBytes: Uint8Array[] = [];
   const variableStats = new Map<string, VariableStats>();
-  const typedVariableValues = new Map<string, LogicalValue[]>();
+  const typedVariableValues = new Map<string, ValueArray>();
 
   for (const v of variables) {
     const vals = variableValues.get(v.name) ?? [];
@@ -181,7 +181,7 @@ export function computeLinearizedStage(
   chunkShape: number[],
   interleaving: 'row' | 'column',
   variables: Variable[],
-  typedVariableValues: Map<string, LogicalValue[]>,
+  typedVariableValues: Map<string, ValueArray>,
 ): LinearizedStageResult {
   const chunkVariables = variables.map((v) => ({
     ...v,
@@ -346,7 +346,7 @@ export function computeFilesStage(
 export interface ReadStageResult {
   stage: PipelineStage;
   readResult: ReadFileResult;
-  logicalValues: Map<string, LogicalValue[]>;
+  logicalValues: Map<string, ValueArray>;
 }
 
 export function computeReadStage(
@@ -360,7 +360,7 @@ export function computeReadStage(
   const readResult = readFile(files, { magic: hexToBytes(magicNumber) });
 
   if (readResult.success) {
-    const logicalValues = new Map<string, LogicalValue[]>();
+    const logicalValues = new Map<string, ValueArray>();
     for (const v of variables) {
       logicalValues.set(v.name, readResult.reconstructedValues.get(v.name) ?? []);
     }
@@ -387,9 +387,9 @@ export interface PipelineResult {
    * consume this instead of re-decoding `stages[0].bytes` themselves — fixes
    * UI-9 and the two other byte-slicing copies in TableView/GridView.
    */
-  logicalValues: Map<string, LogicalValue[]>;
+  logicalValues: Map<string, ValueArray>;
   /** D6: Typed-stage source arrays, keyed by variable NAME. */
-  typedValues: Map<string, LogicalValue[]>;
+  typedValues: Map<string, ValueArray>;
   /** Per-stage ValueSources for traceAt: values/read stages -> logicalValues
    *  (format 'logical'; read uses its reconstructed map), others -> typedValues
    *  (format 'typed'). */
@@ -401,13 +401,13 @@ export interface PipelineResult {
  * source arrays (metadata/write have no per-value regions, so their sources
  * are structurally unused by traceAt, but 'typed' is the correct family). */
 function buildStageSources(
-  logicalValues: Map<string, LogicalValue[]>,
-  typedValues: Map<string, LogicalValue[]>,
-  readLogicalValues: Map<string, LogicalValue[]>,
+  logicalValues: Map<string, ValueArray>,
+  typedValues: Map<string, ValueArray>,
+  readLogicalValues: Map<string, ValueArray>,
 ): Map<StageName, ValueSources> {
-  const logical: ValueSources = { values: logicalValues as Map<string, ValueArray>, format: 'logical' };
-  const typed: ValueSources = { values: typedValues as Map<string, ValueArray>, format: 'typed' };
-  const read: ValueSources = { values: readLogicalValues as Map<string, ValueArray>, format: 'logical' };
+  const logical: ValueSources = { values: logicalValues, format: 'logical' };
+  const typed: ValueSources = { values: typedValues, format: 'typed' };
+  const read: ValueSources = { values: readLogicalValues, format: 'logical' };
   return new Map<StageName, ValueSources>([
     ['values', logical],
     ['typed', typed],

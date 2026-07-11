@@ -4,6 +4,7 @@ import type { CodecStep } from '../types/codecs.ts';
 import type { TypeAssignment } from '../types/state.ts';
 import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import { bytesToValues, valuesToBytes } from './elements.ts';
+import type { ValueArray } from './layout.ts';
 import {
   deserializeMetadata,
   serializeMetadataBinary,
@@ -688,8 +689,8 @@ function chunkGeometry(coords: number[], chunkShape: number[], shape: number[]):
  * their global row-major positions — the exact inverse of `chunk.ts`'s
  * `extractChunkValues`. */
 function scatterChunkValues(
-  target: LogicalValue[],
-  chunkValues: LogicalValue[],
+  target: ValueArray,
+  chunkValues: ValueArray,
   coords: number[],
   chunkShape: number[],
   shape: number[],
@@ -798,12 +799,23 @@ function hasSizeChangingCodec(steps: CodecStep[]): boolean {
 /** Reassemble all variables' values from their chunks, using `getChunkBytes`
  * to resolve each chunk_index entry to bytes (works identically for
  * single-file and per-chunk-file modes — see `ChunkBytesReader`). */
+/** Pre-allocate a variable's reconstruction target: Float64Array (zero-filled,
+ *  matching bytesToValues' now-uniform numeric shape) for numeric dtypes,
+ *  a ''-filled string[] for charN — mirrors the old fill-value convention
+ *  ('' for text, 0 for numeric; Float64Array already zero-fills). */
+function makeReconstructionTarget(dtype: DtypeKey, totalElements: number): ValueArray {
+  if (isCharDtype(dtype)) {
+    return new Array(totalElements).fill('');
+  }
+  return new Float64Array(totalElements);
+}
+
 function reconstructValues(
   ctx: ReassemblyContext,
   getChunkBytes: ChunkBytesReader,
-): Map<string, LogicalValue[]> {
+): Map<string, ValueArray> {
   const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, chunkIndex, totalElements } = ctx;
-  const result = new Map<string, LogicalValue[]>();
+  const result = new Map<string, ValueArray>();
 
   if (interleaving === 'column') {
     // Column mode: each chunk_index entry belongs to exactly one variable
@@ -812,8 +824,7 @@ function reconstructValues(
     for (const varInfo of schema) {
       // Char variables reconstruct into '' (the text analogue of 0) so a
       // missing chunk leaves an empty string, not a bogus numeric zero.
-      const fill: LogicalValue = isCharDtype(varInfo.dtype) ? '' : 0;
-      const values: LogicalValue[] = new Array(totalElements).fill(fill);
+      const values = makeReconstructionTarget(varInfo.dtype, totalElements);
       const steps = fieldPipelines?.[varInfo.name] ?? [];
       const varEntries = (chunkIndex ?? []).filter((e) => e.variableName === varInfo.name);
 
@@ -835,7 +846,7 @@ function reconstructValues(
     const inputDtype = rowModeInputDtype(schema);
 
     for (const varInfo of schema) {
-      result.set(varInfo.name, new Array(totalElements).fill(isCharDtype(varInfo.dtype) ? '' : 0));
+      result.set(varInfo.name, makeReconstructionTarget(varInfo.dtype, totalElements));
     }
 
     for (const entry of chunkIndex ?? []) {
@@ -898,7 +909,7 @@ function deinterleaveRowChunk(
 /** Reverse a type assignment on already-decoded numeric values: re-encode to
  * bytes and call the shared `reverseTypeAssignment` rather than
  * re-implementing scale/offset reversal inline here. */
-function reverseTypeAssignmentValues(values: LogicalValue[], assignment: TypeAssignment): LogicalValue[] {
+function reverseTypeAssignmentValues(values: ValueArray, assignment: TypeAssignment): ValueArray {
   const bytes = valuesToBytes(values, assignment.storageDtype);
   return reverseTypeAssignment(bytes, assignment);
 }

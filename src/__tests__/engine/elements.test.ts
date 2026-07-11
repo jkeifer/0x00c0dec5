@@ -14,6 +14,8 @@ describe('valuesToBytes / bytesToValues roundtrip', () => {
       for (let i = 0; i < testValues.length; i++) {
         expect(result[i]).toBeCloseTo(testValues[i] as number, dtype === 'float32' ? 5 : 10);
       }
+    } else if (result instanceof Float64Array) {
+      expect(Array.from(result)).toEqual(testValues);
     } else {
       expect(result).toEqual(testValues);
     }
@@ -24,6 +26,20 @@ describe('valuesToBytes / bytesToValues roundtrip', () => {
     expect(bytes.length).toBe(0);
     const values = bytesToValues(bytes, 'int32');
     expect(values.length).toBe(0);
+  });
+
+  // Task 11 (perf plan): numeric dtypes return Float64Array uniformly
+  // (ValueArray simplicity); charN dtypes stay a plain string[].
+  it('returns a Float64Array for a numeric dtype', () => {
+    const bytes = valuesToBytes([1, 2, 3], 'int32');
+    expect(bytesToValues(bytes, 'int32')).toBeInstanceOf(Float64Array);
+  });
+
+  it('returns a plain string[] for a charN dtype', () => {
+    const bytes = valuesToBytes(['abcd'], 'char4');
+    const values = bytesToValues(bytes, 'char4');
+    expect(Array.isArray(values)).toBe(true);
+    expect(values).not.toBeInstanceOf(Float64Array);
   });
 });
 
@@ -52,22 +68,22 @@ describe('little-endian byte order', () => {
 describe('edge values', () => {
   it('handles int8 extremes', () => {
     const values = [-128, 0, 127];
-    expect(bytesToValues(valuesToBytes(values, 'int8'), 'int8')).toEqual(values);
+    expect(Array.from(bytesToValues(valuesToBytes(values, 'int8'), 'int8'))).toEqual(values);
   });
 
   it('handles uint8 extremes', () => {
     const values = [0, 128, 255];
-    expect(bytesToValues(valuesToBytes(values, 'uint8'), 'uint8')).toEqual(values);
+    expect(Array.from(bytesToValues(valuesToBytes(values, 'uint8'), 'uint8'))).toEqual(values);
   });
 
   it('handles int32 extremes', () => {
     const values = [-2147483648, 0, 2147483647];
-    expect(bytesToValues(valuesToBytes(values, 'int32'), 'int32')).toEqual(values);
+    expect(Array.from(bytesToValues(valuesToBytes(values, 'int32'), 'int32'))).toEqual(values);
   });
 
   it('handles uint32 extremes', () => {
     const values = [0, 2147483648, 4294967295];
-    expect(bytesToValues(valuesToBytes(values, 'uint32'), 'uint32')).toEqual(values);
+    expect(Array.from(bytesToValues(valuesToBytes(values, 'uint32'), 'uint32'))).toEqual(values);
   });
 
   it('handles float32 special values', () => {

@@ -79,7 +79,7 @@ describe('delta codec', () => {
     const input = valuesToBytes([10, 20, 30, 40], 'int32');
     const result = codec.encode(input, 'int32', { order: 1 });
     const values = bytesToValues(result.bytes, 'int32');
-    expect(values).toEqual([10, 10, 10, 10]);
+    expect(Array.from(values)).toEqual([10, 10, 10, 10]);
   });
 
   it('preserves first value', () => {
@@ -96,14 +96,14 @@ describe('delta codec', () => {
     const input = valuesToBytes([0, 1, 4, 9], 'int32');
     const result = codec.encode(input, 'int32', { order: 2 });
     const values = bytesToValues(result.bytes, 'int32');
-    expect(values).toEqual([0, 1, 2, 2]);
+    expect(Array.from(values)).toEqual([0, 1, 2, 2]);
   });
 
   it('identity with all same values', () => {
     const input = valuesToBytes([5, 5, 5, 5], 'int32');
     const result = codec.encode(input, 'int32', { order: 1 });
     const values = bytesToValues(result.bytes, 'int32');
-    expect(values).toEqual([5, 0, 0, 0]);
+    expect(Array.from(values)).toEqual([5, 0, 0, 0]);
   });
 });
 
@@ -236,7 +236,7 @@ describe('runCodecPipeline', () => {
     expect(result.outputDtype).toBe('int32');
 
     const finalValues = bytesToValues(result.bytes, 'int32');
-    expect(finalValues).toEqual([100, 100, 100]);
+    expect(Array.from(finalValues)).toEqual([100, 100, 100]);
   });
 
   it('collapses to uint8 output dtype through entropy codecs', () => {
@@ -272,7 +272,7 @@ describe('delta decode', () => {
     const encoded = codec.encode(input, 'int32', { order: 1 });
     const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
     const values = bytesToValues(decoded.bytes, 'int32');
-    expect(values).toEqual(originalValues);
+    expect(Array.from(values)).toEqual(originalValues);
   });
 
   it('roundtrips exactly (order 2)', () => {
@@ -281,7 +281,7 @@ describe('delta decode', () => {
     const encoded = codec.encode(input, 'int32', { order: 2 });
     const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { order: 2 });
     const values = bytesToValues(decoded.bytes, 'int32');
-    expect(values).toEqual(originalValues);
+    expect(Array.from(values)).toEqual(originalValues);
   });
 
   it('roundtrips float values', () => {

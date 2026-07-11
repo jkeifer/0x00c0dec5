@@ -157,7 +157,7 @@ describe('reverseTypeAssignment', () => {
     const { bytes } = assignType(values, intType, assignment);
 
     const reversed = reverseTypeAssignment(bytes, assignment);
-    expect(reversed).toEqual(values);
+    expect(Array.from(reversed)).toEqual(values);
   });
 
   it('reverses scale/offset assignment', () => {
@@ -179,7 +179,7 @@ describe('reverseTypeAssignment', () => {
     const { bytes } = assignType(values, decType, assignment);
 
     const reversed = reverseTypeAssignment(bytes, assignment);
-    expect(reversed).toEqual([900, 1000, 1100]);
+    expect(Array.from(reversed)).toEqual([900, 1000, 1100]);
   });
 
   it('reversal is approximate for lossy assignments', () => {

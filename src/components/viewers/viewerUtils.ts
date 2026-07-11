@@ -1,7 +1,7 @@
 import type { ByteTrace, ChunkRegion } from '../../types/pipeline.ts';
 import type { LogicalValue } from '../../types/dtypes.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
-import type { StageLayout, ValueSources, LayoutRegion, ChunkFieldLayout } from '../../engine/layout.ts';
+import type { StageLayout, ValueSources, LayoutRegion, ChunkFieldLayout, ValueArray } from '../../engine/layout.ts';
 import { traceAt, regionAt, byteRangesForTrace } from '../../engine/layout.ts';
 
 export { formatByteCount };
@@ -278,7 +278,7 @@ const EMPTY_DIFF_SUMMARY: DiffSummary = { count: 0, maxAbsError: 0, meanAbsError
  * reaches the result from an out-of-range read. Skips NaN-vs-NaN pairs per
  * `isDiffValue` so lossless NaN round-trips don't inflate the error stats.
  */
-export function computeDiffSummary(values: LogicalValue[], origValues: LogicalValue[]): DiffSummary {
+export function computeDiffSummary(values: ValueArray, origValues: ValueArray): DiffSummary {
   const n = Math.min(values.length, origValues.length);
   let count = 0;
   let sumAbsError = 0;
@@ -307,7 +307,7 @@ export function computeDiffSummary(values: LogicalValue[], origValues: LogicalVa
  * NaN, NaN)` in the cell color (UI-5). NaN-vs-NaN pairs are excluded too
  * (they are not diffs) so a NaN-heavy variable doesn't poison the scale.
  */
-export function computeMaxAbsDiff(values: LogicalValue[], origValues: LogicalValue[]): number {
+export function computeMaxAbsDiff(values: ValueArray, origValues: ValueArray): number {
   const n = Math.min(values.length, origValues.length);
   let maxAbsDiff = 0;
   for (let i = 0; i < n; i++) {

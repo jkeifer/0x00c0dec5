@@ -106,6 +106,17 @@ describe('generateValues', () => {
     const values = generateValues('test', intType, 0);
     expect(values).toHaveLength(0);
   });
+
+  // Task 11 (perf plan): numeric logical types return Float64Array (compact,
+  // transferable in Task 12), not a plain LogicalValue[].
+  it.each([
+    ['integer', intType],
+    ['decimal', decType],
+    ['continuous', floatType],
+  ] as const)('returns a Float64Array for %s logical type', (_label, logicalType) => {
+    const values = generateValues('test', logicalType, 10);
+    expect(values).toBeInstanceOf(Float64Array);
+  });
 });
 
 describe('text generation', () => {
@@ -117,6 +128,14 @@ describe('text generation', () => {
     const a = generateValues('station', textType('cities', 'random'), 64);
     const b = generateValues('station', textType('cities', 'random'), 64);
     expect(a).toEqual(b);
+  });
+
+  // Task 11 (perf plan): text stays a plain string[] — only numeric logical
+  // types migrate to Float64Array.
+  it('returns a plain string[], not a Float64Array', () => {
+    const values = generateValues('station', textType('cities', 'random'), 10);
+    expect(Array.isArray(values)).toBe(true);
+    expect(values).not.toBeInstanceOf(Float64Array);
   });
 
   it('draws every value from the configured word set', () => {

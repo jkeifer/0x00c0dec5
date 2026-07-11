@@ -12,7 +12,7 @@
  * reverse (this file importing from state.ts) is never needed.
  */
 import type { LogicalValue } from './dtypes.ts';
-import type { StageLayout } from '../engine/layout.ts';
+import type { StageLayout, ValueArray } from '../engine/layout.ts';
 
 export type StageName =
   | 'values'
@@ -115,7 +115,7 @@ export interface VariableStats {
 
 export interface ReadSuccess {
   success: true;
-  reconstructedValues: Map<string, LogicalValue[]>;
+  reconstructedValues: Map<string, ValueArray>;
   lossyVariables: Set<string>;
 }
 

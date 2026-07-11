@@ -35,7 +35,7 @@ describe('delta codec — edge cases', () => {
     const encoded = delta.encode(input, 'uint16', { order: 1 });
     const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
     const values = bytesToValues(decoded.bytes, 'uint16');
-    expect(values).toEqual(original);
+    expect(Array.from(values)).toEqual(original);
   });
 
   // FIXED DC-2 (task 2.5) — same former clamping bug, exercised near the dtype's
@@ -46,7 +46,7 @@ describe('delta codec — edge cases', () => {
     const encoded = delta.encode(input, 'uint8', { order: 1 });
     const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
     const values = bytesToValues(decoded.bytes, 'uint8');
-    expect(values).toEqual(original);
+    expect(Array.from(values)).toEqual(original);
   });
 
   // FIXED DC-2 (task 2.5) — order=2 compounds first-differences, so the former
@@ -57,7 +57,7 @@ describe('delta codec — edge cases', () => {
     const encoded = delta.encode(input, 'uint16', { order: 2 });
     const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 2 });
     const values = bytesToValues(decoded.bytes, 'uint16');
-    expect(values).toEqual(original);
+    expect(Array.from(values)).toEqual(original);
   });
 
   // FIXED DC-2 (task 2.5) — order=3 on an unsigned dtype with decreasing values.
@@ -67,7 +67,7 @@ describe('delta codec — edge cases', () => {
     const encoded = delta.encode(input, 'uint16', { order: 3 });
     const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 3 });
     const values = bytesToValues(decoded.bytes, 'uint16');
-    expect(values).toEqual(original);
+    expect(Array.from(values)).toEqual(original);
   });
 
   it('round-trips empty input', () => {
@@ -77,7 +77,7 @@ describe('delta codec — edge cases', () => {
     const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
     expect(decoded.bytes.length).toBe(0);
     const values = bytesToValues(decoded.bytes, 'uint16');
-    expect(values).toEqual([]);
+    expect(Array.from(values)).toEqual([]);
   });
 
   it('round-trips a single element (no diff to take)', () => {
@@ -86,7 +86,7 @@ describe('delta codec — edge cases', () => {
     const encoded = delta.encode(input, 'uint16', { order: 1 });
     const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
     const values = bytesToValues(decoded.bytes, 'uint16');
-    expect(values).toEqual(original);
+    expect(Array.from(values)).toEqual(original);
   });
 
   it('round-trips a single element at order=3', () => {
@@ -95,7 +95,7 @@ describe('delta codec — edge cases', () => {
     const encoded = delta.encode(input, 'uint16', { order: 3 });
     const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 3 });
     const values = bytesToValues(decoded.bytes, 'uint16');
-    expect(values).toEqual(original);
+    expect(Array.from(values)).toEqual(original);
   });
 
   // Signed dtypes are not subject to DC-2 for this particular data (no wraparound
@@ -106,7 +106,7 @@ describe('delta codec — edge cases', () => {
     const encoded = delta.encode(input, 'int16', { order: 1 });
     const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
     const values = bytesToValues(decoded.bytes, 'int16');
-    expect(values).toEqual(original);
+    expect(Array.from(values)).toEqual(original);
   });
 });
 
