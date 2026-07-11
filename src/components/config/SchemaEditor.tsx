@@ -44,6 +44,12 @@ const GENERATION_MODES: { value: LogicalTypeConfig['generation']; label: string 
   { value: 'stepped', label: 'Stepped' },
 ];
 
+/** Soft cap on total values (shape product x variable count). Derived from
+ * the Phase 1-3 exit profile: 3M values (1024x1024 x 3 vars) computes in
+ * ~2.2s with ~1GB peak heap; 8M is roughly the comfort ceiling before
+ * recompute latency and memory get hostile. Advisory only — nothing blocks. */
+export const SOFT_ELEMENT_CAP = 8_388_608;
+
 export function SchemaEditor({
   variables,
   shape,
@@ -137,13 +143,20 @@ export function SchemaEditor({
       {(() => {
         const totalElements = shape.reduce((a, b) => a * b, 1);
         const totalValues = totalElements * Math.max(variables.length, 1);
-        return totalValues > 10_000 ? (
-          <div style={{
-            fontSize: fontSizes.xs,
-            color: colors.warning,
-            padding: `${spacing.xs}px 0`,
-          }}>
-            {totalValues.toLocaleString()} total values — large datasets may be slow
+        return totalValues > SOFT_ELEMENT_CAP ? (
+          <div
+            data-testid="element-cap-warning"
+            style={{
+              background: colors.warningDim,
+              borderLeft: `2px solid ${colors.warning}`,
+              borderRadius: radii.sm,
+              padding: spacing.xs,
+              fontSize: fontSizes.xs,
+              color: colors.warning,
+            }}
+          >
+            {totalValues.toLocaleString()} values — beyond the comfortable limit; recomputes
+            will be slow and memory-heavy. The app won't stop you.
           </div>
         ) : null;
       })()}

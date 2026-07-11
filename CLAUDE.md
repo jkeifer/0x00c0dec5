@@ -205,7 +205,7 @@ Use inline styles with values from `src/theme.ts`. The design doc specifies all 
 - Memoize all pipeline stage computations. A change to codec params should not recompute chunking or interleaving.
 - Virtual scrolling for all list-type views. Use `@tanstack/react-virtual`.
 - Debounce localStorage saves at 500ms.
-- Keep the total element count reasonable (warn above 10K).
+- Keep the total element count reasonable (soft warn above `SOFT_ELEMENT_CAP` = 8,388,608 total values, `src/components/config/SchemaEditor.tsx` — advisory only, does not block).
 
 ### Error handling
 
