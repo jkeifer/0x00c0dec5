@@ -420,6 +420,12 @@ export function chunkRegionsOf(layout: StageLayout): ChunkRegion[] {
       // values: one span per element, labeled by that element's traceId.
       if (r.offsets) {
         for (let el = 0; el < r.elementCount; el++) {
+          // Zero-width text elements (empty string: offsets[el] ===
+          // offsets[el+1]) get no span — buildLogicalValuesStage emits zero
+          // ByteTrace entries for an empty string, so buildChunkRegions
+          // produces no region for it either; a zero-width span here would
+          // diverge from that (see layout.reverse.test.ts's zero-width case).
+          if (r.offsets[el] === r.offsets[el + 1]) continue;
           const coords = flatIndexToCoords(el, layout.shape);
           spans.push({
             label: makeTraceId(r.variableName, coords),

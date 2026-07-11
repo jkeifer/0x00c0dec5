@@ -5,14 +5,28 @@ import {
   computeFilesStage,
 } from '../../hooks/usePipeline.ts';
 import {
-  buildLinearizedLayout, buildEncodedLayout, encodedChunkMeta, traceAt,
+  buildLinearizedLayout, buildEncodedLayout, buildValueBlocksLayout, encodedChunkMeta, traceAt,
   byteRangesForTrace, chunkRegionsOf, elementInChunk, chunkIdForElement,
   type StageLayout, type ValueSources,
 } from '../../engine/layout.ts';
 import { buildChunkRegions } from '../../components/viewers/viewerUtils.ts';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import type { AppState } from '../../types/state.ts';
-import type { DtypeKey } from '../../types/dtypes.ts';
+import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
+
+// A text variable exercises the variable-stride offsets path (same pattern as
+// layout.equivalence.test.ts's TEXT_VAR).
+const TEXT_VAR = {
+  ...DEFAULT_STATE.variables[0],
+  id: 'label', name: 'label', color: '#c678dd',
+  logicalType: { type: 'text', min: 0, max: 0, wordSet: 'names', generation: 'random' },
+  typeAssignment: { storageDtype: 'char8' },
+} as typeof DEFAULT_STATE.variables[0];
+
+const VALUES_CASES = [
+  { name: 'default 3-var', state: DEFAULT_STATE },
+  { name: 'with text var', state: { ...DEFAULT_STATE, variables: [...DEFAULT_STATE.variables, TEXT_VAR] } },
+];
 
 // Reduced matrix per the brief: Task 3's column-multi + row-multi, Task 4's
 // rle case, Task 5's single-file write case.
@@ -132,6 +146,57 @@ describe('chunkRegionsOf equivalence', () => {
     for (const file of files) {
       expect(chunkRegionsOf(file.layout)).toEqual(buildChunkRegions(file.traces as PipelineStage['traces']));
     }
+  });
+
+  for (const c of VALUES_CASES) {
+    it(`${c.name}: values stage`, () => {
+      const values = computeValuesStage(c.state.shape, c.state.variables);
+      const layout = buildValueBlocksLayout(
+        c.state.variables, c.state.shape, values.variableValues,
+        (name) => (values.variableValues.get(name) ?? []).some((v) => typeof v === 'string') ? 'text' : 'float64',
+      );
+      expect(chunkRegionsOf(layout)).toEqual(buildChunkRegions(values.stage.traces));
+    });
+
+    it(`${c.name}: typed stage`, () => {
+      const values = computeValuesStage(c.state.shape, c.state.variables);
+      const typed = computeTypedStage(c.state.shape, c.state.variables, values.variableValues);
+      const layout = buildValueBlocksLayout(
+        c.state.variables, c.state.shape, typed.typedVariableValues,
+        (name) => c.state.variables.find((v) => v.name === name)!.typeAssignment.storageDtype,
+      );
+      expect(chunkRegionsOf(layout)).toEqual(buildChunkRegions(typed.stage.traces));
+    });
+  }
+
+  it('values stage: zero-width text element emits no region (matches buildLogicalValuesStage emitting zero traces)', () => {
+    // Hand-built values map with an empty string at index 1 — no need to
+    // route through generateValues; buildValueBlocksLayout only needs the
+    // values map and a dtype-lookup callback.
+    const variables = [{ name: 'label', color: '#c678dd' }];
+    const values = new Map<string, LogicalValue[]>([['label', ['abc', '', 'de']]]);
+    const layout = buildValueBlocksLayout(variables, [3], values, () => 'text');
+
+    const regions = chunkRegionsOf(layout);
+    // Exactly two regions: 'abc' (3 bytes) and 'de' (2 bytes) — the empty
+    // string at index 1 contributes no region at all.
+    expect(regions).toHaveLength(2);
+    expect(regions[0].byteCount).toBe(3);
+    expect(regions[1].byteCount).toBe(2);
+    expect(regions[0].endByte).toBe(regions[1].startByte); // contiguous, no gap byte for the empty element
+
+    // Neighbors stay consistent: traceAt/byteRangesForTrace for 'abc' (index
+    // 0) and 'de' (index 2) are unaffected by the skipped zero-width element.
+    const sources: ValueSources = { values, format: 'logical' };
+    const abcTrace = traceAt(layout, 0, sources);
+    expect(abcTrace?.coords).toEqual([0]);
+    const abcRanges = byteRangesForTrace(layout, abcTrace!.traceId);
+    expect(abcRanges).toEqual([{ start: 0, end: 3 }]);
+
+    const deTrace = traceAt(layout, 3, sources);
+    expect(deTrace?.coords).toEqual([2]);
+    const deRanges = byteRangesForTrace(layout, deTrace!.traceId);
+    expect(deRanges).toEqual([{ start: 3, end: 5 }]);
   });
 
   it('values stage (structural-only sanity: metadata layout)', () => {
