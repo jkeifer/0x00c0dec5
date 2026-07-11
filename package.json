@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "profile": "npx vite-node scripts/profile.ts"
+    "profile": "node scripts/profile.ts"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.23",
