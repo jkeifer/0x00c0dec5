@@ -227,6 +227,109 @@ Additions to existing files:
 3. **Read failure**: verify that omitting metadata produces the expected failure state.
 4. **Metadata sufficiency**: verify that the metadata contains everything the reader needs — schema, shape, chunks, interleaving, codec specs, chunk index.
 
+## Step log and granular metadata (2026-07)
+
+Two later additions to the Read step, both shipped: a narrated step-by-step log the
+reader produces on every attempt, and finer-grained control over which metadata
+groups get written — each group mapping to exactly one point in that log where its
+absence stops the reader.
+
+### The 8-step log
+
+Every call to `readFile` (`src/engine/read.ts`) narrates through a fixed 8-step
+order, success or failure, recorded in `ReadFileResult.steps: ReadStep[]`
+(`src/types/pipeline.ts`). `READ_STEP_ORDER` is the single source of truth for step
+identity, display label, and what the reader "needs" at that step:
+
+| # | id | label |
+|---|----|-------|
+| 1 | `verify-magic` | Verify magic number |
+| 2 | `locate-metadata` | Locate metadata |
+| 3 | `parse-metadata` | Parse metadata |
+| 4 | `read-schema` | Read schema |
+| 5 | `read-layout` | Read layout |
+| 6 | `locate-chunks` | Locate chunks |
+| 7 | `decode-chunks` | Decode chunks |
+| 8 | `reassemble` | Reassemble values |
+
+Each `ReadStep` carries `outcome: 'ok' | 'failed' | 'skipped'`, plus `needed`/`found`
+text and an optional `detail`. On failure, every step up to and including the
+failing one is recorded (`ok` then one `failed`), and every step after it is
+recorded `skipped` — the reader never attempted them. On success, all 8 are `ok`.
+
+Two places in the UI render this log:
+
+- The sidebar's `ReadStatus` (`src/components/config/ReadStatus.tsx`) shows a one-line
+  progress summary above its existing status message — `read-status-progress`:
+  `"8/8 steps"` on success, `"N/8 steps · failed at: {label}"` on failure, where `N`
+  is the count of `ok` steps and `{label}` is the failed step's label.
+- The Read stage's pane offers a `Process` view mode alongside Table/Grid/Hex/Flat
+  (`READ_VIEW_MODES` in `src/components/viewers/StagePane.tsx`), rendering the full
+  8-row checklist via `ReadProcessView` (`read-process-view`, rows `read-step-{id}`) —
+  shown automatically on failure, or on demand on success.
+
+### Five metadata groups
+
+Metadata inclusion (`state.metadata.include: MetadataIncludeConfig`,
+`src/types/state.ts`) is no longer one `includeMetadata` toggle — it's five
+independent group toggles, each gating a specific set of metadata keys
+(`METADATA_KEY_GROUPS` in `src/engine/metadata.ts`):
+
+| Group | Testid | Keys it gates | Reader step it starves when off |
+|-------|--------|----------------|----------------------------------|
+| `schema` | `include-schema-toggle` | `schema`, `type_assignments`, `logical_types` | `read-schema` — fails `missing-schema` |
+| `layout` | `include-layout-toggle` | `shape`, `chunk_shape`, `chunk_grid`, `chunk_order`, `partitioning`, `interleaving` | `read-layout` — fails `missing-layout` |
+| `codecs` | `include-codecs-toggle` | `codec_pipelines` | `decode-chunks` — see assume-identity below (not a hard failure) |
+| `chunkIndex` | `include-chunk-index-toggle` | `chunk_index` | `locate-chunks` — fails `no-chunk-index` only when a size-changing codec is in play (D3); otherwise offsets are computed from geometry |
+| `descriptive` | `include-descriptive-toggle` | `variable_statistics` + all custom entries | none — the reader never needs this group to reconstruct values |
+
+This replaces the old single-purpose `includeChunkIndex` write option: `chunkIndex`
+above is the same D3 semantics, now one of five groups instead of a standalone flag.
+
+### Assume-identity semantics (codecs group off)
+
+Turning off `codecs` doesn't fail the read the way `schema` or `layout` do, because
+an absent `codec_pipelines` key is genuinely ambiguous. When `parseStructure` finds
+no `codec_pipelines` entry, `reconstructValues` proceeds with an assumed empty
+(identity) pipeline per variable/chunk instead of refusing. That assumption lands in
+one of three outcomes, only one of which the reader can actually distinguish:
+
+1. **Honest success** — no codecs were applied at write time, so "assume identity" is
+   correct and values reconstruct exactly. Indistinguishable, from parsed metadata
+   alone, from outcome 2.
+2. **Garbled-but-same-size** — a non-size-changing codec (Delta, Byte Shuffle) *was*
+   applied, so the assumed-raw bytes are wrong, but the byte count still matches what
+   chunk geometry × dtype size predicts. The read reports `decode-chunks` as `ok`
+   with a `detail` noting the ambiguity (`describeDecodeDetail` in `src/engine/read.ts`):
+   *"no codec info — assumed raw bytes (honest if none were applied at write time;
+   garbled if they were)"* — and the resulting values are silently wrong. This is the
+   one case the reader cannot detect at all.
+3. **Detectably wrong** — a size-changing codec (RLE, LZ) was applied. The assumed-raw
+   byte count no longer matches the geometry-predicted count, `reconstructValues`
+   throws, and `readFile` maps it to failure reason `decode-error` at `decode-chunks`,
+   naming both counts in the message.
+
+In other words: omitting the `codecs` group is safe if and only if no codec pipeline
+was ever attached; otherwise it's a silent correctness bug for reordering-only
+pipelines and a loud, named failure for entropy-codec pipelines.
+
+### Two new failure reasons
+
+`ReadFailureReason` (`src/types/pipeline.ts`) gained two members alongside the
+original six, both surfaced by the `schema`/`layout` groups above:
+
+- **`missing-schema`** — metadata was located and parsed, but the `schema` key itself
+  is absent (`schema` group off at write time). Distinct from `corrupt-metadata`,
+  which is for a `schema` value that's present but fails to parse. Checked at the
+  `read-schema` step.
+- **`missing-layout`** — metadata was located, parsed, and schema was present, but
+  `shape`/`chunk_shape` are absent (`layout` group off). Schema is checked first, so
+  when both groups are off, `missing-schema` wins. Checked at the `read-layout` step.
+
+Both follow the existing failure-taxonomy shape: a `ReadFailureReason` string, a full
+`byteCount`, an educational `message`, and the same 8-step `steps` log (failed at the
+relevant step, later steps `skipped`) as every other failure reason above.
+
 ### Phase Integration
 
 This extension is a single implementation phase that can be done after the main v1 is complete:

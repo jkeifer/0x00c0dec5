@@ -173,10 +173,12 @@ in `tests/ui/` for reference; prefer the `scenario-*.mjs` files and
 - `codec-step-{variable}-{index}` — individual codec pipeline steps
 - `codec-warning-{variable}-{index}` — codec applicability warning icons
 - `footer-locator-toggle` — D1 footer locator radio (trailer/none), shown only when metadata placement is footer
-- `include-chunk-index-toggle` — D3 chunk index toggle in the Metadata section
+- `include-schema-toggle`, `include-layout-toggle`, `include-codecs-toggle`, `include-chunk-index-toggle`, `include-descriptive-toggle` — the Metadata section's five granular include-group toggles (`MetadataIncludeConfig`), each gating a specific set of metadata keys and starving a specific Read step when off (`include-chunk-index-toggle` is D3's chunk index group specifically)
 - `include-metadata-toggle` — the read-extension's "Include metadata" toggle in Write
 - `magic-input` — the Write section's magic-number hex input
 - `read-status` — the sidebar's Read section status display
+- `read-status-progress` — the sidebar Read section's step-progress line above the status message ("8/8 steps", or "N/8 steps · failed at: {label}" on failure)
+- `read-process-view` — the Read stage pane's "Process" view mode, rendering the reader's narrated 8-step log; `read-step-{id}` — individual step rows within it (ids per `READ_STEP_ORDER` in `src/engine/read.ts`)
 - `file-explorer` — the output file list container; `file-entry-{i}` — individual file rows
 - `shape-input` (tabular) / `shape-input-{d}` (array) — dataset shape inputs
 - `add-variable` — the Schema section's "add variable" button
