@@ -12,6 +12,7 @@
  * reverse (this file importing from state.ts) is never needed.
  */
 import type { LogicalValue } from './dtypes.ts';
+import type { StageLayout } from '../engine/layout.ts';
 
 export type StageName =
   | 'values'
@@ -95,7 +96,8 @@ export interface EncodedChunk {
 export interface VirtualFile {
   name: string;
   bytes: Uint8Array;
-  traces: ByteTrace[];
+  traces: ByteTrace[];      // removed in Task 10
+  layout: StageLayout;      // per-file regions (Task 5)
 }
 
 export interface VariableStats {

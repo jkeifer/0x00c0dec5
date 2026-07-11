@@ -213,6 +213,19 @@ export function chunkElementCoords(origin: number[], elementDims: number[], elem
   return local.map((l, d) => origin[d] + l);
 }
 
+/** Build the Metadata stage layout: a single structural region spanning the
+ *  whole serialized metadata blob (matches computeMetadataStage's traces —
+ *  byteInValue: i, i.e. offset within the region, byteCount: full length). */
+export function buildMetadataLayout(byteLength: number): StageLayout {
+  return {
+    byteLength,
+    shape: [],
+    regions: byteLength > 0
+      ? [{ kind: 'structural', start: 0, byteLength, traceId: 'metadata', label: 'metadata' }]
+      : [],
+  };
+}
+
 export function regionAt(layout: StageLayout, byteIndex: number): LayoutRegion | null {
   if (byteIndex < 0 || byteIndex >= layout.byteLength) return null;
   let lo = 0, hi = layout.regions.length - 1;
@@ -308,6 +321,14 @@ export function traceAt(layout: StageLayout, byteIndex: number, sources: ValueSo
       byteInValue: 0, byteCount: 1,
     };
   }
-  // 'structural' regions: implemented in Task 5.
+  if (r.kind === 'structural') {
+    const rel = byteIndex - r.start;
+    return {
+      traceId: r.traceId, variableName: '', variableColor: '',
+      coords: [], displayValue: r.label, dtype: 'uint8', chunkId: '',
+      byteInValue: r.byteInValueMode === 'zero' ? 0 : rel,
+      byteCount: r.byteLength,
+    };
+  }
   return null;
 }

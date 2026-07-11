@@ -1,10 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { DEFAULT_STATE } from '../../types/state.ts';
-import { computeValuesStage, computeTypedStage, computeLinearizedStage, computeEncodedStage } from '../../hooks/usePipeline.ts';
-import { buildValueBlocksLayout, buildLinearizedLayout, buildEncodedLayout, encodedChunkMeta, traceAt } from '../../engine/layout.ts';
+import {
+  computeValuesStage, computeTypedStage, computeLinearizedStage, computeEncodedStage,
+  computeMetadataStage, computeFilesStage, computeReadStage,
+} from '../../hooks/usePipeline.ts';
+import {
+  buildValueBlocksLayout, buildLinearizedLayout, buildEncodedLayout, encodedChunkMeta, traceAt,
+  buildMetadataLayout,
+} from '../../engine/layout.ts';
 import { expectTraceEquivalence } from '../helpers/equivalence.ts';
 import type { CodecStep } from '../../types/codecs.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
+import type { AppState } from '../../types/state.ts';
 
 // A text variable exercises the variable-stride offsets path.
 const TEXT_VAR = {
@@ -158,4 +165,123 @@ describe('encoded-stage layout equivalence', () => {
       expectTraceEquivalence(encLayout, { values: typed.typedVariableValues, format: 'typed' }, enc.stage.traces);
     });
   }
+});
+
+describe('metadata-stage layout equivalence', () => {
+  for (const serialization of ['json', 'binary'] as const) {
+    it(`serialization=${serialization}`, () => {
+      const state = { ...DEFAULT_STATE, metadata: { ...DEFAULT_STATE.metadata, serialization } };
+      const values = computeValuesStage(state.shape, state.variables);
+      const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
+      const linearized = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
+      const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
+      const metadata = computeMetadataStage(state, encoded.encodedChunks, typed.variableStats);
+
+      const layout = buildMetadataLayout(metadata.stage.bytes.length);
+      const sources = { values: new Map(), format: 'logical' as const };
+      expectTraceEquivalence(layout, sources, metadata.stage.traces);
+    });
+  }
+});
+
+// Write matrix: { partitioning: single|per-chunk } x { metadataPlacement:
+// header|footer|sidecar } x { includeMetadata: true|false } x
+// { includeChunkIndex: true|false } is 24 combinations. Reduced to an 8-combo
+// covering subset: every option value appears in >= 2 rows, and the
+// entropy + per-value (column interleaving, non-entropy field pipeline on one
+// var + entropy on another isn't needed here — the ENCODED_CASES above already
+// cover per-value vs chunk-level tracing in isolation) mix below (an entropy
+// chunk pipeline row-interleaved alongside the default column setup's
+// non-entropy field pipelines) appears under BOTH partitionings (rows 0 and 4).
+type WriteCase = {
+  name: string;
+  partitioning: AppState['write']['partitioning'];
+  metadataPlacement: AppState['write']['metadataPlacement'];
+  includeMetadata: boolean;
+  includeChunkIndex: boolean;
+};
+
+const WRITE_CASES: WriteCase[] = [
+  { name: 'single/header/meta/idx', partitioning: 'single', metadataPlacement: 'header', includeMetadata: true, includeChunkIndex: true },
+  { name: 'single/footer/meta/noidx', partitioning: 'single', metadataPlacement: 'footer', includeMetadata: true, includeChunkIndex: false },
+  { name: 'single/sidecar/nometa/idx', partitioning: 'single', metadataPlacement: 'sidecar', includeMetadata: false, includeChunkIndex: true },
+  { name: 'single/header/nometa/noidx', partitioning: 'single', metadataPlacement: 'header', includeMetadata: false, includeChunkIndex: false },
+  { name: 'per-chunk/footer/meta/idx', partitioning: 'per-chunk', metadataPlacement: 'footer', includeMetadata: true, includeChunkIndex: true },
+  { name: 'per-chunk/sidecar/meta/noidx', partitioning: 'per-chunk', metadataPlacement: 'sidecar', includeMetadata: true, includeChunkIndex: false },
+  { name: 'per-chunk/header/nometa/idx', partitioning: 'per-chunk', metadataPlacement: 'header', includeMetadata: false, includeChunkIndex: true },
+  { name: 'per-chunk/footer/nometa/noidx', partitioning: 'per-chunk', metadataPlacement: 'footer', includeMetadata: false, includeChunkIndex: false },
+];
+
+describe('write-stage (VirtualFile.layout) equivalence', () => {
+  for (const c of WRITE_CASES) {
+    it(c.name, () => {
+      // Row interleaving + an entropy chunk pipeline on one run, column
+      // interleaving + default (empty) field pipelines on the rest — between
+      // the 8 rows this exercises both per-value and chunk-level (entropy)
+      // tracing, and both partitionings see an entropy case (rows 0 and 4).
+      const useEntropy = c.name === 'single/header/meta/idx' || c.name === 'per-chunk/footer/meta/idx';
+      const state: AppState = {
+        ...DEFAULT_STATE,
+        interleaving: useEntropy ? 'row' : 'column',
+        chunkShape: useEntropy ? [16] : DEFAULT_STATE.chunkShape,
+        chunkPipeline: useEntropy ? [{ codec: 'rle', params: {} }] : DEFAULT_STATE.chunkPipeline,
+        metadata: { ...DEFAULT_STATE.metadata, includeChunkIndex: c.includeChunkIndex },
+        write: {
+          ...DEFAULT_STATE.write,
+          partitioning: c.partitioning,
+          metadataPlacement: c.metadataPlacement,
+          includeMetadata: c.includeMetadata,
+        },
+      };
+      const values = computeValuesStage(state.shape, state.variables);
+      const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
+      const linearized = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
+      const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
+      const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, linearized);
+
+      const sources = { values: typed.typedVariableValues, format: 'typed' as const };
+      for (const file of files.files) {
+        expectTraceEquivalence(file.layout, sources, file.traces);
+      }
+    });
+  }
+});
+
+describe('read-stage layout equivalence', () => {
+  it('successful read (includeMetadata, header placement)', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+    };
+    const values = computeValuesStage(state.shape, state.variables);
+    const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
+    const linearized = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
+    const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
+    const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, linearized);
+    const read = computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber);
+
+    expect(read.readResult.success).toBe(true);
+    const layout = buildValueBlocksLayout(
+      state.variables, state.shape, read.logicalValues,
+      () => 'float64',
+    );
+    expectTraceEquivalence(layout, { values: read.logicalValues, format: 'logical' }, read.stage.traces);
+  });
+
+  it('failed read produces an empty layout', () => {
+    // includeMetadata defaults to false in DEFAULT_STATE.write, so the reader
+    // has nothing to reconstruct from -> read fails.
+    const state = DEFAULT_STATE;
+    const values = computeValuesStage(state.shape, state.variables);
+    const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
+    const linearized = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
+    const encoded = computeEncodedStage(linearized.chunks, linearized.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
+    const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, linearized);
+    const read = computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber);
+
+    expect(read.readResult.success).toBe(false);
+    expect(read.stage.traces.length).toBe(0);
+    const layout = buildValueBlocksLayout(state.variables, state.shape, new Map(), () => 'float64');
+    expect(layout.byteLength).toBe(0);
+  });
 });

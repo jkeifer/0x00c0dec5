@@ -26,6 +26,7 @@ import { formatValue, formatLogicalValue } from '../engine/elements.ts';
 import { isChunkLevelTrace, makeTraceId } from '../engine/trace.ts';
 import { readFile } from '../engine/read.ts';
 import { hexToBytes, concatBytes } from '../engine/bytes.ts';
+import { buildLinearizedLayout, buildEncodedLayout, encodedChunkMeta, type StageLayout } from '../engine/layout.ts';
 
 function makeStage(name: string, bytes: Uint8Array, traces: ByteTrace[]): PipelineStage {
   return {
@@ -366,12 +367,46 @@ export function computeFilesStage(
   state: AppState,
   encodedChunks: EncodedChunk[],
   variableStats: Map<string, VariableStats>,
+  linearized: LinearizedStageResult,
 ): FilesStageResult {
   const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
-  const files = assembleFiles(state, encodedChunks, chunkGrid, variableStats);
+  const encodedLayout = buildEncodedLayoutFor(state, linearized, encodedChunks);
+  const files = assembleFiles(state, encodedChunks, chunkGrid, variableStats, encodedLayout);
   const writeBytes = concatBytes(files.map((f) => f.bytes));
   const writeTraces = files.flatMap((f) => f.traces);
   return { stage: makeStage('Write', writeBytes, writeTraces), files };
+}
+
+/** Rebuild the Encoded stage's StageLayout (Task 4's buildEncodedLayout) from
+ * the Linearized layout + already-computed encoded chunks, so assembleFiles
+ * can re-base each chunk's region into per-file byte offsets. Mirrors the
+ * per-chunk outputDtype/hasEntropy derivation in the equivalence tests. */
+function buildEncodedLayoutFor(
+  state: AppState,
+  linearized: LinearizedStageResult,
+  encodedChunks: EncodedChunk[],
+): StageLayout {
+  const linLayout = buildLinearizedLayout(
+    linearized.chunks, linearized.linearizedChunks, state.interleaving, state.shape, state.chunkShape,
+  );
+  const nameToId = new Map(state.variables.map((v) => [v.name, v.id]));
+  const outputDtypes: string[] = [];
+  const hasEntropy: boolean[] = [];
+  linearized.chunks.forEach((chunk) => {
+    const steps = state.interleaving === 'column'
+      ? (state.fieldPipelines[nameToId.get(chunk.variables[0]?.variableName ?? '') ?? ''] ?? [])
+      : state.chunkPipeline;
+    const uniqueDtypes = new Set(chunk.variables.map((cv) => cv.dtype));
+    const inputDtype = (chunk.variables.length === 0
+      ? 'uint8'
+      : uniqueDtypes.size > 1
+        ? 'uint8'
+        : chunk.variables[0].dtype) as DtypeKey;
+    const meta = encodedChunkMeta(steps, inputDtype);
+    outputDtypes.push(meta.outputDtype);
+    hasEntropy.push(meta.hasEntropy);
+  });
+  return buildEncodedLayout(linLayout, encodedChunks, outputDtypes, hasEntropy);
 }
 
 // ─── Stage 7: Read ──────────────────────────────────────────────────────────
@@ -447,7 +482,7 @@ export function computePipelineStages(state: AppState): PipelineResult {
     state.chunkPipeline,
   );
   const metadata = computeMetadataStage(state, encoded.encodedChunks, typed.variableStats);
-  const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats);
+  const files = computeFilesStage(state, encoded.encodedChunks, typed.variableStats, linearized);
   const read = computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber);
 
   const stages: PipelineStage[] = [
@@ -527,8 +562,8 @@ export function usePipeline(state: AppState): PipelineResult {
   );
 
   const files = useMemo(
-    () => computeFilesStage(state, encoded.encodedChunks, typed.variableStats),
-    [state, encoded.encodedChunks, typed.variableStats],
+    () => computeFilesStage(state, encoded.encodedChunks, typed.variableStats, linearized),
+    [state, encoded.encodedChunks, typed.variableStats, linearized],
   );
 
   const read = useMemo(

@@ -2,8 +2,38 @@ import type { AppState } from '../types/state.ts';
 import type { EncodedChunk, VirtualFile, ByteTrace, VariableStats } from '../types/pipeline.ts';
 import { collectMetadata, serializeMetadata, deserializeMetadata, type ChunkIndexEntry } from './metadata.ts';
 import { hexToBytes } from './bytes.ts';
+import type { StageLayout, LayoutRegion, ChunkBlockRegion } from './layout.ts';
+import { buildMetadataLayout } from './layout.ts';
 
 export { hexToBytes };
+
+/** Empty layout for call sites (existing tests, mostly) that don't pass an
+ * encoded layout — chunk-data regions just won't be populated for those. */
+const EMPTY_LAYOUT: StageLayout = { byteLength: 0, shape: [], regions: [] };
+
+function chunkRegionLookup(encodedLayout: StageLayout): Map<string, ChunkBlockRegion> {
+  const map = new Map<string, ChunkBlockRegion>();
+  for (const r of encodedLayout.regions) {
+    if (r.kind === 'chunk') map.set(r.chunkId, r);
+  }
+  return map;
+}
+
+/** Re-base the Task 4 encoded region for `chunkId` to start at `cursor` in
+ * the file being assembled. Falls back to a byteLength-only structural-less
+ * placeholder region (kind 'chunk' with no fields) if the lookup, built from
+ * the caller-supplied encoded layout, has nothing for this chunk — callers
+ * that don't pass an encoded layout (pre-Task-5 call sites) get an empty
+ * `regions` array for that stretch of bytes rather than a crash. */
+function rebasedChunkRegion(
+  lookup: Map<string, ChunkBlockRegion>,
+  chunkId: string,
+  cursor: number,
+): LayoutRegion | null {
+  const region = lookup.get(chunkId);
+  if (!region) return null;
+  return { ...region, start: cursor };
+}
 
 /**
  * Order chunks according to the specified ordering.
@@ -53,18 +83,20 @@ export function assembleFiles(
   encodedChunks: EncodedChunk[],
   chunkGrid: number[],
   variableStats?: Map<string, VariableStats>,
+  encodedLayout: StageLayout = EMPTY_LAYOUT,
 ): VirtualFile[] {
   const magic = state.write.magicNumber ? hexToBytes(state.write.magicNumber) : new Uint8Array(0);
   const variableOrder = state.interleaving === 'column'
     ? state.variables.map((v) => v.name)
     : undefined;
   const orderedChunks = orderChunks(encodedChunks, chunkGrid, state.write.chunkOrder, variableOrder);
+  const chunkLookup = chunkRegionLookup(encodedLayout);
 
   if (state.write.partitioning === 'per-chunk') {
-    return assemblePerChunkFiles(state, orderedChunks, magic, variableStats);
+    return assemblePerChunkFiles(state, orderedChunks, magic, chunkLookup, variableStats);
   }
 
-  return assembleSingleFile(state, orderedChunks, magic, chunkGrid, variableStats);
+  return assembleSingleFile(state, orderedChunks, magic, chunkGrid, chunkLookup, variableStats);
 }
 
 /**
@@ -73,8 +105,10 @@ export function assembleFiles(
 function buildNoMetadataFile(
   magic: Uint8Array,
   orderedChunks: EncodedChunk[],
+  chunkLookup: Map<string, ChunkBlockRegion>,
+  shape: number[],
 ): VirtualFile[] {
-  return buildSingleFile(magic, new Uint8Array(0), orderedChunks, 'none');
+  return buildSingleFile(magic, new Uint8Array(0), orderedChunks, 'none', chunkLookup, shape);
 }
 
 function assembleSingleFile(
@@ -82,11 +116,12 @@ function assembleSingleFile(
   orderedChunks: EncodedChunk[],
   magic: Uint8Array,
   _chunkGrid: number[],
+  chunkLookup: Map<string, ChunkBlockRegion>,
   variableStats?: Map<string, VariableStats>,
 ): VirtualFile[] {
   // If metadata is not included, produce file with only magic + chunks + magic
   if (state.write.includeMetadata === false) {
-    return buildNoMetadataFile(magic, orderedChunks);
+    return buildNoMetadataFile(magic, orderedChunks, chunkLookup, state.shape);
   }
 
   const placement = state.write.metadataPlacement;
@@ -98,7 +133,7 @@ function assembleSingleFile(
     // change in offset digit-count can nudge the JSON size again). Iterate to
     // a verified fixed point instead of a fixed number of copy-pasted passes.
     const metaBytes = convergeHeaderMetadata(state, orderedChunks, magic, variableStats);
-    return buildSingleFile(magic, metaBytes, orderedChunks, 'header');
+    return buildSingleFile(magic, metaBytes, orderedChunks, 'header', chunkLookup, state.shape);
   }
 
   if (placement === 'footer') {
@@ -114,7 +149,7 @@ function assembleSingleFile(
     // directly to the metadata without scanning, for JSON and binary alike.
     // footerLocator='none' keeps the plain [magic][chunks][metadata][magic]
     // layout and leaves the reader to a best-effort backward scan.
-    return buildSingleFile(magic, metaBytes, orderedChunks, 'footer', {
+    return buildSingleFile(magic, metaBytes, orderedChunks, 'footer', chunkLookup, state.shape, {
       trailer: state.write.footerLocator === 'trailer',
     });
   }
@@ -125,11 +160,12 @@ function assembleSingleFile(
   const meta = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
   const metaBytes = serializeMetadata(meta, state.metadata.serialization);
 
-  const dataFile = buildSingleFile(magic, new Uint8Array(0), orderedChunks, 'none');
+  const dataFile = buildSingleFile(magic, new Uint8Array(0), orderedChunks, 'none', chunkLookup, state.shape);
   const sidecarFile: VirtualFile = {
     name: 'metadata',
     bytes: metaBytes,
     traces: makeMetadataTraces(metaBytes.length),
+    layout: buildMetadataLayout(metaBytes.length),
   };
 
   return [...dataFile, sidecarFile];
@@ -140,28 +176,53 @@ function buildSingleFile(
   metaBytes: Uint8Array,
   orderedChunks: EncodedChunk[],
   placement: 'header' | 'footer' | 'none',
+  chunkLookup: Map<string, ChunkBlockRegion>,
+  shape: number[],
   options?: { trailer?: boolean },
 ): VirtualFile[] {
   // Layout: [magic][header metadata?][chunks][footer metadata? [+ trailer len]?][magic]
   const parts: Uint8Array[] = [];
   const traceParts: ByteTrace[][] = [];
+  const regions: LayoutRegion[] = [];
+  let cursor = 0;
 
-  parts.push(magic);
-  traceParts.push(makeMagicTraces(magic.length, true));
+  const pushMagic = (isStart: boolean) => {
+    parts.push(magic);
+    traceParts.push(makeMagicTraces(magic.length, isStart));
+    if (magic.length > 0) {
+      regions.push({
+        kind: 'structural', start: cursor, byteLength: magic.length,
+        traceId: isStart ? 'magic:start' : 'magic:end',
+        label: isStart ? 'magic (start)' : 'magic (end)',
+      });
+    }
+    cursor += magic.length;
+  };
+  const pushMetadata = (bytes: Uint8Array) => {
+    parts.push(bytes);
+    traceParts.push(makeMetadataTraces(bytes.length));
+    if (bytes.length > 0) {
+      regions.push({ kind: 'structural', start: cursor, byteLength: bytes.length, traceId: 'metadata', label: 'metadata' });
+    }
+    cursor += bytes.length;
+  };
+
+  pushMagic(true);
 
   if (placement === 'header' && metaBytes.length > 0) {
-    parts.push(metaBytes);
-    traceParts.push(makeMetadataTraces(metaBytes.length));
+    pushMetadata(metaBytes);
   }
 
   for (const chunk of orderedChunks) {
     parts.push(chunk.bytes);
     traceParts.push(chunk.traces);
+    const region = rebasedChunkRegion(chunkLookup, chunk.chunkId, cursor);
+    if (region) regions.push(region);
+    cursor += chunk.bytes.length;
   }
 
   if (placement === 'footer' && metaBytes.length > 0) {
-    parts.push(metaBytes);
-    traceParts.push(makeMetadataTraces(metaBytes.length));
+    pushMetadata(metaBytes);
 
     // D1 trailer: [u32 LE metadata-length] right before the closing magic —
     // Parquet-style. Lets the reader seek to `end - magicLen - 4`, read the
@@ -170,13 +231,11 @@ function buildSingleFile(
       const lenBuf = new ArrayBuffer(4);
       new DataView(lenBuf).setUint32(0, metaBytes.length, true);
       const lenBytes = new Uint8Array(lenBuf);
-      parts.push(lenBytes);
-      traceParts.push(makeMetadataTraces(lenBytes.length));
+      pushMetadata(lenBytes);
     }
   }
 
-  parts.push(magic);
-  traceParts.push(makeMagicTraces(magic.length, false));
+  pushMagic(false);
 
   const totalLength = parts.reduce((acc, p) => acc + p.length, 0);
   const bytes = new Uint8Array(totalLength);
@@ -189,13 +248,14 @@ function buildSingleFile(
     offset += parts[i].length;
   }
 
-  return [{ name: 'data', bytes, traces }];
+  return [{ name: 'data', bytes, traces, layout: { byteLength: totalLength, shape, regions } }];
 }
 
 function assemblePerChunkFiles(
   state: AppState,
   orderedChunks: EncodedChunk[],
   magic: Uint8Array,
+  chunkLookup: Map<string, ChunkBlockRegion>,
   variableStats?: Map<string, VariableStats>,
 ): VirtualFile[] {
   const files: VirtualFile[] = [];
@@ -208,20 +268,29 @@ function assemblePerChunkFiles(
     const totalLength = parts.reduce((acc, p) => acc + p.length, 0);
     const bytes = new Uint8Array(totalLength);
     const traces: ByteTrace[] = [];
+    const regions: LayoutRegion[] = [];
 
     let offset = 0;
     bytes.set(magic, offset);
     traces.push(...makeMagicTraces(magic.length, true));
+    if (magic.length > 0) {
+      regions.push({ kind: 'structural', start: offset, byteLength: magic.length, traceId: 'magic:start', label: 'magic (start)' });
+    }
     offset += magic.length;
 
     bytes.set(chunk.bytes, offset);
     traces.push(...chunk.traces);
+    const chunkRegion = rebasedChunkRegion(chunkLookup, chunk.chunkId, offset);
+    if (chunkRegion) regions.push(chunkRegion);
     offset += chunk.bytes.length;
 
     bytes.set(magic, offset);
     traces.push(...makeMagicTraces(magic.length, false));
+    if (magic.length > 0) {
+      regions.push({ kind: 'structural', start: offset, byteLength: magic.length, traceId: 'magic:end', label: 'magic (end)' });
+    }
 
-    files.push({ name, bytes, traces });
+    files.push({ name, bytes, traces, layout: { byteLength: totalLength, shape: state.shape, regions } });
   }
 
   // Only include metadata sidecar when includeMetadata is true
@@ -239,7 +308,10 @@ function assemblePerChunkFiles(
     }));
     const meta = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
     const metaBytes = serializeMetadata(meta, state.metadata.serialization);
-    files.push({ name: 'metadata', bytes: metaBytes, traces: makeMetadataTraces(metaBytes.length) });
+    files.push({
+      name: 'metadata', bytes: metaBytes, traces: makeMetadataTraces(metaBytes.length),
+      layout: buildMetadataLayout(metaBytes.length),
+    });
   }
 
   return files;
