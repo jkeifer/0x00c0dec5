@@ -4,9 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/get-git-info.js",
     "dev": "vite",
-    "prebuild": "node scripts/get-git-info.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
