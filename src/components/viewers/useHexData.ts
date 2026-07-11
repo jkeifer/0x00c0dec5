@@ -35,10 +35,51 @@ export interface HexSectionData {
   regionByByte: Uint8Array;
   regionBoundaries: Set<number>;
   rowCount: number;
+  /** True when this section renders a bounded WINDOW_ROWS-row window (with a
+   * FileMapStrip + offset-jump input above its rows) instead of virtualizing
+   * all `rowCount` rows at once. */
+  windowed: boolean;
   /** Row offset (in ROW_HEIGHT units) of this section's first row within the
    * combined virtual scroll space — i.e. sum of prior sections' header rows
-   * (0 or 1) + body rows. */
+   * (0 or 1) + body rows. For a windowed section, "body rows" here means the
+   * windowed row count (min(rowCount, WINDOW_ROWS)), since that's all that's
+   * ever mounted — see `rowOffsetExtraPx` for the strip/input height. */
   rowOffset: number;
+  /** Extra pixel height (beyond `rowOffset * ROW_HEIGHT`) consumed by this
+   * section's FileMapStrip + offset-jump input row, when windowed (0
+   * otherwise). Downstream sections' scrollMargin must add every prior
+   * section's `rowOffsetExtraPx` on top of the row-based offset — see
+   * HexView.tsx's scrollMargins computation. */
+  rowOffsetExtraPx: number;
+}
+
+/** Sections whose rowCount exceeds this render a bounded row window with a
+ *  FileMapStrip instead of unbounded virtual scroll. 262,144 rows = 4MB at
+ *  16 B/row = ~5.2M px of scroll height — comfortably under Firefox's
+ *  ~17.9M px element-height cap with headroom for multi-section views. */
+export const WINDOWED_SECTION_ROWS = 262_144;
+/** Rows per window (65,536 rows = 1MB at 16 B/row = ~1.3M px). */
+export const WINDOW_ROWS = 65_536;
+/** Pixel height of the FileMapStrip (16px, STRIP_HEIGHT in FileMapStrip.tsx)
+ *  + offset-jump input row rendered above a windowed section's rows. This is
+ *  the single source of truth for that box's height — HexView.tsx sets the
+ *  controls wrapper's inline `height` to exactly this value, so whatever
+ *  fits inside is cosmetic only; rowOffset math for downstream sections
+ *  staying correct just requires using this same constant in both places
+ *  (see `rowOffsetExtraPx`). */
+export const WINDOW_CONTROLS_HEIGHT = 52;
+
+/** Clamp a desired window start row: aligned to whole rows, >= 0, and never
+ *  leaving trailing dead space (start <= rowCount - WINDOW_ROWS). */
+export function clampWindowStart(desiredStartRow: number, rowCount: number): number {
+  const maxStart = Math.max(0, rowCount - WINDOW_ROWS);
+  return Math.max(0, Math.min(Math.floor(desiredStartRow), maxStart));
+}
+
+/** Window start row that centers `byteOffset`'s row. */
+export function windowStartForByte(byteOffset: number, bytesPerRow: number, rowCount: number): number {
+  const targetRow = Math.floor(byteOffset / bytesPerRow);
+  return clampWindowStart(targetRow - WINDOW_ROWS / 2, rowCount);
 }
 
 export interface HexData {
@@ -105,6 +146,7 @@ export function useHexData(sections: HexSection[], bytesPerRow: number): HexData
     const showHeaders = sections.length > 1;
     let maxBytes = 0;
     let rowOffset = 0;
+    let extraPx = 0;
     const sectionData: HexSectionData[] = sections.map((section) => {
       const { regions, regionByByte, regionBoundaries } = computeRegions(
         section.bytes,
@@ -112,6 +154,8 @@ export function useHexData(sections: HexSection[], bytesPerRow: number): HexData
         section.chunkRegions,
       );
       const rowCount = Math.max(1, Math.ceil(section.bytes.length / bytesPerRow));
+      const windowed = rowCount > WINDOWED_SECTION_ROWS;
+      const visibleRowCount = windowed ? Math.min(rowCount, WINDOW_ROWS) : rowCount;
       const data: HexSectionData = {
         key: section.key,
         header: section.header,
@@ -122,9 +166,12 @@ export function useHexData(sections: HexSection[], bytesPerRow: number): HexData
         regionByByte,
         regionBoundaries,
         rowCount,
+        windowed,
         rowOffset,
+        rowOffsetExtraPx: extraPx,
       };
-      rowOffset += rowCount + (showHeaders ? 1 : 0);
+      rowOffset += visibleRowCount + (showHeaders ? 1 : 0);
+      if (windowed) extraPx += WINDOW_CONTROLS_HEIGHT;
       if (section.bytes.length > maxBytes) maxBytes = section.bytes.length;
       return data;
     });

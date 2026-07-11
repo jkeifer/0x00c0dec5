@@ -20,7 +20,13 @@ interface FileMapStripProps {
 export function FileMapStrip({ layout, windowStart, windowEnd, onJump }: FileMapStripProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const width = useContainerWidth(containerRef);
+  // ponytail: ResizeObserver's contentRect.width is a float (subpixel layout);
+  // Uint8ClampedArray/ImageData/canvas.width all require integer pixel
+  // counts, so floor once here rather than at each of the several call sites
+  // below (first real consumer of FileMapStrip — Task 6 added the component
+  // but nothing exercised this path against a non-integer container width
+  // until now).
+  const width = Math.floor(useContainerWidth(containerRef));
 
   // Draw: build a 1px-tall color row from fileMapColors and stretch it to
   // the strip's full height via drawImage (cheaper than materializing a

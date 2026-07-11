@@ -1,10 +1,20 @@
-import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
+import { useRef, useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
 import { HexRowRenderer } from './HexRowRenderer.tsx';
-import { useHexData, firstByteForTrace, type HexSection, type HexSectionData } from './useHexData.ts';
+import {
+  useHexData,
+  firstByteForTrace,
+  clampWindowStart,
+  windowStartForByte,
+  WINDOW_ROWS,
+  WINDOW_CONTROLS_HEIGHT,
+  type HexSection,
+  type HexSectionData,
+} from './useHexData.ts';
+import { FileMapStrip } from './FileMapStrip.tsx';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 
 export type { HexSection };
@@ -38,6 +48,72 @@ interface HexSectionViewProps {
   interleaving: 'row' | 'column';
   onHover: (traceId: string, chunkId: string) => void;
   showHeader: boolean;
+  windowStart: number;
+  onWindowStartChange: (newStart: number) => void;
+}
+
+/** Parses an offset-jump input value: `0x`-prefixed or bare hex. Returns
+ *  undefined for anything that doesn't parse (edge-case philosophy — invalid
+ *  input is ignored, not an error). */
+function parseHexOffset(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  const hexPart = trimmed.toLowerCase().startsWith('0x') ? trimmed.slice(2) : trimmed;
+  if (hexPart === '' || !/^[0-9a-f]+$/i.test(hexPart)) return undefined;
+  const value = parseInt(hexPart, 16);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+interface HexWindowControlsProps {
+  layout: HexSectionData['layout'];
+  windowStart: number;
+  windowEnd: number;
+  bytesPerRow: number;
+  onJump: (byteOffset: number) => void;
+}
+
+/** FileMapStrip + offset-jump input rendered above a windowed section's rows
+ *  (WINDOW_CONTROLS_HEIGHT tall — kept in sync with useHexData.ts's constant
+ *  so downstream sections' scrollMargin math lines up). */
+function HexWindowControls({ layout, windowStart, windowEnd, bytesPerRow, onJump }: HexWindowControlsProps) {
+  const [offsetInput, setOffsetInput] = useState('');
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== 'Enter') return;
+    const byteOffset = parseHexOffset(offsetInput);
+    if (byteOffset === undefined) return;
+    onJump(byteOffset);
+  }
+
+  return (
+    <div style={{ height: WINDOW_CONTROLS_HEIGHT, boxSizing: 'border-box', overflow: 'hidden', padding: `${spacing.xs}px ${spacing.sm}px` }}>
+      <FileMapStrip
+        layout={layout}
+        windowStart={windowStart * bytesPerRow}
+        windowEnd={windowEnd * bytesPerRow}
+        onJump={onJump}
+      />
+      <input
+        type="text"
+        data-testid="hex-offset-input"
+        placeholder="jump to offset (hex)"
+        value={offsetInput}
+        onChange={(e) => setOffsetInput(e.target.value)}
+        onKeyDown={handleKeyDown}
+        style={{
+          marginTop: spacing.xs,
+          width: '100%',
+          boxSizing: 'border-box',
+          background: colors.surface,
+          color: colors.textPrimary,
+          border: `1px solid ${colors.border}`,
+          borderRadius: 2,
+          fontFamily: fonts.mono,
+          fontSize: fontSizes.sm,
+          padding: `1px ${spacing.xs}px`,
+        }}
+      />
+    </div>
+  );
 }
 
 /**
@@ -66,22 +142,52 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
       interleaving,
       onHover,
       showHeader,
+      windowStart,
+      onWindowStartChange,
     },
     ref,
   ) {
+    const { windowed, rowCount } = sectionData;
+    const visibleCount = windowed ? Math.min(WINDOW_ROWS, rowCount - windowStart) : rowCount;
+
     const virtualizer = useVirtualizer({
-      count: sectionData.rowCount,
+      count: visibleCount,
       getScrollElement: () => scrollElementRef.current,
       estimateSize: () => ROW_HEIGHT,
       overscan: 10,
       scrollMargin,
     });
 
+    // Cross-pane hover into a row outside the current window: change the
+    // window first, then scroll once the new window's virtualizer reflects
+    // it (next render). pendingScrollRow holds the true row index we owe a
+    // scroll to; the effect below fires after windowStart lands.
+    const pendingScrollRow = useRef<number | null>(null);
+
     useImperativeHandle(ref, () => ({
       scrollToRow: (rowIndex: number) => {
-        virtualizer.scrollToIndex(rowIndex, { align: 'auto' });
+        if (windowed && (rowIndex < windowStart || rowIndex >= windowStart + visibleCount)) {
+          pendingScrollRow.current = rowIndex;
+          onWindowStartChange(clampWindowStart(windowStartForByte(rowIndex * bytesPerRow, bytesPerRow, rowCount), rowCount));
+          return;
+        }
+        virtualizer.scrollToIndex(rowIndex - windowStart, { align: 'auto' });
       },
     }));
+
+    useEffect(() => {
+      if (pendingScrollRow.current === null) return;
+      const target = pendingScrollRow.current;
+      pendingScrollRow.current = null;
+      if (target >= windowStart && target < windowStart + visibleCount) {
+        virtualizer.scrollToIndex(target - windowStart, { align: 'auto' });
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [windowStart]);
+
+    function handleJump(byteOffset: number) {
+      onWindowStartChange(clampWindowStart(windowStartForByte(byteOffset, bytesPerRow, rowCount), rowCount));
+    }
 
     return (
       <div style={{ position: 'relative' }}>
@@ -110,6 +216,15 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
             </span>
           </div>
         )}
+        {windowed && (
+          <HexWindowControls
+            layout={sectionData.layout}
+            windowStart={windowStart}
+            windowEnd={windowStart + visibleCount}
+            bytesPerRow={bytesPerRow}
+            onJump={handleJump}
+          />
+        )}
         <div
           style={{
             height: virtualizer.getTotalSize(),
@@ -118,7 +233,7 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
           }}
         >
           {virtualizer.getVirtualItems().map((virtualRow) => {
-            const rowIndex = virtualRow.index;
+            const rowIndex = windowed ? windowStart + virtualRow.index : virtualRow.index;
             const byteStart = rowIndex * bytesPerRow;
             const byteEnd = Math.min(byteStart + bytesPerRow, sectionData.bytes.length);
 
@@ -183,6 +298,12 @@ export function HexView({ sections, paneId, chunkShape, interleaving }: HexViewP
 
   const hexData = useHexData(sections, bytesPerRow);
 
+  // Per-section window start row (only meaningful for windowed sections),
+  // keyed by section key so it survives across renders as sections change.
+  // Below WINDOWED_SECTION_ROWS a section never reads this — it's always 0
+  // and unused, preserving today's unbounded-virtualizer behavior exactly.
+  const [windowStarts, setWindowStarts] = useState<Record<string, number>>({});
+
   const isCrossPane = hoverSource !== null && hoverSource !== paneId;
 
   // HexRowRenderer already resolves the chunkId (falling back to
@@ -194,8 +315,11 @@ export function HexView({ sections, paneId, chunkShape, interleaving }: HexViewP
   };
 
   // Compute each section's scrollMargin (its rowOffset already accounts for
-  // headers, so the byte offset is simply rowOffset * ROW_HEIGHT).
-  const scrollMargins = hexData.sections.map((s) => s.rowOffset * ROW_HEIGHT);
+  // headers, so the byte offset is simply rowOffset * ROW_HEIGHT — plus any
+  // prior windowed sections' FileMapStrip/offset-input height, which isn't
+  // row-shaped so it's tracked separately as rowOffsetExtraPx and added in
+  // raw pixels).
+  const scrollMargins = hexData.sections.map((s) => s.rowOffset * ROW_HEIGHT + s.rowOffsetExtraPx);
 
   // Cross-pane scroll sync: find the hovered trace/chunk across all sections.
   useEffect(() => {
@@ -242,6 +366,8 @@ export function HexView({ sections, paneId, chunkShape, interleaving }: HexViewP
           interleaving={interleaving}
           onHover={handleHover}
           showHeader={hexData.showHeaders}
+          windowStart={windowStarts[sd.key] ?? 0}
+          onWindowStartChange={(newStart) => setWindowStarts((prev) => ({ ...prev, [sd.key]: newStart }))}
         />
       ))}
     </div>
