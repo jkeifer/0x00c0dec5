@@ -1,9 +1,9 @@
-import type { ByteTrace, Chunk, LinearizedChunk } from '../types/pipeline.ts';
+import type { ByteTrace, Chunk, ChunkRegion, LinearizedChunk } from '../types/pipeline.ts';
 import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
 import { getDtype } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import { CODEC_REGISTRY, outputDtypeFor } from './codecs.ts';
-import { makeTraceId } from './trace.ts';
+import { makeTraceId, makeChunkTraceId, parseTraceId } from './trace.ts';
 import { formatValue, formatLogicalValue } from './elements.ts';
 import { flatIndexToCoords, coordsToFlatIndex } from './chunk.ts';
 
@@ -331,4 +331,182 @@ export function traceAt(layout: StageLayout, byteIndex: number, sources: ValueSo
     };
   }
   return null;
+}
+
+export interface ByteRange { start: number; end: number } // end exclusive
+
+/** All byte ranges in this stage belonging to traceId (value, chunk, or
+ *  structural). Inverts traceAt: for every byte i, the range(s) returned for
+ *  traceAt(layout, i, sources)!.traceId always include i (see
+ *  layout.reverse.test.ts's inversion property test). */
+export function byteRangesForTrace(layout: StageLayout, traceId: string): ByteRange[] {
+  const parsed = parseTraceId(traceId);
+
+  if (parsed.kind === 'chunk') {
+    const ranges: ByteRange[] = [];
+    for (const r of layout.regions) {
+      if (r.kind === 'chunk' && r.chunkId === parsed.chunkId) {
+        ranges.push({ start: r.start, end: r.start + r.byteLength });
+      }
+    }
+    return ranges;
+  }
+
+  // Structural ids ('magic:start', 'magic:end', 'metadata', ...) — matched
+  // directly since parseTraceId degrades them to a degenerate 'value' kind
+  // with variableName === the raw id and empty coords (see trace.ts's doc
+  // comment). Try structural regions first; a real value traceId never
+  // collides with a structural one (variable names can't contain ':' — see
+  // trace.ts — but a structural id like 'metadata' has no ':' either, so it
+  // parses as { variableName: 'metadata', coords: [] } and must be checked
+  // as a structural id explicitly, not inferred from parse shape).
+  const structural = layout.regions.filter(
+    (r): r is StructuralRegion => r.kind === 'structural' && r.traceId === traceId,
+  );
+  if (structural.length > 0) {
+    return structural.map((r) => ({ start: r.start, end: r.start + r.byteLength }));
+  }
+
+  const { variableName, coords } = parsed;
+  const ranges: ByteRange[] = [];
+
+  for (const r of layout.regions) {
+    if (r.kind === 'values' && r.variableName === variableName) {
+      const el = coordsToFlatIndex(coords, layout.shape);
+      if (el < 0 || el >= r.elementCount) continue;
+      if (r.offsets) {
+        ranges.push({ start: r.start + r.offsets[el], end: r.start + r.offsets[el + 1] });
+      } else {
+        const stride = r.stride!;
+        ranges.push({ start: r.start + el * stride, end: r.start + (el + 1) * stride });
+      }
+    } else if (r.kind === 'chunk' && r.mode === 'value-preserving') {
+      const field = r.fields.find((f) => f.variableName === variableName);
+      if (!field) continue;
+      const inBounds = r.origin.every((o, d) => coords[d] >= o && coords[d] < o + r.elementDims[d]);
+      if (!inBounds) continue;
+      const local = coords.map((c, d) => c - r.origin[d]);
+      const elemFlat = coordsToFlatIndex(local, r.elementDims);
+      let start: number;
+      if (r.interleaving === 'column') {
+        start = r.start + field.offset + elemFlat * field.size;
+      } else {
+        const recordSize = r.fields.reduce((a, f) => a + f.size, 0);
+        start = r.start + elemFlat * recordSize + field.offset;
+      }
+      ranges.push({ start, end: start + field.size });
+    }
+  }
+
+  return ranges;
+}
+
+/** Reproduces buildChunkRegions(traces) output from the layout alone: fold
+ *  consecutive same-label spans into one ChunkRegion. Mirrors
+ *  viewerUtils.ts's getRegionLabel: structural ids label by traceId; chunk
+ *  regions (value-preserving or chunk-level) label by chunkId; values
+ *  regions label per-element by that element's own traceId (`${variableName}
+ *  :${coords}`), since buildChunkRegions operates per-byte-trace and each
+ *  value's bytes carry a distinct traceId with chunkId === ''. */
+export function chunkRegionsOf(layout: StageLayout): ChunkRegion[] {
+  const spans: { label: string; start: number; end: number }[] = [];
+
+  for (const r of layout.regions) {
+    if (r.kind === 'structural') {
+      spans.push({ label: r.traceId, start: r.start, end: r.start + r.byteLength });
+    } else if (r.kind === 'chunk') {
+      spans.push({ label: r.chunkId, start: r.start, end: r.start + r.byteLength });
+    } else {
+      // values: one span per element, labeled by that element's traceId.
+      if (r.offsets) {
+        for (let el = 0; el < r.elementCount; el++) {
+          const coords = flatIndexToCoords(el, layout.shape);
+          spans.push({
+            label: makeTraceId(r.variableName, coords),
+            start: r.start + r.offsets[el], end: r.start + r.offsets[el + 1],
+          });
+        }
+      } else {
+        const stride = r.stride!;
+        for (let el = 0; el < r.elementCount; el++) {
+          const coords = flatIndexToCoords(el, layout.shape);
+          spans.push({
+            label: makeTraceId(r.variableName, coords),
+            start: r.start + el * stride, end: r.start + (el + 1) * stride,
+          });
+        }
+      }
+    }
+  }
+
+  const regions: ChunkRegion[] = [];
+  if (spans.length === 0) return regions;
+
+  let currentLabel = spans[0].label;
+  let startByte = spans[0].start;
+  let endByte = spans[0].end;
+
+  for (let i = 1; i <= spans.length; i++) {
+    const span = i < spans.length ? spans[i] : null;
+    if (!span || span.label !== currentLabel) {
+      regions.push({ label: currentLabel, startByte, endByte, byteCount: endByte - startByte });
+      if (span) {
+        currentLabel = span.label;
+        startByte = span.start;
+        endByte = span.end;
+      }
+    } else {
+      endByte = span.end;
+    }
+  }
+
+  return regions;
+}
+
+/** The chunkId containing element coords (mirrors linearize.ts's id
+ *  construction: column single-var chunks get `chunk:${variableName}:
+ *  ${chunkCoords}`, everything else gets `chunk:${chunkCoords}`). Pure math
+ *  — floor-divide each coordinate by the chunk shape to get the chunk's grid
+ *  coordinates, exactly as buildLinearizedLayout derives `origin` from
+ *  `chunk.coords`. Note: this always assumes a per-variable (single-var)
+ *  chunk in column mode — callers doing row-interleaving or multi-variable
+ *  column chunks pass the shared `chunk:${coords}` id regardless of which
+ *  variableName is given, matching linearizeChunk's isSingleVarColumn rule. */
+export function chunkIdForElement(
+  variableName: string,
+  coords: number[],
+  chunkShape: number[],
+  interleaving: 'row' | 'column',
+): string {
+  const chunkCoords = coords.map((c, d) => Math.floor(c / chunkShape[d]));
+  if (interleaving === 'column') {
+    return makeChunkTraceId(`${variableName}:${chunkCoords.join(',')}`);
+  }
+  return makeChunkTraceId(chunkCoords.join(','));
+}
+
+/** Does element `coords` of `variableName` live in chunk `chunkId`? Pure
+ *  math: parse the chunkId's trailing coordinate list and compare against
+ *  floor(coords[d] / chunkShape[d]) per dimension. A column single-var
+ *  chunkId (`chunk:name:0,1`) also requires the variableName to match. */
+export function elementInChunk(
+  chunkId: string,
+  variableName: string,
+  coords: number[],
+  chunkShape: number[],
+): boolean {
+  if (!chunkId.startsWith('chunk:')) return false;
+  const rest = chunkId.slice('chunk:'.length);
+  const parts = rest.split(':');
+  let coordsPart: string;
+  if (parts.length === 2) {
+    // column single-var: 'name:coords'
+    if (parts[0] !== variableName) return false;
+    coordsPart = parts[1];
+  } else {
+    coordsPart = parts[0];
+  }
+  const chunkCoords = coordsPart === '' ? [] : coordsPart.split(',').map(Number);
+  if (chunkCoords.length !== coords.length) return false;
+  return chunkCoords.every((cc, d) => cc === Math.floor(coords[d] / chunkShape[d]));
 }
