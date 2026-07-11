@@ -113,10 +113,38 @@ export interface VariableStats {
                       // the dtype's width, cut to fit. truncated > 0 => isLossy.
 }
 
+/**
+ * One step of the reader's narrated 8-step log (read plan Task 2) — mirrors
+ * how a real-format reader proceeds: verify magic, locate metadata, parse
+ * it, read the schema and layout it describes, locate chunks, decode them,
+ * reassemble values. Attached to BOTH success and failure results so the UI
+ * can show the same log either way — only the tail differs (all 'ok' vs a
+ * 'failed' step followed by 'skipped' ones).
+ */
+export type ReadStepId =
+  | 'verify-magic'
+  | 'locate-metadata'
+  | 'parse-metadata'
+  | 'read-schema'
+  | 'read-layout'
+  | 'locate-chunks'
+  | 'decode-chunks'
+  | 'reassemble';
+
+export interface ReadStep {
+  id: ReadStepId;
+  label: string;
+  needed: string;
+  found: string;
+  outcome: 'ok' | 'failed' | 'skipped';
+  detail?: string;
+}
+
 export interface ReadSuccess {
   success: true;
   reconstructedValues: Map<string, ValueArray>;
   lossyVariables: Set<string>;
+  steps: ReadStep[];
 }
 
 /**
@@ -147,6 +175,7 @@ export interface ReadFailure {
   reason: ReadFailureReason;
   message: string;
   byteCount: number;
+  steps: ReadStep[];
 }
 
 export type ReadFileResult = ReadSuccess | ReadFailure;

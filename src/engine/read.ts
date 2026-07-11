@@ -1,4 +1,4 @@
-import type { VirtualFile, ReadFileResult, ReadFailureReason } from '../types/pipeline.ts';
+import type { VirtualFile, ReadFileResult, ReadFailureReason, ReadStep, ReadStepId } from '../types/pipeline.ts';
 import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import type { TypeAssignment } from '../types/state.ts';
@@ -68,9 +68,10 @@ export function readFile(
 ): ReadFileResult {
   const magicBytes = formatSpec.magic;
   const dataFiles = files.filter((f) => f.name !== 'metadata');
+  const recorder = createStepRecorder();
 
   if (dataFiles.length === 0) {
-    return makeFailure('no-metadata', 0);
+    return makeFailure('no-metadata', 0, recorder, 'verify-magic', 'no data files');
   }
 
   // D2: the reader knows the format's magic number and verifies it, rather
@@ -79,15 +80,20 @@ export function readFile(
   if (magicBytes.length > 0) {
     for (const file of dataFiles) {
       if (!verifyMagic(file.bytes, magicBytes)) {
-        return makeFailure('bad-magic', totalBytes(dataFiles));
+        const found = describeMagicMismatch(file.bytes, magicBytes);
+        return makeFailure('bad-magic', totalBytes(dataFiles), recorder, 'verify-magic', found);
       }
     }
+    recorder.ok('verify-magic', `leading/trailing bytes match expected magic (${magicBytes.length} bytes)`);
+  } else {
+    recorder.ok('verify-magic', 'zero-length magic — nothing to verify');
   }
 
   const located = locateMetadata(files, dataFiles, magicBytes);
   if (!located.entries) {
-    return makeFailure(located.reason, totalBytes(dataFiles));
+    return makeFailure(located.reason, totalBytes(dataFiles), recorder, 'locate-metadata', located.found);
   }
+  recorder.ok('locate-metadata', located.found);
 
   let structure: ParsedStructure;
   try {
@@ -97,28 +103,53 @@ export function readFile(
     // describe a dataset (missing fields), or a field's JSON didn't parse
     // into the shape the reader expects — located-but-unusable is corrupt,
     // not absent.
-    return makeFailure('corrupt-metadata', totalBytes(dataFiles), describeError(err));
+    return makeFailure(
+      'corrupt-metadata',
+      totalBytes(dataFiles),
+      recorder,
+      'parse-metadata',
+      'entries located but did not parse into a dataset structure',
+      describeError(err),
+    );
   }
+  recorder.ok('parse-metadata', `${located.entries.length} entries parsed`);
+  // Presence checks for schema/layout are split out in a later task —
+  // reaching here means parseStructure already succeeded, which today
+  // requires schema/shape/chunk_shape to all be present (its combined throw
+  // is caught above and mapped to corrupt-metadata), so both are ok here.
+  recorder.ok('read-schema', `${structure.schema.length} variable(s): ${structure.schema.map((s) => s.name).join(', ')}`);
+  recorder.ok('read-layout', `shape [${structure.shape.join(',')}], chunk shape [${structure.chunkShape.join(',')}], ${structure.interleaving} interleaving`);
 
   try {
-    return reconstruct(structure, dataFiles, magicBytes, located.chunkDataStart);
+    return reconstruct(structure, dataFiles, magicBytes, located.chunkDataStart, recorder);
   } catch (err) {
     // D3: chunk_index was omitted and at least one codec pipeline in play is
     // size-changing, so chunk offsets can't be computed -> its own failure
     // reason with the why-indexes-exist lesson, not the generic decode-error.
     if (err instanceof NoChunkIndexError) {
-      return makeFailure('no-chunk-index', totalBytes(dataFiles));
+      return makeFailure('no-chunk-index', totalBytes(dataFiles), recorder, 'locate-chunks', 'chunk_index absent, cannot compute');
     }
     // Codec reversal / deinterleave / reassembly threw after metadata was
     // successfully found and parsed -> decode-error, with the real
-    // exception text preserved in the message for debugging.
-    return makeFailure('decode-error', totalBytes(dataFiles), describeError(err));
+    // exception text preserved in the message for debugging. The recorder
+    // doesn't know which of decode-chunks/reassemble was in progress when an
+    // arbitrary reconstruction error is thrown, so attribute it to
+    // decode-chunks — the far more common failure point (a bad codec
+    // reversal or dtype mismatch) — rather than guess from the exception.
+    return makeFailure('decode-error', totalBytes(dataFiles), recorder, 'decode-chunks', 'reconstruction failed', describeError(err));
   }
 }
 
+/** Describe a magic mismatch for the step log: actual leading bytes vs expected, as hex. */
+function describeMagicMismatch(fileBytes: Uint8Array, magic: Uint8Array): string {
+  const actual = Array.from(fileBytes.slice(0, magic.length)).map((b) => b.toString(16).padStart(2, '0')).join('');
+  const expected = Array.from(magic).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `leading bytes 0x${actual} do not match expected 0x${expected}`;
+}
+
 type LocateResult =
-  | { entries: MetadataEntry[]; chunkDataStart: number }
-  | { entries: null; reason: ReadFailureReason };
+  | { entries: MetadataEntry[]; chunkDataStart: number; found: string }
+  | { entries: null; reason: ReadFailureReason; found: string };
 
 /**
  * Locate metadata entries: sidecar file first, then embedded (single-file
@@ -142,12 +173,12 @@ function locateMetadata(
   if (sidecarFile && sidecarFile.bytes.length > 0) {
     try {
       const entries = deserializeMetadata(sidecarFile.bytes);
-      if (entries.length > 0) return { entries, chunkDataStart: 0 };
-      return { entries: null, reason: 'no-metadata' };
+      if (entries.length > 0) return { entries, chunkDataStart: 0, found: `sidecar file "${sidecarFile.name}"` };
+      return { entries: null, reason: 'no-metadata', found: 'sidecar file present but empty' };
     } catch {
       // Sidecar bytes existed but failed to parse as metadata at all -> the
       // metadata is corrupt, not absent.
-      return { entries: null, reason: 'corrupt-metadata' };
+      return { entries: null, reason: 'corrupt-metadata', found: 'sidecar file present but unparseable' };
     }
   }
 
@@ -162,17 +193,17 @@ function locateMetadata(
     // (and per D2 shouldn't need to) know the write-side config — it just
     // looks for the trailer shape.
     const trailerResult = tryParseTrailerMetadata(dataBytes);
-    if (trailerResult.entries) return { entries: trailerResult.entries, chunkDataStart: 0 };
+    if (trailerResult.entries) return { entries: trailerResult.entries, chunkDataStart: 0, found: `trailer-located metadata at end of file` };
     if (trailerResult.plausible) foundPlausibleButUnparseable = true;
 
     const headerResult = tryParseEmbeddedMetadata(dataBytes, 'header');
     if (headerResult.entries) {
-      return { entries: headerResult.entries, chunkDataStart: headerResult.headerByteLength ?? 0 };
+      return { entries: headerResult.entries, chunkDataStart: headerResult.headerByteLength ?? 0, found: 'header at offset 0' };
     }
     if (headerResult.plausible) foundPlausibleButUnparseable = true;
 
     const footerResult = tryParseEmbeddedMetadata(dataBytes, 'footer');
-    if (footerResult.entries) return { entries: footerResult.entries, chunkDataStart: 0 };
+    if (footerResult.entries) return { entries: footerResult.entries, chunkDataStart: 0, found: 'footer at end of file' };
     if (footerResult.plausible) foundPlausibleButUnparseable = true;
   }
 
@@ -180,7 +211,13 @@ function locateMetadata(
   // metadata was written but the locator/scanner couldn't pin it down
   // exactly (the intended lesson for footerLocator='none'). Otherwise there
   // is no evidence metadata was ever written (includeMetadata=false).
-  return { entries: null, reason: foundPlausibleButUnparseable ? 'metadata-not-found' : 'no-metadata' };
+  return {
+    entries: null,
+    reason: foundPlausibleButUnparseable ? 'metadata-not-found' : 'no-metadata',
+    found: foundPlausibleButUnparseable
+      ? 'scan found plausible-but-unparseable structure'
+      : 'no sidecar file and no embedded metadata found',
+  };
 }
 
 /** Parse located metadata entries into a typed dataset structure. Throws on
@@ -238,6 +275,7 @@ function reconstruct(
   dataFiles: VirtualFile[],
   magicBytes: Uint8Array,
   chunkDataStart: number,
+  recorder: StepRecorder,
 ): ReadFileResult {
   const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, typeAssignments, variableStatistics, totalElements } = structure;
 
@@ -271,6 +309,7 @@ function reconstruct(
     { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline },
     magicBytes.length + chunkDataStart,
   );
+  recorder.ok('locate-chunks', `${resolvedChunkIndex.length} chunk(s) located`);
 
   const context: ReassemblyContext = {
     schema,
@@ -287,6 +326,7 @@ function reconstruct(
     ? makeSingleFileChunkReader(dataFiles[0].bytes)
     : makePerChunkFileReader(dataFiles, magicBytes);
   const reconstructedValues = reconstructValues(context, getChunkBytes);
+  recorder.ok('decode-chunks', `${schema.length} variable(s) decoded through their codec pipeline(s)`);
 
   if (typeAssignments) {
     for (const [varName, assignment] of Object.entries(typeAssignments)) {
@@ -295,11 +335,13 @@ function reconstruct(
       reconstructedValues.set(varName, reverseTypeAssignmentValues(values, assignment));
     }
   }
+  recorder.ok('reassemble', `${totalElements} element(s) reassembled per variable`);
 
   return {
     success: true,
     reconstructedValues,
     lossyVariables: new Set<string>([...typeAssignLossy, ...codecLossyVariables]),
+    steps: recorder.finish(),
   };
 }
 
@@ -356,12 +398,127 @@ const FAILURE_MESSAGES: Record<ReadFailureReason, (byteCount: number, detail?: s
     `(wrong dtype, wrong chunk geometry, or a codec that isn't a true inverse of its encode step).`,
 };
 
-function makeFailure(reason: ReadFailureReason, byteCount: number, detail?: string): ReadFileResult {
+/**
+ * Build a failure result. `message` is computed once here and used both as
+ * `result.message` and (by every call site, via `recorder.fail`) as the
+ * failed step's `detail` — a single source, never two independently-computed
+ * strings that could drift apart.
+ */
+function makeFailure(
+  reason: ReadFailureReason,
+  byteCount: number,
+  recorder: StepRecorder,
+  failedStep: ReadStepId,
+  found: string,
+  detail?: string,
+): ReadFileResult {
+  const message = FAILURE_MESSAGES[reason](byteCount, detail);
   return {
     success: false,
     reason,
-    message: FAILURE_MESSAGES[reason](byteCount, detail),
+    message,
     byteCount,
+    steps: recorder.fail(failedStep, found, message),
+  };
+}
+
+/**
+ * Fixed 8-step order the reader narrates through on every read, success or
+ * failure (read plan Task 2) — the single source of truth for step identity,
+ * display label, and what the reader "needs" at that step, mirroring how a
+ * real-format reader proceeds: verify magic, locate metadata, parse it, read
+ * the schema and layout it describes, locate chunks, decode them, reassemble
+ * values.
+ */
+export const READ_STEP_ORDER: { id: ReadStepId; label: string; needed: string }[] = [
+  {
+    id: 'verify-magic',
+    label: 'Verify magic number',
+    needed: "The file's leading (and trailing) bytes must match this reader's expected magic number.",
+  },
+  {
+    id: 'locate-metadata',
+    label: 'Locate metadata',
+    needed: 'Metadata describing the dataset must be found — as a sidecar file, or embedded via header, footer, or trailer.',
+  },
+  {
+    id: 'parse-metadata',
+    label: 'Parse metadata',
+    needed: 'Located metadata bytes must parse into a usable set of entries (valid JSON or binary framing).',
+  },
+  {
+    id: 'read-schema',
+    label: 'Read schema',
+    needed: "The parsed entries must describe the dataset's variables and their dtypes.",
+  },
+  {
+    id: 'read-layout',
+    label: 'Read layout',
+    needed: 'The parsed entries must describe the shape, chunk shape, and interleaving used to write the data.',
+  },
+  {
+    id: 'locate-chunks',
+    label: 'Locate chunks',
+    needed: "Each chunk's byte offset and size must be known or computable, so its encoded bytes can be read.",
+  },
+  {
+    id: 'decode-chunks',
+    label: 'Decode chunks',
+    needed: "Each chunk's bytes must reverse cleanly through its codec pipeline back to typed values.",
+  },
+  {
+    id: 'reassemble',
+    label: 'Reassemble values',
+    needed: 'Decoded chunk values must scatter into their correct global positions to reconstruct each variable.',
+  },
+];
+
+/**
+ * Tracks progress through `READ_STEP_ORDER` as `readFile` proceeds.
+ * `fail()` marks the given step failed and fills every remaining step
+ * 'skipped' (the reader never got to try them). `finish()` is used on the
+ * success path, once every step has actually been recorded ok.
+ */
+interface StepRecorder {
+  ok(id: ReadStepId, found: string, detail?: string): void;
+  fail(id: ReadStepId, found: string, detail: string): ReadStep[];
+  finish(): ReadStep[];
+}
+
+function createStepRecorder(): StepRecorder {
+  const recorded = new Map<ReadStepId, ReadStep>();
+
+  function stepFor(id: ReadStepId, found: string, outcome: ReadStep['outcome'], detail?: string): ReadStep {
+    const spec = READ_STEP_ORDER.find((s) => s.id === id)!;
+    return { id: spec.id, label: spec.label, needed: spec.needed, found, outcome, detail };
+  }
+
+  return {
+    ok(id, found, detail) {
+      recorded.set(id, stepFor(id, found, 'ok', detail));
+    },
+    fail(id, found, detail) {
+      recorded.set(id, stepFor(id, found, 'failed', detail));
+      for (const spec of READ_STEP_ORDER) {
+        if (!recorded.has(spec.id)) {
+          recorded.set(spec.id, stepFor(spec.id, 'not reached', 'skipped'));
+        }
+      }
+      return READ_STEP_ORDER.map((spec) => recorded.get(spec.id)!);
+    },
+    finish() {
+      // Dev-time invariant: every step must have been recorded before a
+      // success result is returned — a step silently skipped on the success
+      // path is a bug in the threading, not a valid state to hide.
+      const missing = READ_STEP_ORDER.filter((spec) => !recorded.has(spec.id));
+      if (missing.length > 0) {
+        throw new Error(
+          `createStepRecorder.finish(): missing step(s) ${missing.map((s) => s.id).join(', ')} — ` +
+          `every step must be recorded ok before a success result is returned.`,
+        );
+      }
+      return READ_STEP_ORDER.map((spec) => recorded.get(spec.id)!);
+    },
   };
 }
 
