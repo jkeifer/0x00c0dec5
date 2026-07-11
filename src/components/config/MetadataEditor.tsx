@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { AppState } from '../../types/state.ts';
+import type { MetadataIncludeConfig } from '../../types/state.ts';
 import { collectMetadata, serializeMetadata, dedupeCustomKey, type ChunkIndexEntry } from '../../engine/metadata.ts';
 import { computeChunkGrid, enumerateChunkCoords } from '../../engine/chunk.ts';
 import { Radio } from '../shared/Radio.tsx';
@@ -13,8 +14,19 @@ interface MetadataEditorProps {
   onAddEntry: () => void;
   onRemoveEntry: (index: number) => void;
   onUpdateEntry: (index: number, key?: string, value?: string) => void;
-  onIncludeChunkIndexChange: (includeChunkIndex: boolean) => void;
+  onIncludeChange: (key: keyof MetadataIncludeConfig, value: boolean) => void;
 }
+
+// Task 5 (read plan): one row per metadata.include group (Task 1), each with
+// a testid and a one-line consequence hint naming the read step the reader
+// stops at without it. Driven as a map, not five copy-pasted blocks.
+const INCLUDE_GROUPS: { key: keyof MetadataIncludeConfig; testid: string; label: string; hint: string }[] = [
+  { key: 'schema', testid: 'include-schema-toggle', label: 'Include Schema', hint: 'without this, the reader stops at: read schema' },
+  { key: 'layout', testid: 'include-layout-toggle', label: 'Include Layout', hint: 'without this, the reader stops at: read layout' },
+  { key: 'codecs', testid: 'include-codecs-toggle', label: 'Include Codecs', hint: 'without this, the reader stops at: decode chunks (or reads garbage)' },
+  { key: 'chunkIndex', testid: 'include-chunk-index-toggle', label: 'Include Chunk Index', hint: 'without this, the reader stops at: locate chunks (single-file entropy configs)' },
+  { key: 'descriptive', testid: 'include-descriptive-toggle', label: 'Include Descriptive', hint: 'without this, the reader loses: nothing — the reader doesn\'t need it' },
+];
 
 /**
  * Build placeholder chunk_index entries for the sidebar preview only — real
@@ -53,7 +65,7 @@ export function MetadataEditor({
   onAddEntry,
   onRemoveEntry,
   onUpdateEntry,
-  onIncludeChunkIndexChange,
+  onIncludeChange,
 }: MetadataEditorProps) {
   const [autoExpanded, setAutoExpanded] = useState(false);
 
@@ -119,6 +131,7 @@ export function MetadataEditor({
     [allEntries, metadata.serialization],
   );
   const chunkIndexIsEstimate = state.metadata.include.chunkIndex;
+  const metadataDisabled = !state.write.includeMetadata;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
@@ -223,25 +236,29 @@ export function MetadataEditor({
         ))}
       </div>
 
-      {/* Chunk index toggle (D3) */}
-      <div data-testid="include-chunk-index-toggle" style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
-        <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Include Chunk Index</span>
-        <Radio
-          options={[
-            { value: 'yes', label: 'Yes' },
-            { value: 'no', label: 'No' },
-          ]}
-          value={state.metadata.include.chunkIndex ? 'yes' : 'no'}
-          onChange={(v) => onIncludeChunkIndexChange(v === 'yes')}
-          size="sm"
-        />
-        <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
-          Records each chunk's coords/offset/size so the reader can locate it directly.
-          Turning this off leaves the reader to compute offsets from chunk shape and dtype —
-          only possible when every codec in the pipeline preserves size (e.g. delta, byte-shuffle).
-          Any size-changing codec (RLE, LZ) with the index off makes the file unreadable —
-          exactly why real chunked/columnar formats always carry one.
-        </span>
+      {/* Metadata include-group toggles (Task 5, read plan) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
+        {metadataDisabled && (
+          <span style={{ fontSize: fontSizes.xs, color: colors.warning }}>
+            metadata is not being written — enable "Include Metadata" in Write to change these
+          </span>
+        )}
+        {INCLUDE_GROUPS.map(({ key, testid, label, hint }) => (
+          <div key={key} data-testid={testid} style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>{label}</span>
+            <Radio
+              options={[
+                { value: 'yes', label: 'Yes' },
+                { value: 'no', label: 'No' },
+              ]}
+              value={state.metadata.include[key] ? 'yes' : 'no'}
+              onChange={(v) => onIncludeChange(key, v === 'yes')}
+              size="sm"
+              disabled={metadataDisabled}
+            />
+            <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>{hint}</span>
+          </div>
+        ))}
       </div>
 
       <button

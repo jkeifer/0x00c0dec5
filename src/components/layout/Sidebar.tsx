@@ -156,10 +156,10 @@ export function Sidebar() {
             onUpdateEntry={(index, key, value) =>
               dispatch({ type: 'UPDATE_METADATA_ENTRY', index, key, value })
             }
-            onIncludeChunkIndexChange={(chunkIndex) =>
+            onIncludeChange={(key, value) =>
               dispatch({
                 type: 'UPDATE_METADATA_CONFIG',
-                changes: { include: { ...state.metadata.include, chunkIndex } },
+                changes: { include: { ...state.metadata.include, [key]: value } },
               })
             }
           />
