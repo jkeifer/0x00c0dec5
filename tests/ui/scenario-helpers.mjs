@@ -185,3 +185,24 @@ export async function seedStateAndReload(page, entries) {
   }, kv);
   await safeReload(page);
 }
+
+/**
+ * Task 13 (perf plan): the pipeline now computes in a worker, asynchronously.
+ * Any scenario that reads pipeline-derived DOM state (stage stats, pane
+ * contents, hover-linked highlights, etc.) right after a state-changing
+ * action can race the worker's compute — the page may still be on
+ * `pipeline-booting` (first load) or showing a stale result while
+ * `pipeline-computing-indicator` is visible. Wait for both to clear before
+ * asserting.
+ */
+export async function waitForPipelineIdle(page, timeout = 30000) {
+  await page.waitForSelector('[data-testid="pipeline-booting"]', { state: 'detached', timeout });
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('[data-testid="pipeline-computing-indicator"]');
+      if (!el) return true;
+      return window.getComputedStyle(el).visibility === 'hidden';
+    },
+    { timeout },
+  );
+}

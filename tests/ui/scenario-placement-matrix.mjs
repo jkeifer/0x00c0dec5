@@ -24,7 +24,7 @@
 //
 // Run: node tests/ui/scenario-placement-matrix.mjs   (dev server must be running)
 
-import { launch, shot, createHarness } from './scenario-helpers.mjs';
+import { launch, shot, createHarness, waitForPipelineIdle } from './scenario-helpers.mjs';
 
 const h = createHarness('scenario-placement-matrix');
 
@@ -92,6 +92,7 @@ async function main() {
 
   // Turn on include-metadata first — the matrix is meaningless without it.
   await setIncludeMetadata(page, true);
+  await waitForPipelineIdle(page);
   const includeOnText = await readStatusText(page);
   h.check(
     'include-metadata ON with default (header/json) reads successfully',
@@ -103,7 +104,7 @@ async function main() {
     await setSerialization(page, serialization);
     for (const placement of PLACEMENTS) {
       await setPlacement(page, placement);
-      await page.waitForTimeout(200);
+      await waitForPipelineIdle(page);
       const text = await readStatusText(page);
       const success = /File parsed successfully/.test(text);
       const label = `placement=${placement} serialization=${serialization}`;
@@ -125,7 +126,7 @@ async function main() {
   // it as a PASS of the expected pedagogical outcome, not a knownFail.
   await setSerialization(page, 'binary');
   await setPlacement(page, 'footer');
-  await page.waitForTimeout(200);
+  await waitForPipelineIdle(page);
   const trailerOnText = await readStatusText(page);
   h.check(
     'footer + binary + locator=trailer (default) → read succeeds',
@@ -134,7 +135,7 @@ async function main() {
   );
 
   await setFooterLocator(page, 'none');
-  await page.waitForTimeout(300);
+  await waitForPipelineIdle(page);
   const locatorNoneText = await readStatusText(page);
   await shot(page, 'placement-matrix-footer-binary-locator-none');
   h.check(
@@ -149,14 +150,14 @@ async function main() {
   await setFooterLocator(page, 'trailer');
   await setSerialization(page, 'json');
   await setPlacement(page, 'header');
-  await page.waitForTimeout(200);
+  await waitForPipelineIdle(page);
 
   // ─── D3: chunk-index toggle ───────────────────────────────────────────────
   //
   // Chunk-index off + no size-changing codecs (default pipelines are empty)
   // → read still succeeds via computed offsets (chunkShape x dtype size).
   await setIncludeChunkIndex(page, false);
-  await page.waitForTimeout(300);
+  await waitForPipelineIdle(page);
   const chunkIndexOffText = await readStatusText(page);
   await shot(page, 'placement-matrix-chunk-index-off-no-codecs');
   h.check(
@@ -168,7 +169,7 @@ async function main() {
   // Chunk-index off + RLE (a size-changing codec) on humidity → read fails,
   // mentioning the chunk index (D3's "why indexes exist" lesson).
   await addRleToHumidity(page);
-  await page.waitForTimeout(300);
+  await waitForPipelineIdle(page);
   const chunkIndexOffRleText = await readStatusText(page);
   await shot(page, 'placement-matrix-chunk-index-off-rle');
   h.check(
@@ -181,12 +182,12 @@ async function main() {
 
   // Restore chunk index on for a clean pedagogical-failure check below.
   await setIncludeChunkIndex(page, true);
-  await page.waitForTimeout(300);
+  await waitForPipelineIdle(page);
 
   // include-metadata OFF → read should fail (the pedagogical path: nothing in the
   // file describes its own layout, so the reader has nothing to work with).
   await setIncludeMetadata(page, false);
-  await page.waitForTimeout(300);
+  await waitForPipelineIdle(page);
   const offText = await readStatusText(page);
   await shot(page, 'placement-matrix-include-metadata-off');
   h.check(

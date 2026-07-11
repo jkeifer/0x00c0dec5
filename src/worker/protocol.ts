@@ -1,6 +1,6 @@
 import type { AppState } from '../types/state.ts';
 import type { StageName } from '../types/pipeline.ts';
-import type { PipelineResult } from '../hooks/usePipeline.ts';
+import type { PipelineResult } from '../engine/pipelineCompute.ts';
 import type { ValueArray } from '../engine/layout.ts';
 
 export interface ComputeRequest { kind: 'compute'; id: number; state: AppState }

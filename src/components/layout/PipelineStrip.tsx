@@ -25,6 +25,10 @@ interface PipelineStripProps {
   fieldPipelines?: Record<string, CodecStep[]>;
   chunkPipeline?: CodecStep[];
   interleaving?: 'row' | 'column';
+  /** Task 13 (perf plan): true while the worker is computing a newer state.
+   *  Optional so existing callers/tests that don't care about the indicator
+   *  keep working — it simply doesn't render without it. */
+  computing?: boolean;
 }
 
 /**
@@ -64,6 +68,7 @@ export function PipelineStrip({
   fieldPipelines,
   chunkPipeline,
   interleaving,
+  computing,
 }: PipelineStripProps) {
   // Check if any variable has lossy type assignment
   const hasLossyTyping = Array.from(variableStats.values()).some((s) => s.isLossy);
@@ -180,6 +185,35 @@ export function PipelineStrip({
           </div>
         );
       })}
+      {/* Task 13 (perf plan): recompute indicator. Always mounted (space
+          reserved) so appearing/disappearing never shifts layout — only its
+          visibility toggles. */}
+      <div
+        data-testid="pipeline-computing-indicator"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: spacing.xs,
+          marginLeft: 'auto',
+          paddingLeft: spacing.sm,
+          color: colors.textSecondary,
+          fontSize: fontSizes.xs,
+          visibility: computing ? 'visible' : 'hidden',
+          flexShrink: 0,
+        }}
+      >
+        <span
+          className="pipeline-computing-dot"
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: colors.accent,
+            flexShrink: 0,
+          }}
+        />
+        recomputing
+      </div>
     </div>
   );
 }

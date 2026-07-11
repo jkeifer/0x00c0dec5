@@ -2,9 +2,9 @@ import { Panel, Group, Separator, useDefaultLayout } from 'react-resizable-panel
 import type { Variable } from '../../types/state.ts';
 import type { CodecStep } from '../../types/codecs.ts';
 import { useAppState } from '../../state/useAppState.ts';
-import { usePipeline } from '../../hooks/usePipeline.ts';
+import { useWorkerPipeline } from '../../hooks/useWorkerPipeline.ts';
 import { PipelineProvider, usePipelineContext } from '../../state/PipelineContext.tsx';
-import { colors } from '../../theme.ts';
+import { colors, fonts, fontSizes } from '../../theme.ts';
 import { Header } from './Header.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { PipelineStrip } from './PipelineStrip.tsx';
@@ -13,16 +13,40 @@ import { HoverBar } from '../shared/HoverBar.tsx';
 import { ErrorBoundary } from '../shared/ErrorBoundary.tsx';
 import { GuideProvider } from '../../state/GuideContext.tsx';
 import { GuidePanel } from '../guide/GuidePanel.tsx';
+import type { PipelineResult } from '../../engine/pipelineCompute.ts';
 
-function MainLayout() {
+function MainLayout({ result, computing }: { result: PipelineResult | null; computing: boolean }) {
   const { state, dispatch } = useAppState();
-  const pipeline = usePipeline(state);
 
   const mainPersist = useDefaultLayout({ id: 'main-layout' });
   const panesPersist = useDefaultLayout({ id: 'panes-layout' });
 
+  // Task 13 (perf plan): before the worker's first result ever arrives there
+  // is nothing to render — PipelineProvider and every consumer below it
+  // assume a non-null PipelineResult. Once `result` exists this branch never
+  // re-triggers (stale-view UX keeps the last-good result mounted while a
+  // later `computing` pass runs in the background).
+  if (result === null) {
+    return (
+      <div
+        data-testid="pipeline-booting"
+        style={{
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: colors.textSecondary,
+          fontFamily: fonts.mono,
+          fontSize: fontSizes.md,
+        }}
+      >
+        starting…
+      </div>
+    );
+  }
+
   return (
-    <PipelineProvider pipeline={pipeline} showDiff={state.ui.showDiff}>
+    <PipelineProvider pipeline={result} showDiff={state.ui.showDiff} computing={computing}>
       <Group
         orientation="horizontal"
         defaultLayout={mainPersist.defaultLayout}
@@ -126,7 +150,7 @@ function PipelineStripConnected({
   chunkPipeline: CodecStep[];
   interleaving: 'row' | 'column';
 }) {
-  const { stages, readResult, variableStats } = usePipelineContext();
+  const { stages, readResult, variableStats, computing } = usePipelineContext();
   return (
     <PipelineStrip
       stages={stages}
@@ -136,6 +160,7 @@ function PipelineStripConnected({
       fieldPipelines={fieldPipelines}
       chunkPipeline={chunkPipeline}
       interleaving={interleaving}
+      computing={computing}
     />
   );
 }
@@ -146,17 +171,23 @@ function HoverBarConnected() {
 }
 
 export function App() {
+  // Task 13 (perf plan): the worker-backed pipeline hook is called once here
+  // (not inside MainLayout) so App can hand `diagnostics` to Header as a prop
+  // (for Task 14's About modal) without Header reaching into the hook itself.
+  const { state } = useAppState();
+  const { result, computing, diagnostics } = useWorkerPipeline(state);
+
   // GuideProvider wraps Header (toggle button), MainLayout (Sidebar section
   // highlight), and GuidePanel. The panel is a fixed-width flex sibling of
   // MainLayout's wrapper — NOT a third resizable panel, so the persisted
   // 'main-layout' panel-group id is untouched.
   return (
     <GuideProvider>
-      <Header />
+      <Header diagnostics={diagnostics} />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <ErrorBoundary>
-            <MainLayout />
+            <MainLayout result={result} computing={computing} />
           </ErrorBoundary>
         </div>
         <GuidePanel />

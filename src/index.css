@@ -165,3 +165,16 @@ body {
 .resize-handle[data-resize-handle-active]::after {
   background: var(--accent);
 }
+
+/* PipelineStrip recompute indicator (Task 13, perf plan): a pulsing dot.
+   @keyframes can't be expressed as an inline style, so this is one of the
+   rare cases CLAUDE.md carves out for a plain CSS rule alongside the
+   project's otherwise-inline styling convention. */
+@keyframes pipeline-computing-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+.pipeline-computing-dot {
+  animation: pipeline-computing-pulse 1.1s ease-in-out infinite;
+}

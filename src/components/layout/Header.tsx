@@ -6,6 +6,7 @@ import { PRESET_OPTIONS, hasCustomPreset, type PresetKey } from '../../state/pre
 import { saveCheckpoint, hasCheckpoint, buildShareUrl } from '../../state/share.ts';
 import { loadUiPrefs, saveUiPrefs, applyTheme, type ThemePref } from '../../state/uiPrefs.ts';
 import { useGuide } from '../../state/GuideContext.tsx';
+import type { WorkerDiagnostics } from '../../worker/client.ts';
 
 const THEME_CYCLE: Record<ThemePref, ThemePref> = { dark: 'light', light: 'system', system: 'dark' };
 const THEME_LABEL: Record<ThemePref, string> = { dark: 'Dark', light: 'Light', system: 'System' };
@@ -65,7 +66,18 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-export function Header() {
+export interface HeaderProps {
+  /**
+   * Task 13 (perf plan): worker diagnostics, passed down so Task 14's About
+   * modal can display them without App needing further changes. Unused here
+   * for now — App holds the `useWorkerPipeline` hook's diagnostics and hands
+   * them to Header as a prop rather than Header reaching for the hook itself,
+   * since only App calls `useWorkerPipeline`.
+   */
+  diagnostics?: WorkerDiagnostics;
+}
+
+export function Header({ diagnostics: _diagnostics }: HeaderProps = {}) {
   const { state, switchDataModel, loadPreset, restoreCheckpoint, clearConfig } = useAppState();
   const { open: guideOpen, toggleOpen: toggleGuide } = useGuide();
   const [checkpointLabel, setCheckpointLabel] = useState('Save checkpoint');

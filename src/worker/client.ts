@@ -1,5 +1,5 @@
 import type { AppState } from '../types/state.ts';
-import type { PipelineResult } from '../hooks/usePipeline.ts';
+import type { PipelineResult } from '../engine/pipelineCompute.ts';
 import type { WorkerRequest, WorkerResponse, StageTimings } from './protocol.ts';
 
 export interface WorkerDiagnostics {

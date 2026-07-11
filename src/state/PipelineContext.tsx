@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
-import type { PipelineResult } from '../hooks/usePipeline.ts';
+import type { PipelineResult } from '../engine/pipelineCompute.ts';
 import type { PipelineStage, VirtualFile, ReadFileResult, VariableStats, StageName } from '../types/pipeline.ts';
 import type { ValueSources, ValueArray } from '../engine/layout.ts';
 
@@ -41,6 +41,14 @@ export interface PipelineContextValue {
    * there would obscure why the diff is being computed against it.
    */
   originalValues: Map<string, ValueArray>;
+  /**
+   * Task 13 (perf plan): true while the worker is computing a newer state
+   * than the currently-rendered `pipeline` (stale-view UX — the previous
+   * result stays rendered/interactive while this is true). Threaded through
+   * context rather than prop-drilled, matching `showDiff`'s existing split-
+   * memo pattern below.
+   */
+  computing: boolean;
 }
 
 const PipelineContext = createContext<PipelineContextValue | null>(null);
@@ -48,10 +56,12 @@ const PipelineContext = createContext<PipelineContextValue | null>(null);
 export function PipelineProvider({
   pipeline,
   showDiff,
+  computing,
   children,
 }: {
   pipeline: PipelineResult;
   showDiff: boolean;
+  computing: boolean;
   children: ReactNode;
 }) {
   // Split memo: `pipelinePart` changes only when `usePipeline`'s return value
@@ -74,8 +84,8 @@ export function PipelineProvider({
   );
 
   const value = useMemo<PipelineContextValue>(
-    () => ({ ...pipelinePart, showDiff }),
-    [pipelinePart, showDiff],
+    () => ({ ...pipelinePart, showDiff, computing }),
+    [pipelinePart, showDiff, computing],
   );
 
   return <PipelineContext.Provider value={value}>{children}</PipelineContext.Provider>;
