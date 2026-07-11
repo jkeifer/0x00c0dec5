@@ -9,9 +9,9 @@ import { chunkRegionsOf, byteRangesForTrace } from '../../engine/layout.ts';
  * (multi-section mode); single-section views omit it.
  *
  * Task 8 (perf plan): carries `layout`/`sources` instead of a materialized
- * `traces` array — per-byte trace info is derived on demand via `traceAt`/
- * `traceGroupsInRange` (viewerUtils.ts), scoped to the visible window,
- * instead of reading a precomputed `ByteTrace[]`. */
+ * `traces` array — per-byte trace info is derived on demand via `traceAt`
+ * (engine/layout.ts), called once per visible byte by HexRowRenderer, instead
+ * of reading a precomputed `ByteTrace[]`. */
 export interface HexSection {
   /** Stable key across renders — file name for multi-file sections, or the
    * stage name for single-section views. NOT an index (task 3.5 / UI-18: index

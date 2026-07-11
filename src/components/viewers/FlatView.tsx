@@ -2,14 +2,16 @@ import { useRef, useEffect, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import { useHover } from '../../hooks/useHover.ts';
-import { groupBytesByTrace, byteToHex, type TraceGroup } from './viewerUtils.ts';
+import { elementInChunk, chunkIdForElement, type ValueSources } from '../../engine/layout.ts';
+import { flatGroupCount, flatGroupAt, flatGroupIndexOf, byteToHex } from './viewerUtils.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 
 interface FlatViewProps {
   stage: PipelineStage;
+  sources: ValueSources;
   paneId: 'left' | 'right';
-  chunkTraceMap?: Map<string, Set<string>>;
-  traceChunkMap?: Map<string, string>;
+  chunkShape: number[];
+  interleaving: 'row' | 'column';
 }
 
 const ROW_HEIGHT = 22;
@@ -30,32 +32,15 @@ function hexSummary(bytes: Uint8Array): string {
   return s;
 }
 
-export function FlatView({ stage, paneId, chunkTraceMap, traceChunkMap }: FlatViewProps) {
+export function FlatView({ stage, sources, paneId, chunkShape, interleaving }: FlatViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
 
-  const traceGroups = useMemo(() => groupBytesByTrace(stage), [stage]);
-
-  const traceGroupIndex = useMemo(() => {
-    const map = new Map<string, number>();
-    for (let i = 0; i < traceGroups.length; i++) {
-      const id = traceGroups[i].traceId;
-      if (!map.has(id)) map.set(id, i);
-    }
-    return map;
-  }, [traceGroups]);
-
-  const chunkGroupIndex = useMemo(() => {
-    const map = new Map<string, number>();
-    for (let i = 0; i < traceGroups.length; i++) {
-      const id = traceGroups[i].chunkId;
-      if (id && !map.has(id)) map.set(id, i);
-    }
-    return map;
-  }, [traceGroups]);
+  const layout = stage.layout;
+  const groupCount = useMemo(() => flatGroupCount(layout), [layout]);
 
   const virtualizer = useVirtualizer({
-    count: traceGroups.length,
+    count: groupCount,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
@@ -66,18 +51,20 @@ export function FlatView({ stage, paneId, chunkTraceMap, traceChunkMap }: FlatVi
 
   const isCrossPane = hoverSource !== null && hoverSource !== paneId;
 
-  // Scroll to hovered trace from other pane
+  // Scroll to hovered trace from other pane — falls back to the chunkId when
+  // the exact traceId has no bytes in this stage (e.g. a chunk-level hover
+  // from an entropy-coded pane while this pane is pre-chunking).
   useEffect(() => {
     if (hoveredTraceId && hoverSource !== paneId) {
-      let groupIdx = traceGroupIndex.get(hoveredTraceId);
+      let groupIdx = flatGroupIndexOf(layout, hoveredTraceId);
       if (groupIdx === undefined && hoveredChunkId) {
-        groupIdx = chunkGroupIndex.get(hoveredChunkId);
+        groupIdx = flatGroupIndexOf(layout, hoveredChunkId);
       }
       if (groupIdx !== undefined) {
         virtualizerRef.current.scrollToIndex(groupIdx, { align: 'auto' });
       }
     }
-  }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, traceGroupIndex, chunkGroupIndex]);
+  }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, layout]);
 
   return (
     <div
@@ -100,35 +87,37 @@ export function FlatView({ stage, paneId, chunkTraceMap, traceChunkMap }: FlatVi
         }}
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
-          const group: TraceGroup = traceGroups[virtualRow.index];
-          const prevGroup = virtualRow.index > 0 ? traceGroups[virtualRow.index - 1] : null;
+          const group = flatGroupAt(layout, stage.bytes, sources, virtualRow.index);
+          const prevGroup = virtualRow.index > 0 ? flatGroupAt(layout, stage.bytes, sources, virtualRow.index - 1) : null;
           const showBoundary = prevGroup !== null && prevGroup.chunkId !== group.chunkId;
 
+          // UI-2 fix (remediation-plan.md task 4.2): Values/Typed/Read stage
+          // groups carry chunkId '' (they precede chunking) but do carry
+          // coords for real values — chunkIdForElement derives the chunk this
+          // element WOULD belong to once linearized, the same fallback
+          // TableView/GridView use, so hovering these rows still resolves a
+          // real chunkId and cross-highlights post-entropy (chunk-level)
+          // panes.
+          const resolvedChunkId = group.chunkId
+            || (group.coords.length > 0 ? chunkIdForElement(group.variableName, group.coords, chunkShape, interleaving) : '');
+
           const isValueHovered = hoveredTraceId !== null && group.traceId === hoveredTraceId;
-          const flatChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
           const isChunkHovered = !isValueHovered && (
             (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && group.chunkId === hoveredChunkId)
-            || (flatChunkTraceIds != null && flatChunkTraceIds.has(group.traceId))
+            || (hoveredChunkId != null && hoveredChunkId !== '' && group.coords.length > 0
+              && elementInChunk(hoveredChunkId, group.variableName, group.coords, chunkShape))
           );
 
-          // Structural traces (magic/metadata) carry no variableName/coords \u2014
+          // Structural traces (magic/metadata) carry no variableName/coords —
           // fall back to displayValue (e.g. "magic (start)", "metadata") so
           // these groups render a real label instead of a blank row.
           const isStructural = !group.isChunkLevel && group.variableName === '';
           const label = group.isChunkLevel
-            ? `${group.chunkId} [${group.byteOffset}\u2013${group.byteOffset + group.byteCount - 1}]`
+            ? `${group.chunkId} [${group.byteOffset}–${group.byteOffset + group.byteCount - 1}]`
             : isStructural
-              ? `${group.displayValue} [${group.byteOffset}\u2013${group.byteOffset + group.byteCount - 1}]`
+              ? `${group.displayValue} [${group.byteOffset}–${group.byteOffset + group.byteCount - 1}]`
               : `${group.variableName}${formatCoords(group.coords)}`;
           const value = group.isChunkLevel || isStructural ? '' : group.displayValue;
-
-          // UI-2 fix (remediation-plan.md task 4.2): Values/Typed/Read stage
-          // groups carry chunkId '' (they precede chunking). Fall back to
-          // traceChunkMap's global traceId -> chunkId lookup — the same
-          // fallback TableView already uses at hover time — so hovering these
-          // rows still resolves a real chunkId and cross-highlights
-          // post-entropy (chunk-level) panes.
-          const resolvedChunkId = group.chunkId || traceChunkMap?.get(group.traceId) || '';
 
           return (
             <div

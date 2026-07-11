@@ -1,9 +1,8 @@
-import type { PipelineStage, ByteTrace, ChunkRegion } from '../../types/pipeline.ts';
+import type { ByteTrace, ChunkRegion } from '../../types/pipeline.ts';
 import type { LogicalValue } from '../../types/dtypes.ts';
-import { isChunkLevelTrace } from '../../engine/trace.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
-import type { StageLayout, ValueSources } from '../../engine/layout.ts';
-import { traceAt } from '../../engine/layout.ts';
+import type { StageLayout, ValueSources, LayoutRegion, ChunkFieldLayout } from '../../engine/layout.ts';
+import { traceAt, regionAt, byteRangesForTrace } from '../../engine/layout.ts';
 
 export { formatByteCount };
 
@@ -21,95 +20,179 @@ export interface TraceGroup {
   isChunkLevel: boolean;
 }
 
-/** Group consecutive bytes sharing the same traceId into TraceGroup objects. */
-export function groupBytesByTrace(stage: PipelineStage): TraceGroup[] {
-  const groups: TraceGroup[] = [];
-  if (stage.traces.length === 0) return groups;
-
-  let currentId = stage.traces[0].traceId;
-  let startOffset = 0;
-
-  for (let i = 1; i <= stage.traces.length; i++) {
-    const traceId = i < stage.traces.length ? stage.traces[i].traceId : null;
-    if (traceId !== currentId) {
-      const trace = stage.traces[startOffset];
-      groups.push({
-        traceId: trace.traceId,
-        variableName: trace.variableName,
-        variableColor: trace.variableColor,
-        coords: trace.coords,
-        displayValue: trace.displayValue,
-        dtype: trace.dtype,
-        chunkId: trace.chunkId,
-        byteOffset: startOffset,
-        byteCount: i - startOffset,
-        bytes: stage.bytes.slice(startOffset, i),
-        isChunkLevel: isChunkLevelTrace(trace.traceId),
-      });
-      if (i < stage.traces.length) {
-        currentId = traceId!;
-        startOffset = i;
+/** Number of FlatView rows (one per grouped trace) a region contributes —
+ *  mirrors groupBytesByTrace's grouping without walking any bytes:
+ *  - values (text): one group per non-empty-string element (empty strings
+ *    produce zero ByteTrace entries upstream, per chunkRegionsOf's zero-width
+ *    guard — see layout.ts's values branch comment).
+ *  - values (fixed-width): one group per element.
+ *  - chunk, value-preserving: one group per (element × field) — this is the
+ *    per-value trace count within the chunk, matching linearizeChunk's byte
+ *    order (column: field blocks sequential; row: records interleaved).
+ *  - chunk, chunk-level / structural: the whole region is one trace. */
+function regionGroupCount(r: LayoutRegion): number {
+  if (r.kind === 'values') {
+    if (r.offsets) {
+      let n = 0;
+      for (let el = 0; el < r.elementCount; el++) {
+        if (r.offsets[el] !== r.offsets[el + 1]) n++;
       }
+      return n;
     }
+    return r.elementCount;
   }
-
-  return groups;
+  if (r.kind === 'chunk' && r.mode === 'value-preserving') {
+    const elementCount = r.elementDims.reduce((a, b) => a * b, 1);
+    return elementCount * r.fields.length;
+  }
+  return 1; // chunk-level or structural
 }
 
-/**
- * TraceGroups intersecting [startByte, endByte) — the layout-based
- * replacement for `groupBytesByTrace` used by the hex row renderer (task 8):
- * walks `traceAt` only across the visible window (~16 bytes/row * visible
- * rows) instead of materializing every stage's `traces` array up front.
- *
- * Groups are window-local: a run of same-traceId bytes that extends before
- * `startByte` or after `endByte` is clipped to the window, so `byteOffset`/
- * `byteCount`/`bytes` describe only the portion inside [startByte, endByte) —
- * unlike `groupBytesByTrace`, which sees the whole stage and never clips.
- * This is safe because the only consumer, HexRowRenderer, reads groups
- * strictly per-row (one row's worth of bytes at a time) and never relies on a
- * group's extent reaching beyond the row it's rendering.
- */
-export function traceGroupsInRange(
+/** Total FlatView row count for a stage's layout — O(regions), not O(bytes)
+ *  (Task 9, perf plan): replaces `groupBytesByTrace(stage).length`. */
+export function flatGroupCount(layout: StageLayout): number {
+  let total = 0;
+  for (const r of layout.regions) total += regionGroupCount(r);
+  return total;
+}
+
+/** The `index`-th FlatView group (0-based, in the same order groupBytesByTrace
+ *  would produce), computed directly from region-relative arithmetic — no
+ *  byte-by-byte scan. Mirrors traceAt's per-region math but walks elements/
+ *  fields instead of bytes, then delegates to traceAt for the actual
+ *  ByteTrace once the group's start byte is known (keeping trace-shape logic
+ *  — formatting, coords, etc. — in one place). */
+export function flatGroupAt(
   layout: StageLayout,
   bytes: Uint8Array,
   sources: ValueSources,
-  startByte: number,
-  endByte: number,
-): TraceGroup[] {
-  const groups: TraceGroup[] = [];
-  const end = Math.min(endByte, layout.byteLength, bytes.length);
-  if (startByte >= end) return groups;
-
-  let current: ByteTrace | null = null;
-  let groupStart = startByte;
-
-  for (let i = startByte; i <= end; i++) {
-    const trace = i < end ? traceAt(layout, i, sources) : null;
-    const traceId = trace?.traceId ?? null;
-    const currentId = current?.traceId ?? null;
-    if (traceId !== currentId) {
-      if (current) {
-        groups.push({
-          traceId: current.traceId,
-          variableName: current.variableName,
-          variableColor: current.variableColor,
-          coords: current.coords,
-          displayValue: current.displayValue,
-          dtype: current.dtype,
-          chunkId: current.chunkId,
-          byteOffset: groupStart,
-          byteCount: i - groupStart,
-          bytes: bytes.slice(groupStart, i),
-          isChunkLevel: isChunkLevelTrace(current.traceId),
-        });
-      }
-      current = trace;
-      groupStart = i;
+  index: number,
+): TraceGroup {
+  let remaining = index;
+  for (const r of layout.regions) {
+    const count = regionGroupCount(r);
+    if (remaining >= count) {
+      remaining -= count;
+      continue;
     }
+    // remaining is this region's local group index.
+    if (r.kind === 'values') {
+      let startByte: number;
+      let byteCount: number;
+      if (r.offsets) {
+        // Walk non-empty elements to find the `remaining`-th one.
+        let seen = -1;
+        let el = 0;
+        for (; el < r.elementCount; el++) {
+          if (r.offsets[el] === r.offsets[el + 1]) continue;
+          seen++;
+          if (seen === remaining) break;
+        }
+        startByte = r.start + r.offsets[el];
+        byteCount = r.offsets[el + 1] - r.offsets[el];
+      } else {
+        const stride = r.stride!;
+        startByte = r.start + remaining * stride;
+        byteCount = stride;
+      }
+      const trace = traceAt(layout, startByte, sources)!;
+      return {
+        traceId: trace.traceId, variableName: trace.variableName, variableColor: trace.variableColor,
+        coords: trace.coords, displayValue: trace.displayValue, dtype: trace.dtype, chunkId: trace.chunkId,
+        byteOffset: startByte, byteCount, bytes: bytes.slice(startByte, startByte + byteCount),
+        isChunkLevel: false,
+      };
+    }
+    if (r.kind === 'chunk' && r.mode === 'value-preserving') {
+      const fieldCount = r.fields.length;
+      let elemFlat: number;
+      let field: ChunkFieldLayout;
+      if (r.interleaving === 'column') {
+        // Field blocks sequential: elements 0..N-1 of field0, then field1, ...
+        field = r.fields[Math.floor(remaining / (r.elementDims.reduce((a, b) => a * b, 1)))];
+        elemFlat = remaining % r.elementDims.reduce((a, b) => a * b, 1);
+      } else {
+        // Records interleaved: record0's fields, record1's fields, ...
+        elemFlat = Math.floor(remaining / fieldCount);
+        field = r.fields[remaining % fieldCount];
+      }
+      const startByte = r.interleaving === 'column'
+        ? r.start + field.offset + elemFlat * field.size
+        : r.start + elemFlat * r.fields.reduce((a, f) => a + f.size, 0) + field.offset;
+      const byteCount = field.size;
+      const trace = traceAt(layout, startByte, sources)!;
+      return {
+        traceId: trace.traceId, variableName: trace.variableName, variableColor: trace.variableColor,
+        coords: trace.coords, displayValue: trace.displayValue, dtype: trace.dtype, chunkId: trace.chunkId,
+        byteOffset: startByte, byteCount, bytes: bytes.slice(startByte, startByte + byteCount),
+        isChunkLevel: false,
+      };
+    }
+    // chunk-level or structural: the whole region is one group.
+    const trace = traceAt(layout, r.start, sources)!;
+    return {
+      traceId: trace.traceId, variableName: trace.variableName, variableColor: trace.variableColor,
+      coords: trace.coords, displayValue: trace.displayValue, dtype: trace.dtype, chunkId: trace.chunkId,
+      byteOffset: r.start, byteCount: r.byteLength, bytes: bytes.slice(r.start, r.start + r.byteLength),
+      isChunkLevel: r.kind === 'chunk',
+    };
+  }
+  throw new Error(`flatGroupAt: index ${index} out of range`);
+}
+
+/** Inverse of `flatGroupAt`: the FlatView group index containing `id` (a
+ *  value traceId or a chunk/structural id), or undefined if `id` has no
+ *  bytes in this layout. Used for cross-pane scroll-to-hover — a rare event
+ *  (not per-row), so an O(regions) walk to the target region plus an
+ *  O(elements-in-region) scan for the text-offsets case is cheap relative to
+ *  materializing every group up front. */
+export function flatGroupIndexOf(layout: StageLayout, id: string): number | undefined {
+  const ranges = byteRangesForTrace(layout, id);
+  if (ranges.length === 0) return undefined;
+  const byteIndex = ranges[0].start;
+  const target = regionAt(layout, byteIndex);
+  if (!target) return undefined;
+
+  let base = 0;
+  for (const r of layout.regions) {
+    if (r === target) break;
+    base += regionGroupCount(r);
   }
 
-  return groups;
+  if (target.kind === 'values') {
+    const rel = byteIndex - target.start;
+    if (target.offsets) {
+      // Count non-empty elements before the one containing `rel`.
+      let el = 0;
+      while (el < target.elementCount && !(target.offsets[el] <= rel && rel < target.offsets[el + 1])) el++;
+      let localIdx = 0;
+      for (let i = 0; i < el; i++) {
+        if (target.offsets[i] !== target.offsets[i + 1]) localIdx++;
+      }
+      return base + localIdx;
+    }
+    const stride = target.stride!;
+    return base + Math.floor(rel / stride);
+  }
+  if (target.kind === 'chunk' && target.mode === 'value-preserving') {
+    const rel = byteIndex - target.start;
+    const elementCount = target.elementDims.reduce((a, b) => a * b, 1);
+    if (target.interleaving === 'column') {
+      let f = target.fields.length - 1;
+      while (f > 0 && rel < target.fields[f].offset) f--;
+      const field = target.fields[f];
+      const elemFlat = Math.floor((rel - field.offset) / field.size);
+      return base + f * elementCount + elemFlat;
+    }
+    const recordSize = target.fields.reduce((a, f) => a + f.size, 0);
+    const elemFlat = Math.floor(rel / recordSize);
+    const inRecord = rel % recordSize;
+    let f = target.fields.length - 1;
+    while (f > 0 && inRecord < target.fields[f].offset) f--;
+    return base + elemFlat * target.fields.length + f;
+  }
+  // chunk-level or structural: the whole region is group `base`.
+  return base;
 }
 
 /** Format a byte as 2-digit uppercase hex string. */
@@ -126,18 +209,6 @@ export function formatOffset(offset: number, totalBytes: number): string {
 /** Convert a byte to printable ASCII or '.' */
 export function byteToAscii(b: number): string {
   return b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.';
-}
-
-/** Build a Map from traceId to the first byte index for O(1) hover lookups. */
-export function buildTraceIndex(traces: ByteTrace[]): Map<string, number> {
-  const index = new Map<string, number>();
-  for (let i = 0; i < traces.length; i++) {
-    const id = traces[i].traceId;
-    if (!index.has(id)) {
-      index.set(id, i);
-    }
-  }
-  return index;
 }
 
 /** Build chunk regions by scanning traces for contiguous regions with the same identity. */
@@ -172,55 +243,6 @@ function getRegionLabel(trace: ByteTrace): string {
     return trace.traceId;
   }
   return trace.chunkId || trace.traceId;
-}
-
-/** Build a Map from traceId to { firstByte, lastByte, count } for O(1) hover lookups. */
-export function buildTraceIndexWithCounts(
-  traces: ByteTrace[],
-): Map<string, { firstByte: number; lastByte: number; count: number }> {
-  const index = new Map<string, { firstByte: number; lastByte: number; count: number }>();
-  for (let i = 0; i < traces.length; i++) {
-    const id = traces[i].traceId;
-    const existing = index.get(id);
-    if (existing) {
-      existing.lastByte = i;
-      existing.count++;
-    } else {
-      index.set(id, { firstByte: i, lastByte: i, count: 1 });
-    }
-  }
-  return index;
-}
-
-/** Build a Map from chunkId to { firstByte, lastByte, count } for O(1) chunk hover lookups. */
-export function buildChunkIndexWithCounts(
-  traces: ByteTrace[],
-): Map<string, { firstByte: number; lastByte: number; count: number }> {
-  const index = new Map<string, { firstByte: number; lastByte: number; count: number }>();
-  for (let i = 0; i < traces.length; i++) {
-    const id = traces[i].chunkId;
-    if (!id) continue;
-    const existing = index.get(id);
-    if (existing) {
-      existing.lastByte = i;
-      existing.count++;
-    } else {
-      index.set(id, { firstByte: i, lastByte: i, count: 1 });
-    }
-  }
-  return index;
-}
-
-/** Build a Map from chunkId to the first byte index for chunk-level hover fallback. */
-export function buildChunkIndex(traces: ByteTrace[]): Map<string, number> {
-  const index = new Map<string, number>();
-  for (let i = 0; i < traces.length; i++) {
-    const id = traces[i].chunkId;
-    if (id && !index.has(id)) {
-      index.set(id, i);
-    }
-  }
-  return index;
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react';
+import { useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
@@ -12,8 +12,8 @@ export type { HexSection };
 interface HexViewProps {
   sections: HexSection[];
   paneId: 'left' | 'right';
-  chunkTraceMap?: Map<string, Set<string>>;
-  traceChunkMap?: Map<string, string>;
+  chunkShape: number[];
+  interleaving: 'row' | 'column';
 }
 
 const NARROW_BREAKPOINT = 500;
@@ -34,7 +34,8 @@ interface HexSectionViewProps {
   hoveredTraceId: string | null;
   hoveredChunkId: string | null;
   isCrossPane: boolean;
-  chunkTraceMap?: Map<string, Set<string>>;
+  chunkShape: number[];
+  interleaving: 'row' | 'column';
   onHover: (traceId: string, chunkId: string) => void;
   showHeader: boolean;
 }
@@ -61,7 +62,8 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
       hoveredTraceId,
       hoveredChunkId,
       isCrossPane,
-      chunkTraceMap,
+      chunkShape,
+      interleaving,
       onHover,
       showHeader,
     },
@@ -149,7 +151,8 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
                   hoveredTraceId={hoveredTraceId}
                   hoveredChunkId={hoveredChunkId}
                   isCrossPane={isCrossPane}
-                  chunkTraceMap={chunkTraceMap}
+                  chunkShape={chunkShape}
+                  interleaving={interleaving}
                   onHover={onHover}
                 />
               </div>
@@ -170,7 +173,7 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
  * both cases — its padding/alignment logic (UI-1) is untouched here; Phase 4
  * fixes that separately.
  */
-export function HexView({ sections, paneId, chunkTraceMap, traceChunkMap }: HexViewProps) {
+export function HexView({ sections, paneId, chunkShape, interleaving }: HexViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
   const containerWidth = useContainerWidth(parentRef);
@@ -182,19 +185,13 @@ export function HexView({ sections, paneId, chunkTraceMap, traceChunkMap }: HexV
 
   const isCrossPane = hoverSource !== null && hoverSource !== paneId;
 
-  // UI-2 fix (remediation-plan.md task 4.2): Values/Typed/Read stage traces
-  // carry chunkId '' (they precede chunking). Fall back to traceChunkMap's
-  // global traceId -> chunkId lookup — the same fallback TableView already
-  // uses at hover time (TableView.tsx's `traceChunkMap?.get(traceId) ?? null`)
-  // — so hovering these stages' hex bytes still resolves a real chunkId and
-  // cross-highlights post-entropy (chunk-level) panes.
-  const handleHover = useCallback(
-    (traceId: string, chunkId: string) => {
-      const resolvedChunkId = chunkId || traceChunkMap?.get(traceId) || '';
-      setHover(traceId, resolvedChunkId, paneId);
-    },
-    [setHover, paneId, traceChunkMap],
-  );
+  // HexRowRenderer already resolves the chunkId (falling back to
+  // chunkIdForElement for Values/Typed/Read stage bytes — UI-2 fix,
+  // remediation-plan.md task 4.2) before calling onHover, so this just
+  // forwards it into hover state.
+  const handleHover = (traceId: string, chunkId: string) => {
+    setHover(traceId, chunkId, paneId);
+  };
 
   // Compute each section's scrollMargin (its rowOffset already accounts for
   // headers, so the byte offset is simply rowOffset * ROW_HEIGHT).
@@ -241,7 +238,8 @@ export function HexView({ sections, paneId, chunkTraceMap, traceChunkMap }: HexV
           hoveredTraceId={hoveredTraceId}
           hoveredChunkId={hoveredChunkId}
           isCrossPane={isCrossPane}
-          chunkTraceMap={chunkTraceMap}
+          chunkShape={chunkShape}
+          interleaving={interleaving}
           onHover={handleHover}
           showHeader={hexData.showHeaders}
         />

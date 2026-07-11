@@ -23,7 +23,7 @@ import { collectMetadata, serializeMetadata } from '../engine/metadata.ts';
 import { assembleFiles } from '../engine/write.ts';
 import { valuesToBytes, bytesToValues } from '../engine/elements.ts';
 import { formatValue, formatLogicalValue } from '../engine/elements.ts';
-import { isChunkLevelTrace, makeTraceId } from '../engine/trace.ts';
+import { makeTraceId } from '../engine/trace.ts';
 import { readFile } from '../engine/read.ts';
 import { hexToBytes, concatBytes } from '../engine/bytes.ts';
 import {
@@ -234,8 +234,6 @@ export interface LinearizedStageResult {
   stage: PipelineStage;
   chunks: Chunk[];
   linearizedChunks: LinearizedChunk[];
-  chunkTraceMap: Map<string, Set<string>>;
-  traceChunkMap: Map<string, string>;
 }
 
 export function computeLinearizedStage(
@@ -256,25 +254,12 @@ export function computeLinearizedStage(
   const linearizedBytes = concatBytes(linearizedChunks.map((lc) => lc.bytes));
   const linearizedTraces = linearizedChunks.flatMap((lc) => lc.traces);
 
-  // Build chunk<->trace maps from linearized traces
-  const chunkTraceMap = new Map<string, Set<string>>();
-  const traceChunkMap = new Map<string, string>();
-  for (const t of linearizedTraces) {
-    if (t.chunkId && !isChunkLevelTrace(t.traceId)) {
-      if (!chunkTraceMap.has(t.chunkId)) chunkTraceMap.set(t.chunkId, new Set());
-      chunkTraceMap.get(t.chunkId)!.add(t.traceId);
-      if (!traceChunkMap.has(t.traceId)) traceChunkMap.set(t.traceId, t.chunkId);
-    }
-  }
-
   const linearizedLayout = buildLinearizedLayout(chunks, linearizedChunks, interleaving, shape, chunkShape);
 
   return {
     stage: makeStage('Linearized', linearizedBytes, linearizedTraces, linearizedLayout),
     chunks,
     linearizedChunks,
-    chunkTraceMap,
-    traceChunkMap,
   };
 }
 
@@ -470,8 +455,6 @@ export function computeReadStage(
 export interface PipelineResult {
   stages: PipelineStage[];
   files: VirtualFile[];
-  chunkTraceMap: Map<string, Set<string>>;
-  traceChunkMap: Map<string, string>;
   readResult: ReadFileResult;
   variableStats: Map<string, VariableStats>;
   /**
@@ -548,8 +531,6 @@ export function computePipelineStages(state: AppState): PipelineResult {
   return {
     stages,
     files: files.files,
-    chunkTraceMap: linearized.chunkTraceMap,
-    traceChunkMap: linearized.traceChunkMap,
     readResult: read.readResult,
     variableStats: typed.variableStats,
     logicalValues: values.variableValues,
@@ -636,8 +617,6 @@ export function usePipeline(state: AppState): PipelineResult {
         read.stage,
       ],
       files: files.files,
-      chunkTraceMap: linearized.chunkTraceMap,
-      traceChunkMap: linearized.traceChunkMap,
       readResult: read.readResult,
       variableStats: typed.variableStats,
       logicalValues: values.variableValues,

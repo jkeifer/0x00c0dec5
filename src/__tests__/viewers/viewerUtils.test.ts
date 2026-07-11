@@ -1,13 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  groupBytesByTrace,
   byteToHex,
   formatOffset,
   byteToAscii,
-  buildTraceIndex,
-  buildTraceIndexWithCounts,
-  buildChunkIndex,
-  buildChunkIndexWithCounts,
   buildChunkRegions,
   isDiffValue,
   computeDiffSummary,
@@ -15,7 +10,7 @@ import {
   cellIndexToRowCol,
   scrollOffsetForCell,
 } from '../../components/viewers/viewerUtils.ts';
-import type { PipelineStage, ByteTrace } from '../../types/pipeline.ts';
+import type { ByteTrace } from '../../types/pipeline.ts';
 
 function makeTrace(overrides: Partial<ByteTrace> = {}): ByteTrace {
   return {
@@ -29,18 +24,6 @@ function makeTrace(overrides: Partial<ByteTrace> = {}): ByteTrace {
     byteInValue: 0,
     byteCount: 4,
     ...overrides,
-  };
-}
-
-function makeStage(bytes: number[], traces: ByteTrace[]): PipelineStage {
-  const b = new Uint8Array(bytes);
-  return {
-    name: 'Test',
-    bytes: b,
-    traces,
-    chunkRegions: buildChunkRegions(traces),
-    layout: { byteLength: b.length, shape: [], regions: [] },
-    stats: { byteCount: b.length, entropy: 0 },
   };
 }
 
@@ -83,170 +66,6 @@ describe('byteToAscii', () => {
     expect(byteToAscii(0x1f)).toBe('.');
     expect(byteToAscii(0x7f)).toBe('.');
     expect(byteToAscii(0xff)).toBe('.');
-  });
-});
-
-describe('groupBytesByTrace', () => {
-  it('groups consecutive bytes with same traceId', () => {
-    const traces = [
-      makeTrace({ traceId: 'temp:0', byteInValue: 0 }),
-      makeTrace({ traceId: 'temp:0', byteInValue: 1 }),
-      makeTrace({ traceId: 'temp:0', byteInValue: 2 }),
-      makeTrace({ traceId: 'temp:0', byteInValue: 3 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 0 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 1 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 2 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 3 }),
-    ];
-    const stage = makeStage([0, 1, 2, 3, 4, 5, 6, 7], traces);
-    const groups = groupBytesByTrace(stage);
-
-    expect(groups).toHaveLength(2);
-    expect(groups[0].traceId).toBe('temp:0');
-    expect(groups[0].byteOffset).toBe(0);
-    expect(groups[0].byteCount).toBe(4);
-    expect(groups[0].bytes).toEqual(new Uint8Array([0, 1, 2, 3]));
-    expect(groups[1].traceId).toBe('temp:1');
-    expect(groups[1].byteOffset).toBe(4);
-    expect(groups[1].byteCount).toBe(4);
-  });
-
-  it('returns empty array for empty stage', () => {
-    const stage = makeStage([], []);
-    expect(groupBytesByTrace(stage)).toEqual([]);
-  });
-
-  it('handles single-byte groups', () => {
-    const traces = [
-      makeTrace({ traceId: 'a:0', byteCount: 1 }),
-      makeTrace({ traceId: 'b:0', byteCount: 1 }),
-      makeTrace({ traceId: 'c:0', byteCount: 1 }),
-    ];
-    const stage = makeStage([10, 20, 30], traces);
-    const groups = groupBytesByTrace(stage);
-
-    expect(groups).toHaveLength(3);
-    expect(groups[0].traceId).toBe('a:0');
-    expect(groups[1].traceId).toBe('b:0');
-    expect(groups[2].traceId).toBe('c:0');
-  });
-
-  it('detects chunk-level traces', () => {
-    const traces = [
-      makeTrace({ traceId: 'chunk:0', variableName: '', byteCount: 2 }),
-      makeTrace({ traceId: 'chunk:0', variableName: '', byteCount: 2 }),
-    ];
-    const stage = makeStage([10, 20], traces);
-    const groups = groupBytesByTrace(stage);
-
-    expect(groups).toHaveLength(1);
-    expect(groups[0].isChunkLevel).toBe(true);
-  });
-
-  it('marks non-chunk traces as not chunk-level', () => {
-    const traces = [
-      makeTrace({ traceId: 'temp:0' }),
-    ];
-    const stage = makeStage([10], traces);
-    const groups = groupBytesByTrace(stage);
-
-    expect(groups[0].isChunkLevel).toBe(false);
-  });
-
-  it('preserves variable metadata', () => {
-    const traces = [
-      makeTrace({
-        traceId: 'pressure:5',
-        variableName: 'pressure',
-        variableColor: '#61afef',
-        coords: [5],
-        displayValue: '101.3',
-        dtype: 'float32',
-        chunkId: 'chunk:0',
-      }),
-    ];
-    const stage = makeStage([0xab], traces);
-    const groups = groupBytesByTrace(stage);
-
-    expect(groups[0].variableName).toBe('pressure');
-    expect(groups[0].variableColor).toBe('#61afef');
-    expect(groups[0].coords).toEqual([5]);
-    expect(groups[0].displayValue).toBe('101.3');
-    expect(groups[0].dtype).toBe('float32');
-    expect(groups[0].chunkId).toBe('chunk:0');
-  });
-});
-
-describe('buildTraceIndex', () => {
-  it('maps traceId to first byte index', () => {
-    const traces = [
-      makeTrace({ traceId: 'temp:0', byteInValue: 0 }),
-      makeTrace({ traceId: 'temp:0', byteInValue: 1 }),
-      makeTrace({ traceId: 'temp:0', byteInValue: 2 }),
-      makeTrace({ traceId: 'temp:0', byteInValue: 3 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 0 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 1 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 2 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 3 }),
-    ];
-    const index = buildTraceIndex(traces);
-
-    expect(index.size).toBe(2);
-    expect(index.get('temp:0')).toBe(0);
-    expect(index.get('temp:1')).toBe(4);
-  });
-
-  it('returns empty map for empty traces', () => {
-    const index = buildTraceIndex([]);
-    expect(index.size).toBe(0);
-  });
-
-  it('handles many unique traceIds', () => {
-    const traces = Array.from({ length: 10 }, (_, i) =>
-      makeTrace({ traceId: `v:${i}`, byteCount: 1 }),
-    );
-    const index = buildTraceIndex(traces);
-
-    expect(index.size).toBe(10);
-    for (let i = 0; i < 10; i++) {
-      expect(index.get(`v:${i}`)).toBe(i);
-    }
-  });
-});
-
-describe('buildChunkIndex', () => {
-  it('maps chunkId to first byte index', () => {
-    const traces = [
-      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0', byteInValue: 0 }),
-      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0', byteInValue: 1 }),
-      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:0', byteInValue: 0 }),
-      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:0', byteInValue: 1 }),
-      makeTrace({ traceId: 'temp:2', chunkId: 'chunk:1', byteInValue: 0 }),
-      makeTrace({ traceId: 'temp:2', chunkId: 'chunk:1', byteInValue: 1 }),
-    ];
-    const index = buildChunkIndex(traces);
-
-    expect(index.size).toBe(2);
-    expect(index.get('chunk:0')).toBe(0);
-    expect(index.get('chunk:1')).toBe(4);
-  });
-
-  it('returns empty map for empty traces', () => {
-    const index = buildChunkIndex([]);
-    expect(index.size).toBe(0);
-  });
-
-  it('uses first occurrence of each chunkId', () => {
-    const traces = [
-      makeTrace({ traceId: 'a:0', chunkId: 'chunk:0' }),
-      makeTrace({ traceId: 'b:0', chunkId: 'chunk:1' }),
-      makeTrace({ traceId: 'c:0', chunkId: 'chunk:0' }),
-    ];
-    const index = buildChunkIndex(traces);
-
-    expect(index.size).toBe(2);
-    expect(index.get('chunk:0')).toBe(0);
-    expect(index.get('chunk:1')).toBe(1);
   });
 });
 
@@ -345,87 +164,6 @@ describe('buildChunkRegions', () => {
   });
 });
 
-describe('buildTraceIndexWithCounts', () => {
-  it('returns empty map for empty traces', () => {
-    const index = buildTraceIndexWithCounts([]);
-    expect(index.size).toBe(0);
-  });
-
-  it('maps traceId to firstByte, lastByte, and count', () => {
-    const traces = [
-      makeTrace({ traceId: 'temp:0', byteInValue: 0 }),
-      makeTrace({ traceId: 'temp:0', byteInValue: 1 }),
-      makeTrace({ traceId: 'temp:0', byteInValue: 2 }),
-      makeTrace({ traceId: 'temp:0', byteInValue: 3 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 0 }),
-      makeTrace({ traceId: 'temp:1', byteInValue: 1 }),
-    ];
-    const index = buildTraceIndexWithCounts(traces);
-
-    expect(index.size).toBe(2);
-    expect(index.get('temp:0')).toEqual({ firstByte: 0, lastByte: 3, count: 4 });
-    expect(index.get('temp:1')).toEqual({ firstByte: 4, lastByte: 5, count: 2 });
-  });
-
-  it('handles non-contiguous traces with same traceId', () => {
-    const traces = [
-      makeTrace({ traceId: 'a:0' }),
-      makeTrace({ traceId: 'b:0' }),
-      makeTrace({ traceId: 'a:0' }),
-    ];
-    const index = buildTraceIndexWithCounts(traces);
-
-    expect(index.get('a:0')).toEqual({ firstByte: 0, lastByte: 2, count: 2 });
-    expect(index.get('b:0')).toEqual({ firstByte: 1, lastByte: 1, count: 1 });
-  });
-
-  it('handles single-byte entries', () => {
-    const traces = [
-      makeTrace({ traceId: 'x:0', byteCount: 1 }),
-    ];
-    const index = buildTraceIndexWithCounts(traces);
-
-    expect(index.get('x:0')).toEqual({ firstByte: 0, lastByte: 0, count: 1 });
-  });
-});
-
-describe('buildChunkIndexWithCounts', () => {
-  it('returns empty map for empty traces', () => {
-    const index = buildChunkIndexWithCounts([]);
-    expect(index.size).toBe(0);
-  });
-
-  it('maps chunkId to firstByte, lastByte, and count', () => {
-    const traces = [
-      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
-      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
-      makeTrace({ traceId: 'temp:1', chunkId: 'chunk:0' }),
-      makeTrace({ traceId: 'temp:2', chunkId: 'chunk:1' }),
-      makeTrace({ traceId: 'temp:2', chunkId: 'chunk:1' }),
-    ];
-    const index = buildChunkIndexWithCounts(traces);
-
-    expect(index.size).toBe(2);
-    expect(index.get('chunk:0')).toEqual({ firstByte: 0, lastByte: 2, count: 3 });
-    expect(index.get('chunk:1')).toEqual({ firstByte: 3, lastByte: 4, count: 2 });
-  });
-
-  it('skips traces with empty chunkId', () => {
-    const traces = [
-      makeTrace({ traceId: 'magic:start', chunkId: '' }),
-      makeTrace({ traceId: 'temp:0', chunkId: 'chunk:0' }),
-    ];
-    const index = buildChunkIndexWithCounts(traces);
-
-    expect(index.size).toBe(1);
-    expect(index.has('')).toBe(false);
-    expect(index.get('chunk:0')).toEqual({ firstByte: 1, lastByte: 1, count: 1 });
-  });
-});
-
-// Task 4.5 (remediation-plan.md, fixes UI-14/UI-5): NaN-aware diff equality
-// and the diff summary stats extracted as pure functions so they're testable
-// without rendering TableView/GridView.
 describe('isDiffValue', () => {
   it('treats equal numbers as not a diff', () => {
     expect(isDiffValue(1, 1)).toBe(false);

@@ -23,15 +23,13 @@ import type { ValueSources } from '../engine/layout.ts';
 export interface PipelineContextValue {
   stages: PipelineStage[];
   files: VirtualFile[];
-  chunkTraceMap: Map<string, Set<string>>;
-  traceChunkMap: Map<string, string>;
   readResult: ReadFileResult;
   variableStats: Map<string, VariableStats>;
   /** D6: Values-stage source arrays, keyed by variable name. */
   logicalValues: Map<string, LogicalValue[]>;
   /** D6: Typed-stage source arrays, keyed by variable name. */
   typedValues: Map<string, LogicalValue[]>;
-  /** Task 8 (perf plan): per-stage ValueSources for traceAt/traceGroupsInRange
+  /** Task 8 (perf plan): per-stage ValueSources for traceAt/flatGroupAt
    *  — see usePipeline.ts's buildStageSources. */
   stageSources: Map<StageName, ValueSources>;
   showDiff: boolean;
@@ -66,8 +64,6 @@ export function PipelineProvider({
     () => ({
       stages: pipeline.stages,
       files: pipeline.files,
-      chunkTraceMap: pipeline.chunkTraceMap,
-      traceChunkMap: pipeline.traceChunkMap,
       readResult: pipeline.readResult,
       variableStats: pipeline.variableStats,
       logicalValues: pipeline.logicalValues,

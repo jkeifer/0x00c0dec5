@@ -64,6 +64,8 @@ interface StagePaneProps {
   accentColor: string;
   variables: Variable[];
   shape: number[];
+  chunkShape: number[];
+  interleaving: 'row' | 'column';
 }
 
 export function StagePane({
@@ -75,16 +77,20 @@ export function StagePane({
   accentColor,
   variables,
   shape,
+  chunkShape,
+  interleaving,
 }: StagePaneProps) {
   // Task 3.9 (remediation-plan.md, Phase 3): everything pipeline-derived
   // comes from PipelineContext now — paneId/selectedStage/viewMode/
-  // onStageChange/onViewChange/accentColor/variables/shape are the only
-  // genuinely per-pane (or state-sourced, non-pipeline) values left as props.
+  // onStageChange/onViewChange/accentColor/variables/shape/chunkShape/
+  // interleaving are the only genuinely per-pane (or state-sourced,
+  // non-pipeline) values left as props. chunkShape/interleaving (Task 9,
+  // perf plan) feed the layout-based chunk-membership lookups
+  // (chunkIdForElement/elementInChunk) that replaced chunkTraceMap/
+  // traceChunkMap in every viewer.
   const {
     stages,
     files,
-    chunkTraceMap,
-    traceChunkMap,
     readResult,
     showDiff,
     originalValues,
@@ -205,15 +211,18 @@ export function StagePane({
 
     switch (effectiveView) {
       case 'hex':
-        return <HexView sections={hexSections} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
-      case 'flat':
-        return <FlatView stage={stage} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
+        return <HexView sections={hexSections} paneId={paneId} chunkShape={chunkShape} interleaving={interleaving} />;
+      case 'flat': {
+        const sources = stageSources.get(selectedStage);
+        if (!sources) return null;
+        return <FlatView stage={stage} sources={sources} paneId={paneId} chunkShape={chunkShape} interleaving={interleaving} />;
+      }
       case 'table':
-        return <TableView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} diffValues={diffValues} showDiff={!!diffValues} isLogicalValues={isValuesStage || isReadStage} />;
+        return <TableView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkShape={chunkShape} interleaving={interleaving} diffValues={diffValues} showDiff={!!diffValues} isLogicalValues={isValuesStage || isReadStage} />;
       case 'grid':
-        return <GridView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} diffValues={diffValues} showDiff={!!diffValues} />;
+        return <GridView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkShape={chunkShape} interleaving={interleaving} diffValues={diffValues} showDiff={!!diffValues} />;
       default:
-        return <HexView sections={hexSections} paneId={paneId} chunkTraceMap={chunkTraceMap} traceChunkMap={traceChunkMap} />;
+        return <HexView sections={hexSections} paneId={paneId} chunkShape={chunkShape} interleaving={interleaving} />;
     }
   }
 

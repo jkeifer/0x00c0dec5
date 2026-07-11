@@ -4,6 +4,7 @@ import type { LogicalValue } from '../../types/dtypes.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { formatLogicalValue } from '../../engine/elements.ts';
+import { elementInChunk, chunkIdForElement } from '../../engine/layout.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 import { computeMaxAbsDiff, computeDiffSummary, scrollOffsetForCell } from './viewerUtils.ts';
@@ -20,8 +21,8 @@ interface GridViewProps {
    * StagePane's view-mode gating), so this is always populated for it.
    */
   values: Map<string, LogicalValue[]>;
-  chunkTraceMap?: Map<string, Set<string>>;
-  traceChunkMap?: Map<string, string>;
+  chunkShape: number[];
+  interleaving: 'row' | 'column';
   diffValues?: Map<string, LogicalValue[]>;
   showDiff?: boolean;
 }
@@ -67,7 +68,7 @@ function valueToColor(value: number, min: number, max: number, baseColor: string
   return `rgb(${outR},${outG},${outB})`;
 }
 
-export function GridView({ variables, shape, paneId, values: valuesByName, chunkTraceMap, traceChunkMap, diffValues, showDiff }: GridViewProps) {
+export function GridView({ variables, shape, paneId, values: valuesByName, chunkShape, interleaving, diffValues, showDiff }: GridViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const [selectedVarIdx, setSelectedVarIdx] = useState(0);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -288,9 +289,9 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
             const coords = flatIndexToCoords(i, shape);
             const traceId = makeTraceId(selectedVar.name, coords);
             const isValueHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
-            const gridChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
-            const isChunkHovered = !isValueHovered && gridChunkTraceIds != null && gridChunkTraceIds.has(traceId);
-            const chunkId = traceChunkMap?.get(traceId) ?? null;
+            const isChunkHovered = !isValueHovered && hoveredChunkId != null && hoveredChunkId !== ''
+              && elementInChunk(hoveredChunkId, selectedVar.name, coords, chunkShape);
+            const chunkId = chunkIdForElement(selectedVar.name, coords, chunkShape, interleaving);
 
             // Diff mode. `maxAbsDiff` is hoisted above into a useMemo keyed on
             // values/origVarVals (fixes UI-5's per-cell O(n) reduce); the

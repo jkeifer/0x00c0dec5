@@ -75,6 +75,8 @@ function MainLayout() {
                   accentColor={colors.paneAccentLeft}
                   variables={state.variables}
                   shape={state.shape}
+                  chunkShape={state.chunkShape}
+                  interleaving={state.interleaving}
                 />
               </Panel>
               <Separator className="resize-handle" />
@@ -92,6 +94,8 @@ function MainLayout() {
                   accentColor={colors.paneAccentRight}
                   variables={state.variables}
                   shape={state.shape}
+                  chunkShape={state.chunkShape}
+                  interleaving={state.interleaving}
                 />
               </Panel>
             </Group>
@@ -137,8 +141,8 @@ function PipelineStripConnected({
 }
 
 function HoverBarConnected() {
-  const { stages } = usePipelineContext();
-  return <HoverBar stages={stages} />;
+  const { stages, stageSources } = usePipelineContext();
+  return <HoverBar stages={stages} stageSources={stageSources} />;
 }
 
 export function App() {

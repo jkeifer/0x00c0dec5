@@ -5,6 +5,7 @@ import type { DtypeKey, LogicalValue } from '../../types/dtypes.ts';
 import { formatValue, formatLogicalValue } from '../../engine/elements.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
+import { elementInChunk, chunkIdForElement } from '../../engine/layout.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
@@ -22,8 +23,8 @@ interface TableViewProps {
    * StagePane's view-mode gating), so this is always populated for it.
    */
   values: Map<string, LogicalValue[]>;
-  chunkTraceMap?: Map<string, Set<string>>;
-  traceChunkMap?: Map<string, string>;
+  chunkShape: number[];
+  interleaving: 'row' | 'column';
   diffValues?: Map<string, LogicalValue[]>;
   showDiff?: boolean;
   isLogicalValues?: boolean; // true for Values/Read stage (float64 logical values) — controls display formatting only
@@ -42,7 +43,7 @@ interface ColumnData {
   dtype: DtypeKey;
 }
 
-export function TableView({ variables, shape, paneId, values, chunkTraceMap, traceChunkMap, diffValues, showDiff, isLogicalValues }: TableViewProps) {
+export function TableView({ variables, shape, paneId, values, chunkShape, interleaving, diffValues, showDiff, isLogicalValues }: TableViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -103,7 +104,11 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
     return idx;
   }, [shape]);
 
-  // Scroll to hovered trace from other pane (value-level or chunk-level)
+  // Scroll to hovered trace from other pane (value-level or chunk-level).
+  // Chunk-level fallback: find the first (variable, row) pair that belongs to
+  // the hovered chunk via elementInChunk — replaces the old chunkTraceMap
+  // membership Set with the same pure-math check TableView's cell rendering
+  // uses below.
   const hoveredRowIndex = useMemo(() => {
     if (hoverSource === paneId) return null;
     // Try exact traceId first
@@ -111,18 +116,17 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
       const idx = traceIdToRowIndex(hoveredTraceId);
       if (idx !== null) return idx;
     }
-    // Fall back to chunk-level: find first traceId in the chunk
+    // Fall back to chunk-level: find the first row belonging to the chunk.
     if (hoveredChunkId) {
-      const traceIds = chunkTraceMap?.get(hoveredChunkId);
-      if (traceIds) {
-        for (const tid of traceIds) {
-          const idx = traceIdToRowIndex(tid);
-          if (idx !== null) return idx;
+      for (const col of columns) {
+        for (let row = 0; row < col.values.length; row++) {
+          const coords = flatIndexToCoords(row, shape);
+          if (elementInChunk(hoveredChunkId, col.variable.name, coords, chunkShape)) return row;
         }
       }
     }
     return null;
-  }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, traceIdToRowIndex, chunkTraceMap]);
+  }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, traceIdToRowIndex, columns, shape, chunkShape]);
 
   // Auto-scroll
   useEffect(() => {
@@ -259,10 +263,10 @@ export function TableView({ variables, shape, paneId, values, chunkTraceMap, tra
                 const coords = flatIndexToCoords(rowIdx, shape);
                 const traceId = makeTraceId(col.variable.name, coords);
                 const isValueHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
-                const tableChunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
-                const isChunkHovered = !isValueHovered && tableChunkTraceIds != null && tableChunkTraceIds.has(traceId);
+                const isChunkHovered = !isValueHovered && hoveredChunkId != null && hoveredChunkId !== ''
+                  && elementInChunk(hoveredChunkId, col.variable.name, coords, chunkShape);
                 const val = rowIdx < col.values.length ? col.values[rowIdx] : undefined;
-                const chunkId = traceChunkMap?.get(traceId) ?? null;
+                const chunkId = chunkIdForElement(col.variable.name, coords, chunkShape, interleaving);
 
                 // Diff detection
                 const origVals = showDiff && diffValues ? diffValues.get(col.variable.name) : undefined;

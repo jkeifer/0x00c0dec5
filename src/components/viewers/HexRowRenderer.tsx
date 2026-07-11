@@ -1,5 +1,5 @@
 import type { StageLayout, ValueSources } from '../../engine/layout.ts';
-import { traceAt } from '../../engine/layout.ts';
+import { traceAt, elementInChunk, chunkIdForElement } from '../../engine/layout.ts';
 import { byteToHex, formatOffset, byteToAscii } from './viewerUtils.ts';
 import { colors, displayColor, spacing } from '../../theme.ts';
 
@@ -18,7 +18,8 @@ interface HexRowRendererProps {
   hoveredTraceId: string | null;
   hoveredChunkId: string | null;
   isCrossPane: boolean;
-  chunkTraceMap?: Map<string, Set<string>>;
+  chunkShape: number[];
+  interleaving: 'row' | 'column';
   onHover: (traceId: string, chunkId: string) => void;
 }
 
@@ -36,7 +37,8 @@ export function HexRowRenderer({
   hoveredTraceId,
   hoveredChunkId,
   isCrossPane,
-  chunkTraceMap,
+  chunkShape,
+  interleaving,
   onHover,
 }: HexRowRendererProps) {
   const rowHasBoundary = byteStart > 0 && Array.from(
@@ -53,7 +55,16 @@ export function HexRowRenderer({
     (_, col) => traceAt(layout, byteStart + col, sources),
   );
 
-  const chunkTraceIds = hoveredChunkId ? chunkTraceMap?.get(hoveredChunkId) : undefined;
+  // UI-2 fix (remediation-plan.md task 4.2): Values/Typed/Read stage traces
+  // carry chunkId '' (they precede chunking). Fall back to chunkIdForElement
+  // — the chunk this element WOULD belong to once linearized — so hovering
+  // these stages' hex bytes still resolves a real chunkId and cross-highlights
+  // post-entropy (chunk-level) panes (replaces the old traceChunkMap lookup).
+  function resolvedChunkId(trace: { chunkId: string; variableName: string; coords: number[] }): string {
+    if (trace.chunkId) return trace.chunkId;
+    if (trace.coords.length === 0) return '';
+    return chunkIdForElement(trace.variableName, trace.coords, chunkShape, interleaving);
+  }
 
   return (
     <>
@@ -86,7 +97,8 @@ export function HexRowRenderer({
           const isValueHovered = trace != null && hoveredTraceId !== null && trace.traceId === hoveredTraceId;
           const isChunkHovered = !isValueHovered && trace != null && (
             (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && trace.chunkId === hoveredChunkId)
-            || (chunkTraceIds != null && chunkTraceIds.has(trace.traceId))
+            || (hoveredChunkId != null && hoveredChunkId !== '' && trace.coords.length > 0
+              && elementInChunk(hoveredChunkId, trace.variableName, trace.coords, chunkShape))
           );
           const textColor = trace?.variableColor ? displayColor(trace.variableColor) : colors.textSecondary;
           const regionTint = regionByByte[byteIdx] === 1 ? 'var(--region-tint)' : undefined;
@@ -94,7 +106,7 @@ export function HexRowRenderer({
           return (
             <span
               key={col}
-              onMouseEnter={trace ? () => onHover(trace.traceId, trace.chunkId) : undefined}
+              onMouseEnter={trace ? () => onHover(trace.traceId, resolvedChunkId(trace)) : undefined}
               data-testid={`hex-byte-${byteIdx}`}
               style={{
                 color: textColor,
@@ -126,13 +138,14 @@ export function HexRowRenderer({
           const isValueHovered = trace != null && hoveredTraceId !== null && trace.traceId === hoveredTraceId;
           const isChunkHovered = !isValueHovered && trace != null && (
             (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && trace.chunkId === hoveredChunkId)
-            || (chunkTraceIds != null && chunkTraceIds.has(trace.traceId))
+            || (hoveredChunkId != null && hoveredChunkId !== '' && trace.coords.length > 0
+              && elementInChunk(hoveredChunkId, trace.variableName, trace.coords, chunkShape))
           );
 
           return (
             <span
               key={col}
-              onMouseEnter={trace ? () => onHover(trace.traceId, trace.chunkId) : undefined}
+              onMouseEnter={trace ? () => onHover(trace.traceId, resolvedChunkId(trace)) : undefined}
               style={{
                 color: isValueHovered ? colors.textPrimary : isChunkHovered ? colors.textSecondary : colors.textTertiary,
                 backgroundColor: isValueHovered ? 'var(--hover-strong)' : isChunkHovered ? 'var(--hover-weak)' :undefined,

@@ -55,7 +55,7 @@ export type ParsedTraceId =
  *
  * A chunk-kind id's `chunkId` is the full prefixed string (matching
  * `ByteTrace.chunkId` verbatim), NOT the raw suffix — this is what callers
- * need to look up `chunkTraceMap`/`traceChunkMap` entries.
+ * pass to `byteRangesForTrace`/`elementInChunk` (engine/layout.ts).
  */
 export function parseTraceId(id: string): ParsedTraceId {
   if (id.startsWith('chunk:')) {
