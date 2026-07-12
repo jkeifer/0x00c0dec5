@@ -71,6 +71,13 @@ The pipeline has three kinds of steps:
 These change the topology of the data — how it's organized, not its byte content.
 
 - **Chunk**: splits the dataset into chunks defined by a chunk shape. Before chunking, data is one logical array. After chunking, it's a collection of spatial slices. Chunking is uniform across all variables.
+- **Linearization order**: for the array model with `shape.length > 1`, chooses the element-traversal order used to flatten each chunk's multi-dimensional elements into a 1-D byte stream (`data-testid="linearization-select"`, in the Chunk sidebar section beside the chunk shape inputs — rendered only when it's a meaningful choice; hidden for tabular data and 1-D arrays, which have only one possible order). Three options, all bijective (round-trip exactly, including under edge-clipped chunk dims at shape edges):
+  - **C order (row-major)** — default, today's historical behavior, byte-identical to pre-linearization-setting output. Last dimension varies fastest.
+  - **Fortran order (column-major)** — first dimension varies fastest.
+  - **Morton (Z-order)** — bit-interleaved coordinates. Spatially nearby elements land near each other in the byte stream, visible directly in the hex view — this is the pedagogical payoff: C/Fortran order put a spatial neighbor on the opposite side of a row/column boundary arbitrarily far away in the byte stream, Morton keeps it close.
+
+  This is orthogonal to Interleave below (which orders *variables* within a chunk); linearization orders *elements* within a chunk. `orderCoordsOf`/the linearization module (`src/engine/order.ts`) is the single pure index-mapping source of truth, consumed identically by the writer (`linearizeChunk`), the per-value tracing layouts, and the reader's de-linearization — so switching orders never desyncs any of write, hover-trace, or read.
+- **Byte order (endianness)**: little-endian (default) or big-endian, applying to every multi-byte dtype regardless of data model or shape (`data-testid="byte-order-toggle"`, same Chunk section, not gated on array/ndim like linearization is — any scalar with a multi-byte dtype still has an endianness). This is Zarr v3's `bytes` codec `endian` parameter made an explicit, first-class setting rather than a silent little-endian assumption baked into `valuesToBytes`/`bytesToValues`. See "Metadata UI" below for the read-side lesson this setting is paired with.
 - **Interleave**: within each chunk, determines how variables are arranged.
   - *Column-oriented / BSQ (band-sequential)*: each variable's bytes are stored contiguously within the chunk. Enables per-variable codec pipelines.
   - *Row-oriented / BIP (band-interleaved-by-pixel)*: variable bytes are interleaved per element. Forces a single codec pipeline on the mixed byte stream.
@@ -250,6 +257,7 @@ interface CodecDefinition {
   key: string;                    // Unique identifier
   label: string;                  // Display name
   category: "reordering" | "entropy";
+  runtime?: "pyodide";             // present only for numcodecs-via-WebAssembly codecs
   description: string;            // Tooltip/help text
   params: Record<string, ParamDef>;
   applicableTo: (dtype: string) => boolean;  // Which input dtypes are meaningful
@@ -277,25 +285,36 @@ interface ParamDef {
 
 `isLossy` is a **predicate over the input dtype**, not a plain boolean — this deviates from `docs/extension-read-step.md`'s original `lossy: boolean` field (see that doc's own note on the deviation). A single boolean cannot express Delta's actual behavior: after removing an early clamping bug, Delta's encode/decode is an exact modular round-trip for every integer dtype (typed-array writes wrap mod 2^N, so a negative diff on an unsigned dtype is not clamped away — it wraps and un-wraps exactly), but Delta is still lossy on float dtypes, because each difference gets re-rounded to the float's own precision. `isLossy(dtype)` is the minimum shape that can say "exact for integers, lossy for floats."
 
-### The 4 Codecs
+### The Curated Codec Set
 
-**Reordering codecs** (rearrange bytes for better compressibility; `isLossy` varies):
+Earlier drafts split codecs into an "educational" tier (hand-rolled, always available) and a "real" tier (actual numcodecs running in Python via Pyodide/WebAssembly), presented as two visually separated groups in the picker. That split was a false taxonomy: every codec here is the same shape — stride-aware `encode(bytes, inputDtype, params) → { bytes, outputDtype }` — and composes freely with every other one, "real" or not. The picker is now **one flat list, no group labels, no "(real)" suffixes**, in `CODEC_REGISTRY` insertion order (`src/engine/codecs.ts`), which the picker iterates directly — that order runs transforms → structural/symbol compression → entropy coders, so the list itself hints at sensible pipeline order without enforcing it:
+
+**Delta → Zigzag → Byte Shuffle → Bit Shuffle → Dictionary → RLE → Deflate → GZip → Zstd**
+
+Whether a codec's `encode`/`decode` is hand-rolled locally or delegates to numcodecs-via-Pyodide is an implementation detail carried on `CodecDefinition.runtime` (`'pyodide'` when true, `undefined` for local). Pyodide-backed entries render disabled (with a `(loading…)`/`(unavailable)` suffix) until the runtime reports ready — see "Codec Runtime" below — but nothing else about them differs from local codecs: same registry, same params/warnings/dtype-flow machinery, same picker position.
+
+**Reordering codecs** (rearrange bytes for better compressibility, dtype-preserving; `isLossy` varies):
 
 | Codec | Params | Input → Output | isLossy | Description |
 |-------|--------|---------------|---------|-------------|
 | Delta | order: number (1-3) | any non-float → same | float dtypes only | Store value-to-value differences via typed-array arithmetic (wraps mod 2^N for integers — exact round-trip on every integer dtype, including unsigned). Lossy only on float dtypes, where each difference is re-rounded to float precision. `applicableTo` returns false for float dtypes, surfacing the ⚠ warning there. |
-| Byte Shuffle | elementSize: number (1-8) | any → same | never | Transpose bytes by position within each element. `applicableTo` returns false for 1-byte dtypes (nothing to transpose). A **separate** param-aware warning (not expressible via `applicableTo`, which only sees the dtype) fires when `elementSize` doesn't match the actual input dtype's size — this is the "shuffle needs to know the element boundary" lesson; garbled output is intentional, not blocked. |
+| Zigzag | — | signed int8/16/32 → same | never | Maps signed integers to unsigned so small magnitudes get small byte values (0→0, −1→1, 1→2, −2→3, …) — the transform Parquet applies before RLE/bit-packing. Bijective, byte width unchanged. `applicableTo` is signed-integer-only; other dtypes warn (advisory, not blocked). |
+| Byte Shuffle | elementSize: number (1-8) | any → same | never | Transpose bytes by position within each element (Parquet calls this BYTE_STREAM_SPLIT). `applicableTo` returns false for 1-byte dtypes (nothing to transpose). A **separate** param-aware warning (not expressible via `applicableTo`, which only sees the dtype) fires when `elementSize` doesn't match the actual input dtype's size — this is the "shuffle needs to know the element boundary" lesson; garbled output is intentional, not blocked. |
+| Bit Shuffle | — | any multi-byte → same | never | Byte Shuffle one level finer: transposes the *bits* of a block of elements into bit planes (all elements' bit 0, then bit 1, …) rather than whole bytes. Slowly varying data yields long constant bit runs — this is the transform inside blosc/bitshuffle, pulled out as its own standalone, bijective step. |
 
-**Entropy codecs** (compress redundancy; always applicable, byte-wise, no dtype awareness):
+**Entropy/compression codecs** (compress redundancy; always applicable, byte-wise; output dtype collapses to `uint8`):
 
-| Codec | Params | Input → Output | isLossy | Description |
-|-------|--------|---------------|---------|-------------|
-| RLE | — | any → uint8 | never | Run-length encoding. Outputs (count, value) byte pairs, one byte each (count capped at 255, so a run longer than 255 splits into multiple pairs). |
-| LZ (simple) | windowSize: number | any → uint8 | never | Simplified LZ77 with back-references (`[length, offsetHi, offsetLo]`) or literals (`[0x00, byte]`). Finds repeated byte sequences within `windowSize` bytes behind the cursor. |
+| Codec | Params | isLossy | Backing | Description |
+|-------|--------|---------|---------|-------------|
+| Dictionary | — | never | local | Parquet's workhorse: distinct fixed-stride values go into a dictionary, the stream becomes indices into it. Self-contained format — `[stride][dictCount][dict bytes][indexWidth][indices]` — great for low-cardinality data, and pairs naturally with RLE on the index stream (as Parquet itself does). |
+| RLE | — | never | local | Run-length encoding: `(count, value)` byte pairs, one byte each (count capped at 255, so a run longer than 255 splits into multiple pairs). The one codec whose output stays legible in the hex view. |
+| Deflate | level: number (1-9) | never | numcodecs (`zlib`), via Pyodide | The algorithm inside GZip, in a bare zlib container — compare the first bytes with GZip's `1f 8b` magic: same compressed stream, different wrapper. |
+| GZip | level: number (0-9) | never | numcodecs, via Pyodide | Real DEFLATE/gzip — the same algorithm behind `.gz` files and PNG. |
+| Zstd | level: number (1-22) | never | numcodecs, via Pyodide | Real Zstandard — the default compressor in modern Zarr. |
 
-Both entropy codecs collapse the output dtype to `uint8` — this is the dtype-flow rule below.
+All entropy/compression codecs collapse the output dtype to `uint8` — this is the dtype-flow rule below.
 
-**v2 additions** (future): zstd via WASM, deflate, variable-length encoding, quantize.
+**Deliberately excluded**: `lz` (the earlier hand-rolled LZ77) and `blosc` were both **deleted**, not deprecated — unknown codec keys in saved states/pipelines are already tolerated (skipped) by the engine and UI, so old saves referencing them degrade gracefully rather than erroring. `lz` was redundant next to the real compressors above. Blosc was rejected as a *meta-compressor*: it bundles a shuffle choice and a compressor choice into one opaque codec, which is confusing as a teaching object in a tool built around showing pipeline steps as separable — its bitshuffle half lives on as the standalone Bit Shuffle transform above. Also out: CRC32C (checksums teach nothing about how data composes into a file), bit-packing (bit-granularity size-changing output, unlike the size-preserving Bit Shuffle), Snappy and standalone LZ4 (no clean Pyodide backing, and Zstd/GZip already cover the "real compressor" lesson). Sharding (Zarr v3's `sharding_indexed`) was considered and rejected as a codec entirely — it conflates storage layout with encoding, and that concern already has a home in the Write step's partitioning options (see "Write Step" below), not the codec pipeline.
 
 ### Codec Applicability and Warnings
 
@@ -322,7 +341,15 @@ function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey): DtypeKey 
 }
 ```
 
-Entropy codecs (RLE, LZ) always collapse the running dtype to `uint8`; reordering codecs (Delta, Byte Shuffle) always preserve it. Each step's `encode()` input dtype is the previous step's `outputDtype` (or the variable's `typeAssignment.storageDtype` for the first step) — this makes it visible when a codec is receiving unexpected input, and keeps the pipeline's dtype bookkeeping in exactly one place.
+Entropy/compression codecs (Dictionary, RLE, Deflate, GZip, Zstd) always collapse the running dtype to `uint8`; reordering codecs (Delta, Zigzag, Byte Shuffle, Bit Shuffle) always preserve it. Each step's `encode()` input dtype is the previous step's `outputDtype` (or the variable's `typeAssignment.storageDtype` for the first step) — this makes it visible when a codec is receiving unexpected input, and keeps the pipeline's dtype bookkeeping in exactly one place.
+
+### Codec Runtime
+
+Three codecs (Deflate, GZip, Zstd) delegate `encode`/`decode` to actual `numcodecs` — the same Python library Zarr uses — running in-browser via Pyodide (Python compiled to WebAssembly). This is invisible to the pipeline machinery (same `CodecDefinition` shape, same registry, same picker), but the runtime has to load before those three codecs can run:
+
+- The worker initializes Pyodide **eagerly at startup**, independent of whether the current configuration uses a Pyodide-backed codec. A compute is only gated on that init promise when the posted state actually references a `runtime: 'pyodide'` codec (`stateUsesPyodideCodec()` in `src/engine/codecs.ts`, checked against both `fieldPipelines` and `chunkPipeline`); states that don't use one compute immediately, so boot is never delayed by the download.
+- While loading, a slim banner under the Header narrates progress: **"Loading compression runtime: …"**. On success it disappears silently. On failure (offline, CDN unreachable) it becomes a dismissible error banner: **"Compression codecs unavailable: {error}. Everything else works — the other codecs are unaffected."** — the six local codecs (Delta, Zigzag, Byte Shuffle, Bit Shuffle, Dictionary, RLE) are never affected by a Pyodide failure.
+- In the picker, Pyodide-backed entries render disabled (with a `(loading…)`/`(unavailable)` suffix) until the runtime reports ready. A saved pipeline that already references one of them is never blocked by the UI — only the compute itself waits on/fails against the runtime.
 
 ## UI Architecture
 
@@ -533,13 +560,15 @@ interface AppState {
   shape: number[];
   chunkShape: number[];
   interleaving: "row" | "column";
+  linearization: "c" | "fortran" | "morton";  // default 'c'; array model, ndim > 1 only — see "Linearization Order" below
+  byteOrder: "little" | "big";                // default 'little'; both data models, any ndim — see "Byte Order" below
   variables: Variable[];
   fieldPipelines: Record<string, CodecStep[]>;  // keyed by Variable.id (not name — see below)
   chunkPipeline: CodecStep[];                    // per-chunk, used in row mode
   metadata: {
     customEntries: { key: string; value: string }[];
     serialization: "json" | "binary";
-    includeChunkIndex: boolean;   // default true — see "Chunk Index" under Write Step
+    include: MetadataIncludeConfig;  // six granular toggles — see "Metadata UI" below (supersedes the old single includeChunkIndex boolean; chunkIndex is now one of the six groups)
   };
   write: {
     includeMetadata: boolean;     // default false — see the Read Step extension
@@ -661,7 +690,7 @@ The Metadata section in the sidebar contains:
 
 3. **Serialization toggle**: radio group for JSON / Binary.
 
-4. **Chunk index toggle**: see "Chunk Index" under Write Step below — it lives in this section because `chunk_index` is a metadata entry, but the option itself is under `state.metadata.includeChunkIndex`.
+4. **Granular include toggles**: six independent on/off toggles (`state.metadata.include: MetadataIncludeConfig`, `src/types/state.ts`), each starving a specific group of auto-collected metadata keys when off: `include-schema-toggle`, `include-layout-toggle`, `include-codecs-toggle`, `include-chunk-index-toggle` (the `chunk_index` group specifically — see "Chunk Index" under Write Step below), `include-descriptive-toggle`, and `include-endianness-toggle`. The first five gate metadata the reader (see the Read Step extension) genuinely *needs*: turning one off makes the reader stop at a specific, named step, with the read status reporting exactly where and why. **`include-endianness-toggle` is different in kind, not just in what it gates.** Omitting `byte_order` does not fail the read at all — the reader falls back to assuming the *host's* byte order (little-endian, in every browser) and proceeds normally. If the file was actually written big-endian, the read *succeeds*, silently, with every multi-byte value wrong. This is deliberate: it's the one metadata toggle in the tool that demonstrates silent data corruption rather than an honest failure, and the Read-stage's process view narrates the assumption explicitly ("byte order not recorded — assuming host (little-endian)") so the lesson is visible even when the numbers alone wouldn't tip you off.
 
 5. **Serialized size**: displays the total byte count of the serialized metadata.
 

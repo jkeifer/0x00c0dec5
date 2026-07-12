@@ -134,6 +134,7 @@ node tests/ui/scenario-large-array.mjs
 node tests/ui/scenario-read-process.mjs
 node tests/ui/scenario-perf1-large-boot.mjs
 node tests/ui/scenario-real-codecs.mjs
+node tests/ui/scenario-linearization-endianness.mjs
 kill %1                                          # stop the dev server when done
 ```
 
@@ -175,10 +176,11 @@ in `tests/ui/` for reference; prefer the `scenario-*.mjs` files and
 - `sidebar-section-{name}` — sidebar config sections
 - `codec-step-{variable}-{index}` — individual codec pipeline steps
 - `codec-warning-{variable}-{index}` — codec applicability warning icons
-- `runtime-banner` — the Pyodide load-progress strip rendered under the Header (project 4, real codecs); narrates loading (`runtime-banner-step-{id}` per step, ids from `RUNTIME_STEP_ORDER` in `src/engine/pyodideRuntime.ts`) and, on failure, becomes a dismissible error (`runtime-banner-dismiss`) with text prefixed `Real codecs unavailable:`. Unmounts entirely (not just hidden) once the runtime is ready or the error is dismissed.
-- `codec-group-real` — the codec picker's `<optgroup>` for real (numcodecs-backed, Pyodide) codecs; its `<option>`s are disabled until the runtime status is `ready`
+- `runtime-banner` — the Pyodide load-progress strip rendered under the Header; narrates loading (`runtime-banner-step-{id}` per step, ids from `RUNTIME_STEP_ORDER` in `src/engine/pyodideRuntime.ts`, prefix text "Loading compression runtime:") and, on failure, becomes a dismissible error (`runtime-banner-dismiss`) with text prefixed `Compression codecs unavailable:`. Unmounts entirely (not just hidden) once the runtime is ready or the error is dismissed.
+- `linearization-select` — the Chunk section's element-traversal-order picker (C order / Fortran order / Morton), rendered only for the array model with `shape.length > 1`
+- `byte-order-toggle` — the Chunk section's little/big-endian select, visible for both data models at every ndim (unlike `linearization-select`, not gated on array/multi-dim)
 - `footer-locator-toggle` — D1 footer locator radio (trailer/none), shown only when metadata placement is footer
-- `include-schema-toggle`, `include-layout-toggle`, `include-codecs-toggle`, `include-chunk-index-toggle`, `include-descriptive-toggle` — the Metadata section's five granular include-group toggles (`MetadataIncludeConfig`), each gating a specific set of metadata keys and starving a specific Read step when off (`include-chunk-index-toggle` is D3's chunk index group specifically)
+- `include-schema-toggle`, `include-layout-toggle`, `include-codecs-toggle`, `include-chunk-index-toggle`, `include-descriptive-toggle`, `include-endianness-toggle` — the Metadata section's six granular include-group toggles (`MetadataIncludeConfig`), each gating a specific set of metadata keys. The first five starve a specific, named Read step when off (`include-chunk-index-toggle` is D3's chunk index group specifically). `include-endianness-toggle` is semantically different: omitting it doesn't fail the read at all — the reader silently assumes the host's byte order and proceeds, so a big-endian file written with it off reads successfully with wrong values rather than failing honestly (the other five toggles' hard-fail-a-named-step behavior does not apply to it).
 - `include-metadata-toggle` — the read-extension's "Include metadata" toggle in Write
 - `magic-input` — the Write section's magic-number hex input
 - `read-status` — the sidebar's Read section status display
