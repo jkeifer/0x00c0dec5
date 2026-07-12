@@ -1,6 +1,7 @@
 import type { AppState } from '../types/state.ts';
 import type { StageName } from '../types/pipeline.ts';
 import type { PipelineDelta, StageKnownKeys } from '../engine/pipelineCompute.ts';
+import type { RuntimeStepId } from '../engine/pyodideRuntime.ts';
 
 /** `knownKeys` (PERF-1 stage-delta protocol): the per-stage memo keys of the
  * last result the client APPLIED — the worker omits any stage payload whose
@@ -12,7 +13,18 @@ export type StageTimings = Partial<Record<StageName, number>>; // ms per stage
 export interface ProgressMsg { kind: 'progress'; id: number; stage: StageName }
 export interface ResultOk { kind: 'result'; id: number; ok: true; delta: PipelineDelta; timings: StageTimings; totalMs: number }
 export interface ResultErr { kind: 'result'; id: number; ok: false; error: string }
-export type WorkerResponse = ProgressMsg | ResultOk | ResultErr;
+
+/** Pyodide runtime lifecycle (project 4). Not tied to a compute id — the
+ *  worker loads the runtime eagerly at startup and narrates progress. */
+export interface RuntimeStatusMsg {
+  kind: 'runtime-status';
+  status: 'loading' | 'ready' | 'error';
+  step?: RuntimeStepId;
+  stepState?: 'start' | 'done';
+  error?: string;
+}
+
+export type WorkerResponse = ProgressMsg | ResultOk | ResultErr | RuntimeStatusMsg;
 
 /** Every ArrayBuffer reachable from `value`, deduped — the postMessage
  * transfer list (PERF-1). A generic walk (objects, arrays, Maps, Sets, typed

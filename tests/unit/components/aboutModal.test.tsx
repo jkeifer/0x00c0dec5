@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { AppStateProvider } from '../../../src/state/useAppState.ts';
 import { AboutModal } from '../../../src/components/layout/AboutModal.tsx';
-import type { WorkerDiagnostics } from '../../../src/worker/client.ts';
+import { INITIAL_RUNTIME_STATE, type WorkerDiagnostics } from '../../../src/worker/client.ts';
 
 class MockStorage {
   private store = new Map<string, string>();
@@ -36,6 +36,7 @@ const FAKE_DIAGNOSTICS: WorkerDiagnostics = {
   lastTimings: { values: 3.1, typed: 1.2, encoded: 5.6 },
   lastTotalMs: 12.4,
   lastError: null,
+  runtime: INITIAL_RUNTIME_STATE,
 };
 
 function renderModal(diagnostics: WorkerDiagnostics = FAKE_DIAGNOSTICS) {

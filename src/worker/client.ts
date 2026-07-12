@@ -3,6 +3,15 @@ import { assemblePipelineResult } from '../engine/pipelineCompute.ts';
 import type { PipelineResult, StagePayloads, StageKnownKeys, PipelineDelta } from '../engine/pipelineCompute.ts';
 import { STAGE_ORDER } from '../types/pipeline.ts';
 import type { WorkerRequest, WorkerResponse, StageTimings } from './protocol.ts';
+import { RUNTIME_STEP_LABELS, type RuntimeStepId } from '../engine/pyodideRuntime.ts';
+
+export interface RuntimeState {
+  status: 'loading' | 'ready' | 'error';
+  steps: { id: RuntimeStepId; label: string; done: boolean }[];
+  error: string | null;
+}
+
+export const INITIAL_RUNTIME_STATE: RuntimeState = { status: 'loading', steps: [], error: null };
 
 export interface WorkerDiagnostics {
   status: 'idle' | 'computing' | 'crashed';
@@ -10,6 +19,7 @@ export interface WorkerDiagnostics {
   lastTimings: StageTimings | null;
   lastTotalMs: number | null;
   lastError: string | null;
+  runtime: RuntimeState;
 }
 
 export interface WorkerLike { // structural subset of Worker, for test fakes
@@ -39,6 +49,7 @@ export class PipelineWorkerClient {
   private lastTimings: StageTimings | null = null;
   private lastTotalMs: number | null = null;
   private lastError: string | null = null;
+  private runtime: RuntimeState = INITIAL_RUNTIME_STATE;
 
   // PERF-1 stage-delta protocol: the per-stage payloads of the last applied
   // result and their memo keys. `knownKeys` rides along on every compute
@@ -74,6 +85,7 @@ export class PipelineWorkerClient {
       lastTimings: this.lastTimings,
       lastTotalMs: this.lastTotalMs,
       lastError: this.lastError,
+      runtime: this.runtime,
     };
   }
 
@@ -117,6 +129,19 @@ export class PipelineWorkerClient {
   }
 
   private handleMessage(msg: WorkerResponse): void {
+    if (msg.kind === 'runtime-status') {
+      if (msg.status === 'error') {
+        this.runtime = { ...this.runtime, status: 'error', error: msg.error ?? 'runtime load failed' };
+      } else if (msg.status === 'ready') {
+        this.runtime = { ...this.runtime, status: 'ready', error: null };
+      } else if (msg.step) {
+        const steps = this.runtime.steps.filter((s) => s.id !== msg.step);
+        steps.push({ id: msg.step, label: RUNTIME_STEP_LABELS[msg.step], done: msg.stepState === 'done' });
+        this.runtime = { status: 'loading', steps, error: null };
+      }
+      this.onStatus?.(this.diagnostics());
+      return;
+    }
     if (msg.kind === 'progress') return;
     if (!this.inFlight || msg.id !== this.inFlight.id) return; // stale, ignore
 

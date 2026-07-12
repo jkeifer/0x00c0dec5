@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppState } from '../types/state.ts';
 import type { PipelineResult } from '../engine/pipelineCompute.ts';
-import { PipelineWorkerClient, createPipelineWorker, type WorkerLike, type WorkerDiagnostics } from '../worker/client.ts';
+import { PipelineWorkerClient, createPipelineWorker, INITIAL_RUNTIME_STATE, type WorkerLike, type WorkerDiagnostics } from '../worker/client.ts';
 
 const IDLE_DIAGNOSTICS: WorkerDiagnostics = {
   status: 'idle',
@@ -9,6 +9,7 @@ const IDLE_DIAGNOSTICS: WorkerDiagnostics = {
   lastTimings: null,
   lastTotalMs: null,
   lastError: null,
+  runtime: INITIAL_RUNTIME_STATE,
 };
 
 export interface UseWorkerPipelineResult {

@@ -6,11 +6,30 @@
 import { createPipelineComputer } from '../engine/pipelineCompute.ts';
 import { collectTransferables } from './protocol.ts';
 import type { WorkerRequest, WorkerResponse, StageTimings } from './protocol.ts';
+import { initPyodideRuntime } from '../engine/pyodideRuntime.ts';
+import { stateUsesPyodideCodec } from '../engine/codecs.ts';
 
 // One memoizing computer for the worker's lifetime (Task 13 Step 2b): caches
 // each stage's output keyed by the state slices it reads, so a metadata
 // keystroke does not re-run generation/typing/chunking/encoding.
 const computeDelta = createPipelineComputer();
+
+const post = (msg: WorkerResponse) => (self as unknown as Worker).postMessage(msg);
+
+// Project 4: load the Python runtime eagerly at worker startup, narrating
+// progress. Computes that don't use a real codec never wait on this; ones
+// that do await `runtimeReady` below (a failed load surfaces per-compute
+// through the existing ok:false path — and as a runtime-status error banner).
+const runtimeReady = initPyodideRuntime((e) =>
+  post({ kind: 'runtime-status', status: 'loading', step: e.step, stepState: e.state }),
+).then(
+  () => post({ kind: 'runtime-status', status: 'ready' }),
+  (err) => {
+    post({ kind: 'runtime-status', status: 'error', error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  },
+);
+runtimeReady.catch(() => { /* handled per-compute; avoid unhandled rejection */ });
 
 // PERF-1: results are posted as stage DELTAS with a transfer list. The full
 // PipelineResult's structured clone threw "Data cannot be cloned, out of
@@ -27,22 +46,22 @@ const computeDelta = createPipelineComputer();
 // Rather than fork tsconfig for one file, we cast through `unknown` to the
 // structural bits of the real DedicatedWorkerGlobalScope API (onmessage,
 // postMessage) we actually use, matching the brief's specified pattern.
-self.onmessage = (e: MessageEvent<WorkerRequest>) => {
+self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const msg = e.data;
   if (msg.kind !== 'compute') return;
   const timings: StageTimings = {};
   const t0 = performance.now();
   try {
+    if (stateUsesPyodideCodec(msg.state)) await runtimeReady;
     const delta = computeDelta(msg.state, msg.knownKeys, (stage, ms) => {
       timings[stage] = ms;
-      (self as unknown as Worker).postMessage({ kind: 'progress', id: msg.id, stage } satisfies WorkerResponse);
+      post({ kind: 'progress', id: msg.id, stage } satisfies WorkerResponse);
     });
     (self as unknown as Worker).postMessage(
       { kind: 'result', id: msg.id, ok: true, delta, timings, totalMs: performance.now() - t0 } satisfies WorkerResponse,
       collectTransferables(delta),
     );
   } catch (err) {
-    (self as unknown as Worker).postMessage(
-      { kind: 'result', id: msg.id, ok: false, error: err instanceof Error ? err.message : String(err) } satisfies WorkerResponse);
+    post({ kind: 'result', id: msg.id, ok: false, error: err instanceof Error ? err.message : String(err) } satisfies WorkerResponse);
   }
 };

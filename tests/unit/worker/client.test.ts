@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PipelineWorkerClient, type WorkerLike } from '../../../src/worker/client.ts';
+import { PipelineWorkerClient, type WorkerLike, type RuntimeState } from '../../../src/worker/client.ts';
 import { createPipelineComputer, type PipelineDelta, type PipelineResult } from '../../../src/engine/pipelineCompute.ts';
 import type { WorkerRequest, WorkerResponse } from '../../../src/worker/protocol.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
+import { RUNTIME_STEP_LABELS } from '../../../src/engine/pyodideRuntime.ts';
 
 // A real full delta (every stage payload present) — what the worker's first
 // compute produces. Computed once; tests only need its shape, not freshness.
@@ -24,6 +25,9 @@ class FakeWorker implements WorkerLike {
     this.listeners.message.forEach((f) => f({ data: { kind: 'result', id, ok: false, error } }));
   }
   emitError(msg: string) { this.listeners.error.forEach((f) => f({ message: msg })); }
+  emitRuntimeStatus(msg: Omit<import('../../../src/worker/protocol.ts').RuntimeStatusMsg, 'kind'>) {
+    this.listeners.message.forEach((f) => f({ data: { kind: 'runtime-status', ...msg } }));
+  }
 }
 
 describe('PipelineWorkerClient coalescing', () => {
@@ -135,5 +139,58 @@ describe('PipelineWorkerClient stage-delta protocol (PERF-1)', () => {
     w.emitResult(w.posted[0].id, broken);
     expect(onResult).not.toHaveBeenCalled();
     expect(c.diagnostics().lastError).toContain('values');
+  });
+});
+
+describe('PipelineWorkerClient runtime status (project 4)', () => {
+  it('starts loading with no steps', () => {
+    const w = new FakeWorker();
+    const c = new PipelineWorkerClient({ createWorker: () => w, onResult: () => {} });
+    c.compute(DEFAULT_STATE);
+    expect(c.diagnostics().runtime).toEqual({ status: 'loading', steps: [], error: null });
+  });
+
+  it('accumulates narrated steps and flips ready', () => {
+    const w = new FakeWorker();
+    const statuses: RuntimeState[] = [];
+    const c = new PipelineWorkerClient({
+      createWorker: () => w,
+      onResult: () => {},
+      onStatus: (d) => statuses.push(d.runtime),
+    });
+    c.compute(DEFAULT_STATE);
+    w.emitRuntimeStatus({ status: 'loading', step: 'download-runtime', stepState: 'start' });
+    expect(c.diagnostics().runtime.steps).toEqual([
+      { id: 'download-runtime', label: RUNTIME_STEP_LABELS['download-runtime'], done: false },
+    ]);
+    w.emitRuntimeStatus({ status: 'loading', step: 'download-runtime', stepState: 'done' });
+    expect(c.diagnostics().runtime.steps[0].done).toBe(true);
+    w.emitRuntimeStatus({ status: 'loading', step: 'install-numpy', stepState: 'start' });
+    w.emitRuntimeStatus({ status: 'loading', step: 'install-numpy', stepState: 'done' });
+    w.emitRuntimeStatus({ status: 'loading', step: 'install-numcodecs', stepState: 'start' });
+    w.emitRuntimeStatus({ status: 'loading', step: 'install-numcodecs', stepState: 'done' });
+    w.emitRuntimeStatus({ status: 'ready' });
+    expect(c.diagnostics().runtime.status).toBe('ready');
+    expect(c.diagnostics().runtime.steps).toHaveLength(3);
+    expect(statuses.length).toBeGreaterThan(0); // onStatus fired for runtime updates
+  });
+
+  it('records a load error', () => {
+    const w = new FakeWorker();
+    const c = new PipelineWorkerClient({ createWorker: () => w, onResult: () => {} });
+    c.compute(DEFAULT_STATE);
+    w.emitRuntimeStatus({ status: 'error', error: 'CDN unreachable' });
+    expect(c.diagnostics().runtime.status).toBe('error');
+    expect(c.diagnostics().runtime.error).toBe('CDN unreachable');
+  });
+
+  it('runtime messages do not disturb an in-flight compute', () => {
+    const w = new FakeWorker();
+    const onResult = vi.fn();
+    const c = new PipelineWorkerClient({ createWorker: () => w, onResult });
+    c.compute(DEFAULT_STATE);
+    w.emitRuntimeStatus({ status: 'ready' });
+    w.emitResult(w.posted[0].id);
+    expect(onResult).toHaveBeenCalledTimes(1);
   });
 });
