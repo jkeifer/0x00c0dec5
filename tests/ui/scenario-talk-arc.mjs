@@ -60,11 +60,31 @@ async function stageStats(page, index) {
 async function addCodecToHumidity(page, codecValue) {
   const codecsSection = page.locator('[data-testid="sidebar-section-codecs"]');
   await codecsSection.scrollIntoViewIfNeeded();
-  const addCodecSelects = codecsSection.locator('select');
-  // Column mode (default), variable order temperature, pressure, humidity —
-  // humidity is the 3rd variable/select (same pattern as
-  // scenario-placement-matrix.mjs's addRleToHumidity).
-  await addCodecSelects.nth(2).selectOption(codecValue);
+  // Column mode (default): each variable gets its own row, an outer <div>
+  // whose first child holds a <span> with the variable's exact name text,
+  // followed by a CodecPipelineEditor <select>. Task cl-10: presets can add
+  // variables ahead of humidity (Basically Parquet now has 4, with humidity
+  // last), so a fixed nth() index into "all selects in the section" is no
+  // longer safe once a preset is active — match the row by the variable
+  // name span's EXACT text (not hasText substring, which could
+  // false-positive on a name that's a substring of another), then narrow to
+  // the candidate div containing exactly one <select> (the tightest
+  // ancestor: the whole-section div and the bare name-row div both match
+  // "has a humidity span" too, but hold 3+ or 0 selects respectively).
+  const humidityCandidates = codecsSection
+    .locator('div')
+    .filter({ has: page.locator('span', { hasText: /^humidity$/ }) });
+  const candidateCount = await humidityCandidates.count();
+  let humidityRow = null;
+  for (let i = 0; i < candidateCount; i++) {
+    const candidate = humidityCandidates.nth(i);
+    if ((await candidate.locator('select').count()) === 1) {
+      humidityRow = candidate;
+      break;
+    }
+  }
+  if (!humidityRow) throw new Error('addCodecToHumidity: could not locate humidity\'s codec row');
+  await humidityRow.locator('select').first().selectOption(codecValue);
   await page.waitForTimeout(400);
   // Project 4's eager Pyodide init keeps the worker busy for the first few
   // seconds after boot, so early recomputes can land well after a flat wait —

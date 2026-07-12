@@ -10,6 +10,7 @@
   ],
   "interleaving": "column",
   "linearization": "c",
+  "byteOrder": "little",
   "variables": [
     {
       "id": "elevation",
@@ -81,6 +82,5 @@
     "leftPaneView": "grid",
     "rightPaneView": "hex",
     "showDiff": false
-  },
-  "byteOrder": "little"
+  }
 }

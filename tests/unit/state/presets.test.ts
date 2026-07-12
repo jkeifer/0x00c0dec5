@@ -117,6 +117,18 @@ describe('preset contents — D10 shape', () => {
     expect(s.fieldPipelines.temperature).toEqual([]);
   });
 
+  it('basically-parquet: task cl-10 — explicit linearization/byteOrder fields, endianness included, station column showcases Dictionary', () => {
+    const s = basicallyParquetRaw as unknown as AppState;
+    expect(s.linearization).toBe('c');
+    expect(s.byteOrder).toBe('little');
+    expect(s.metadata.include.endianness).toBe(true);
+    const station = s.variables.find((v) => v.id === 'station');
+    expect(station).toBeDefined();
+    expect(station!.logicalType.type).toBe('text');
+    expect(station!.typeAssignment.storageDtype).toBe('char16');
+    expect(s.fieldPipelines.station).toEqual([{ codec: 'dictionary', params: {} }]);
+  });
+
   it('basically-geotiff: array, 2-D [16,16], tiled chunks [8,8], header metadata, crs + transform entries', () => {
     const s = basicallyGeotiffRaw as unknown as AppState;
     expect(s.dataModel).toBe('array');
@@ -141,6 +153,15 @@ describe('preset contents — D10 shape', () => {
     expect(s.write.partitioning).toBe('per-chunk');
     expect(s.write.metadataPlacement).toBe('sidecar');
     expect(s.write.includeMetadata).toBe(true);
+  });
+
+  it('all three presets: task cl-10 — explicit linearization/byteOrder fields, endianness included', () => {
+    for (const key of Object.keys(PRESET_RAW) as PresetKey[]) {
+      const s = PRESET_RAW[key] as unknown as AppState;
+      expect(s.linearization, key).toBe('c');
+      expect(s.byteOrder, key).toBe('little');
+      expect(s.metadata.include.endianness, key).toBe(true);
+    }
   });
 });
 

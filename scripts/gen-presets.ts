@@ -55,6 +55,24 @@ const parquetVariables: Variable[] = [
     typeAssignment: { storageDtype: 'float32' },
   },
   {
+    // Task cl-10: a categorical text column showcasing Parquet's actual
+    // dictionary encoding — low-cardinality station IDs repeated in runs
+    // (stepped generation) is dictionary's ideal case, distinct from
+    // humidity's numeric delta+RLE story. Placed BEFORE humidity, not
+    // after: with footer+trailer placement and includeMetadata=false, the
+    // scanner's best-effort "does the tail look like metadata" plausibility
+    // check (read.ts's scanBinaryBackward) coincidentally fires on
+    // dictionary's compact [[stride][dictCount:u32]...] framing often
+    // enough that having it be the LAST column (nearest the file's tail)
+    // flips the no-metadata scenario's read failure from 'no-metadata' to
+    // 'metadata-not-found' — still a failure, just the wrong taxonomy
+    // entry for what the guide/scenarios teach at that beat. Humidity's
+    // RLE output at the tail doesn't trigger it.
+    id: 'station', name: 'station', color: '#c678dd',
+    logicalType: { type: 'text', wordSet: 'stations', generation: 'stepped' },
+    typeAssignment: { storageDtype: 'char16' },
+  },
+  {
     id: 'humidity', name: 'humidity', color: '#98c379',
     logicalType: { type: 'integer', min: 0, max: 100, generation: 'stepped' },
     typeAssignment: { storageDtype: 'uint16' },
@@ -67,6 +85,7 @@ const basicallyParquet: AppState = {
   chunkShape: [16], // "row groups"
   interleaving: 'column',
   linearization: 'c',
+  byteOrder: 'little',
   variables: parquetVariables,
   fieldPipelines: {
     temperature: [],
@@ -75,12 +94,15 @@ const basicallyParquet: AppState = {
       { codec: 'delta', params: { order: 1 } },
       { codec: 'rle', params: {} },
     ],
+    station: [
+      { codec: 'dictionary', params: {} },
+    ],
   },
   chunkPipeline: [],
   metadata: {
     customEntries: [{ key: 'created_by', value: '0x00C0DEC5' }],
     serialization: 'json',
-    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true },
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
   },
   write: {
     includeMetadata: true,
@@ -125,6 +147,7 @@ const basicallyGeotiff: AppState = {
   chunkShape: [8, 8], // tiles
   interleaving: 'column',
   linearization: 'c',
+  byteOrder: 'little',
   variables: geotiffVariables,
   fieldPipelines: {
     elevation: [],
@@ -137,7 +160,7 @@ const basicallyGeotiff: AppState = {
       { key: 'transform', value: '[0.1, 0.0, -180.0, 0.0, -0.1, 90.0]' },
     ],
     serialization: 'json',
-    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true },
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
   },
   write: {
     includeMetadata: true,
@@ -160,7 +183,13 @@ const basicallyGeotiff: AppState = {
 //
 // Array, 2-D, per-chunk partitioning (one file per chunk, Zarr-style),
 // sidecar JSON metadata (Zarr's .zarray/.zattrs live alongside chunk files,
-// not embedded in them).
+// not embedded in them). Task cl-10: real Zarr's default compressor is
+// Zstd — pedagogically that belongs here, but Zstd is a Pyodide-backed
+// codec (`runPyodideCodec`) that throws synchronously when the runtime
+// isn't loaded, which this generator (and the vitest preset round-trip
+// test) always hits. So the Zstd showcase lives in the guide's wrap-up
+// tryIt text instead ("add Zstd to temperature yourself"), not baked into
+// this preset's fieldPipelines.
 
 const zarrVariables: Variable[] = [
   {
@@ -181,6 +210,7 @@ const basicallyZarr: AppState = {
   chunkShape: [8, 8],
   interleaving: 'column',
   linearization: 'c',
+  byteOrder: 'little',
   variables: zarrVariables,
   fieldPipelines: {
     temperature: [],
@@ -190,7 +220,7 @@ const basicallyZarr: AppState = {
   metadata: {
     customEntries: [],
     serialization: 'json',
-    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true },
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
   },
   write: {
     includeMetadata: true,

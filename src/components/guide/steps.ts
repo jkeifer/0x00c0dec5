@@ -119,11 +119,23 @@ export const STEPS: GuideStep[] = [
       'wants to decompress a 10 GB file to look at one corner of it. Chunking trades ' +
       'compression context and index overhead for addressability. It is purely structural — ' +
       'the byte content of the data does not change, only its topology — but it constrains ' +
-      'everything downstream, because codecs and the chunk index both operate per chunk.',
+      'everything downstream, because codecs and the chunk index both operate per chunk. ' +
+      'On a 2-D+ array, chunking answers "what goes together" but not "in what order those ' +
+      'bytes are written": the Order control (C, Fortran, or Morton/Z-order) walks each ' +
+      'chunk’s multi-dimensional grid into a single byte stream. C order varies the last ' +
+      'dimension fastest (row-major — C, NumPy, and Zarr’s default); Fortran order varies the ' +
+      'first dimension fastest (column-major — MATLAB, and classic Fortran arrays); Morton ' +
+      'interleaves the bits of each coordinate, so bytes that are close in space stay close in ' +
+      'the file even along the "wrong" axis — the trick behind spatial databases and quadtree ' +
+      'tiling. It is purely a byte-ordering choice within a chunk, same as row/column ' +
+      'interleaving is a byte-ordering choice across variables — nothing about the values ' +
+      'changes, only where their bytes land.',
     tryIt:
       'Set the chunk shape from 32 down to 8. The Linearized stage’s hex view now shows four ' +
       'chunk regions instead of one, and the Metadata section’s chunk_index entry grows to ' +
-      'four offset entries. Try 1 and watch ChunkConfig call out the chunk count.',
+      'four offset entries. Try 1 and watch ChunkConfig call out the chunk count. On an N-d ' +
+      'array, switch Order from C to Morton and watch the Linearized stage’s hex view reorder ' +
+      'within each chunk — same byte count, different first row — while Read still round-trips.',
   },
   {
     id: 'interleave',
@@ -213,19 +225,25 @@ export const STEPS: GuideStep[] = [
     title: 'Codecs: prepare, then compress',
     section: 'codecs',
     decision:
-      'Build an ordered codec pipeline per variable (column mode) or per chunk (row mode). ' +
-      'Reordering codecs rearrange bytes to expose redundancy; entropy codecs actually shrink ' +
-      'it. Order matters: prepare first, compress last.',
+      'Build an ordered codec pipeline per variable (column mode) or per chunk (row mode), ' +
+      'picked from one flat list: Delta, Zigzag, Byte Shuffle, Bit Shuffle, Dictionary, RLE, ' +
+      'Deflate, GZip, Zstd. Reordering codecs rearrange bytes to expose redundancy; entropy ' +
+      'codecs actually shrink it. Order matters: prepare first, compress last.',
     options: [
       {
-        label: 'Delta (reordering)',
-        pros: 'Stores value-to-value differences — smooth or sorted data collapses to small numbers. Exact round-trip on every integer dtype.',
-        cons: 'Lossy on float dtypes (each difference is re-rounded — the ⚠ warning), and on random data the differences are as noisy as the values.',
+        label: 'Delta + Zigzag (reordering)',
+        pros: 'Delta stores value-to-value differences — smooth or sorted data collapses to small numbers. Zigzag then maps those signed diffs to unsigned so small magnitudes stay small byte values (Parquet’s move ahead of RLE/bit-packing).',
+        cons: 'Delta is lossy on float dtypes (each difference is re-rounded — the ⚠ warning); Zigzag only applies to signed integer dtypes and is a no-op without a preceding signed-producing step.',
       },
       {
-        label: 'Byte Shuffle (reordering)',
-        pros: 'Transposes bytes by position within each element, clustering the near-constant high bytes together — RLE and LZ feed on the result.',
-        cons: 'elementSize must match the actual dtype size or bytes get grouped across value boundaries — garbled output the tool warns about but allows.',
+        label: 'Byte Shuffle / Bit Shuffle (reordering)',
+        pros: 'Byte Shuffle transposes bytes by position within each element, clustering near-constant high bytes together; Bit Shuffle does the same one level finer, transposing individual bits into planes. Both feed the entropy codecs that follow.',
+        cons: 'Byte Shuffle’s elementSize must match the actual dtype size or bytes get grouped across value boundaries — garbled output the tool warns about but allows. Neither helps single-byte dtypes (nothing to transpose within one byte).',
+      },
+      {
+        label: 'Dictionary (entropy)',
+        pros: 'Parquet’s workhorse: distinct values go into a dictionary, the stream becomes indices into it — dramatic wins on low-cardinality data (categories, repeated station IDs).',
+        cons: 'High-cardinality data (near-random values) makes the dictionary as large as the data itself, plus index overhead — a net loss.',
       },
       {
         label: 'RLE (entropy)',
@@ -233,9 +251,9 @@ export const STEPS: GuideStep[] = [
         cons: 'On data without runs it doubles the size (every byte becomes a pair). Output is opaque uint8 — per-byte tracing ends here.',
       },
       {
-        label: 'LZ (entropy)',
-        pros: 'Finds repeated byte sequences within a window, not just adjacent runs — more general than RLE.',
-        cons: 'Literal overhead makes incompressible input grow; like RLE it collapses the dtype to uint8 and degrades tracing to chunk level.',
+        label: 'Deflate / GZip / Zstd (real, general-purpose)',
+        pros: 'Actual numcodecs implementations (via Pyodide) — the same algorithms behind .gz files and modern Zarr. Find repeated byte sequences within a window, not just adjacent runs, so they generalize past RLE.',
+        cons: 'Literal overhead makes incompressible input grow; like RLE they collapse the dtype to uint8 and degrade tracing to chunk level. Real compression, so the first use in a session pays a one-time Pyodide load.',
       },
     ],
     body:
@@ -243,19 +261,19 @@ export const STEPS: GuideStep[] = [
       'compressor — is exactly how Zarr filters + Blosc, Parquet encodings + Snappy, and HDF5 ' +
       'shuffle + gzip work. Watch two things as you experiment: the dtype annotation flowing ' +
       'through the pipeline (entropy codecs collapse it to uint8), and the hover tracing — ' +
-      'after RLE or LZ, hovering an encoded byte highlights the whole source chunk, because ' +
-      'individual bytes no longer map to individual values. That opacity is why metadata must ' +
-      'record the pipeline: nothing about the bytes themselves says how to reverse them. ' +
-      'Text has its own version of the pairing: RLE devours the trailing-space padding of ' +
-      'short words in char16, but it is LZ that compresses the words themselves — repeated ' +
-      'values and shared station-ID prefixes are byte sequences, not same-byte runs. Delta ' +
-      'on text falls back to meaningless byte-wise differences; the tool warns but stays ' +
-      'lossless.',
+      'after RLE, Dictionary, Deflate, GZip, or Zstd, hovering an encoded byte highlights the ' +
+      'whole source chunk, because individual bytes no longer map to individual values. That ' +
+      'opacity is why metadata must record the pipeline: nothing about the bytes themselves ' +
+      'says how to reverse them. Text has its own version of the pairing: RLE devours the ' +
+      'trailing-space padding of short words in char16, Dictionary devours outright repeats, ' +
+      'and it is the general-purpose compressors that shrink the words themselves — shared ' +
+      'station-ID prefixes are byte sequences, not same-byte runs or exact repeats. Delta on ' +
+      'text falls back to meaningless byte-wise differences; the tool warns but stays lossless.',
     tryIt:
       'Add Delta then RLE to humidity (stepped — long runs) and watch its Encoded bytes ' +
       'shrink. Add the same two codecs to temperature after setting its generation to random: ' +
       'the byte count grows and turns the warning color. Same pipeline, opposite result — the ' +
-      'codec was never the point; the data’s structure was.',
+      'codec was never the point; the data’s structure was. Then swap RLE for Zstd and compare.',
   },
   {
     id: 'metadata',
@@ -278,7 +296,12 @@ export const STEPS: GuideStep[] = [
       {
         label: 'Chunk index: include or omit',
         pros: 'Including it (default) lets the reader seek straight to any chunk’s offset.',
-        cons: 'Omitting it saves bytes but the reader must compute offsets — impossible once any size-changing codec (RLE/LZ) is in play. Read fails with no-chunk-index.',
+        cons: 'Omitting it saves bytes but the reader must compute offsets — impossible once any size-changing codec is in play (RLE, Dictionary, Deflate, GZip, Zstd). Read fails with no-chunk-index.',
+      },
+      {
+        label: 'Endianness: include or omit',
+        pros: 'Including it (default) records byte_order explicitly, so any reader — on any hardware — decodes multi-byte values correctly regardless of the byte order Write actually used.',
+        cons: 'Omitting it does not fail the read: the reader silently assumes its own host order. If Write actually used the other order (see the Chunk section’s Byte order control), every multi-byte value decodes to the wrong number — no error, no warning, just quietly corrupt data.',
       },
     ],
     body:
@@ -288,12 +311,22 @@ export const STEPS: GuideStep[] = [
       'GeoTIFF does. The CRS is not magic; it is a string in a metadata dictionary. The ' +
       'chunk-index toggle is the sharpest lesson in the section: with RLE applied, chunk ' +
       'sizes are unpredictable, and without an index they are unlocatable — which is why ' +
-      'every real chunked format carries one.',
+      'every real chunked format carries one. The endianness toggle is the quietest lesson: ' +
+      'every other missing-metadata failure in this tool is loud — Read stops and names what ' +
+      'it was missing. Omitted byte order is the one exception. The reader has to guess ' +
+      'something to keep going, so it guesses its own host order and proceeds; on a ' +
+      'byte-order mismatch, Read still reports success, and only the diff view shows the ' +
+      'reconstructed values are garbage. Real formats treat this as non-negotiable for exactly ' +
+      'that reason — TIFF’s first two bytes are the byte order itself ("II" or "MM"), and ' +
+      'network protocols standardize on big-endian ("network byte order") so no metadata is ' +
+      'even needed.',
     tryIt:
       'Switch serialization to Binary and view the Metadata stage in hex — the keys are ' +
       'still visible in the ASCII column, each prefixed by its little-endian length. Then, ' +
       'with RLE on any variable, untick "Include chunk index" and watch the Read section ' +
-      'fail with no-chunk-index.',
+      'fail with no-chunk-index. Separately: in the Chunk section, set Byte order to Big-endian, ' +
+      'then here untick "Include endianness" — Read still says success, but open the diff view ' +
+      'and watch the values that were actually written come back wrong.',
   },
   {
     id: 'write',
@@ -386,16 +419,21 @@ export const STEPS: GuideStep[] = [
       'are those orders, written down.',
     options: [],
     body:
-      '"Basically Parquet" is tabular, column-oriented, per-column codecs, footer metadata ' +
-      'with a trailer. "Basically GeoTIFF" is a 2-d array, tiled chunks, header metadata. ' +
-      '"Basically Zarr" is an N-d array, per-chunk files, sidecar metadata. None of them is ' +
-      'magic — each is one path through the sidebar you just walked. When a format ships a ' +
-      'feature, it is answering one of these questions differently; when you read a spec, ' +
-      'you now know which question each section answers.',
+      '"Basically Parquet" is tabular, column-oriented, per-column codecs — delta+RLE on the ' +
+      'stepped numeric column, Dictionary on the categorical text column — footer metadata ' +
+      'with a trailer. "Basically GeoTIFF" is a 2-d array, tiled chunks, header metadata, no ' +
+      'codecs at all (real GeoTIFF usually does compress, but leaving these variables raw ' +
+      'keeps the CRS/transform metadata story the focus). "Basically Zarr" is an N-d array, ' +
+      'per-chunk files, sidecar metadata — real Zarr’s default compressor is Zstd, which you ' +
+      'can add from the Codecs section yourself to see the preset’s own bytes shrink further. ' +
+      'None of them is magic — each is one path through the sidebar you just walked. When a ' +
+      'format ships a feature, it is answering one of these questions differently; when you ' +
+      'read a spec, you now know which question each section answers.',
     tryIt:
       'Load "Basically Parquet" from the Presets menu and walk the sidebar top to bottom, ' +
       'naming the option it picked at every step. Then switch the data model to N-d Array ' +
-      'and do the same for "Basically GeoTIFF" and "Basically Zarr" — the differences ' +
-      'between the three are the differences between the formats.',
+      'and do the same for "Basically GeoTIFF" and "Basically Zarr". On Zarr, add Zstd to ' +
+      'temperature’s pipeline and watch the Encoded stage shrink — the differences between ' +
+      'the three presets, plus this one live edit, are the differences between the formats.',
   },
 ];
