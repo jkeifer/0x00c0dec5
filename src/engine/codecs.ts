@@ -1,7 +1,9 @@
-import type { CodecDefinition, CodecStep } from '../types/codecs.ts';
+import type { CodecDefinition, CodecStep, ParamDef } from '../types/codecs.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
 import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import { bytesToValues, valuesToBytes } from './elements.ts';
+import { runPyodideCodec } from './pyodideRuntime.ts';
+import type { AppState } from '../types/state.ts';
 
 // ─── Delta ──────────────────────────────────────────────────────────────
 
@@ -319,6 +321,81 @@ const lz: CodecDefinition = {
   },
 };
 
+// ─── Real codecs (project 4): actual numcodecs via Pyodide ─────────────────
+//
+// Ordinary entropy entries — uint8 output dtype, chunk-level trace
+// degradation, codec_pipelines metadata, and read-side reversal all come
+// from the same machinery RLE/LZ use. The only differences: `runtime:
+// 'pyodide'` (picker/gating) and encode/decode delegating to numcodecs.
+// numcodecs.get_codec consumes the same config-dict shape Zarr metadata
+// stores, so params translate 1:1.
+
+const BLOSC_SHUFFLE: Record<string, number> = { none: 0, byte: 1, bit: 2 };
+
+function pyodideCodec(opts: {
+  key: string;
+  label: string;
+  description: string;
+  params: Record<string, ParamDef>;
+  config: (params: Record<string, number | string>) => Record<string, unknown>;
+}): CodecDefinition {
+  return {
+    key: opts.key,
+    label: opts.label,
+    category: 'entropy',
+    runtime: 'pyodide',
+    description: opts.description,
+    params: opts.params,
+    applicableTo: () => true,
+    isLossy: () => false,
+    encode: (bytes, _inputDtype, params) => ({
+      bytes: runPyodideCodec('encode', opts.config(params), bytes),
+      outputDtype: 'uint8',
+    }),
+    decode: (bytes, _encodedDtype, params) => ({
+      bytes: runPyodideCodec('decode', opts.config(params), bytes),
+      outputDtype: 'uint8',
+    }),
+  };
+}
+
+const zstdCodec = pyodideCodec({
+  key: 'zstd',
+  label: 'Zstd (real)',
+  description: 'Real Zstandard compression via numcodecs — the default compressor in modern Zarr.',
+  params: {
+    level: { label: 'Level', type: 'number', default: 3, min: 1, max: 22, step: 1 },
+  },
+  config: (p) => ({ id: 'zstd', level: Number(p.level ?? 3) }),
+});
+
+const gzipCodec = pyodideCodec({
+  key: 'gzip',
+  label: 'GZip (real)',
+  description: 'Real DEFLATE/gzip via numcodecs — the same algorithm behind .gz files and PNG.',
+  params: {
+    level: { label: 'Level', type: 'number', default: 6, min: 0, max: 9, step: 1 },
+  },
+  config: (p) => ({ id: 'gzip', level: Number(p.level ?? 6) }),
+});
+
+const bloscCodec = pyodideCodec({
+  key: 'blosc',
+  label: 'Blosc (real)',
+  description: 'Real Blosc meta-compressor via numcodecs — note it has byte/bit shuffle BUILT IN, the same trick as the educational Byte Shuffle step.',
+  params: {
+    cname: { label: 'Compressor', type: 'select', default: 'lz4', options: ['lz4', 'zstd', 'zlib'] },
+    clevel: { label: 'Level', type: 'number', default: 5, min: 1, max: 9, step: 1 },
+    shuffle: { label: 'Shuffle', type: 'select', default: 'byte', options: ['none', 'byte', 'bit'] },
+  },
+  config: (p) => ({
+    id: 'blosc',
+    cname: String(p.cname ?? 'lz4'),
+    clevel: Number(p.clevel ?? 5),
+    shuffle: BLOSC_SHUFFLE[String(p.shuffle ?? 'byte')] ?? 1,
+  }),
+});
+
 // ─── Registry ───────────────────────────────────────────────────────────
 
 export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
@@ -326,6 +403,9 @@ export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
   'byte-shuffle': byteShuffle,
   'rle': rle,
   'lz': lz,
+  zstd: zstdCodec,
+  gzip: gzipCodec,
+  blosc: bloscCodec,
 };
 
 // ─── Dtype flow (UI-15) ───────────────────────────────────────────────────
@@ -343,6 +423,20 @@ export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
  */
 export function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey): DtypeKey {
   return codec.category === 'entropy' ? 'uint8' : inputDtype;
+}
+
+/** True when any configured pipeline step references a runtime-backed codec.
+ *  Used by the worker to decide whether a compute must await Pyodide init.
+ *  Deliberately checks ALL fieldPipelines (including ones inactive in row
+ *  mode): the worst case of the conservative answer is an unnecessary await,
+ *  never a wrong result. */
+export function stateUsesPyodideCodec(
+  state: Pick<AppState, 'fieldPipelines' | 'chunkPipeline'>,
+): boolean {
+  const usesRuntime = (steps: CodecStep[]) =>
+    steps.some((s) => CODEC_REGISTRY[s.codec]?.runtime === 'pyodide');
+  if (usesRuntime(state.chunkPipeline)) return true;
+  return Object.values(state.fieldPipelines).some(usesRuntime);
 }
 
 /**

@@ -10,9 +10,9 @@ import { valuesToBytes, bytesToValues } from '../../../src/engine/elements.ts';
 import type { CodecStep } from '../../../src/types/codecs.ts';
 
 describe('codec registry', () => {
-  it('contains only delta, byte-shuffle, rle, lz', () => {
+  it('contains delta, byte-shuffle, rle, lz, and the pyodide-backed real codecs', () => {
     const keys = Object.keys(CODEC_REGISTRY).sort();
-    expect(keys).toEqual(['byte-shuffle', 'delta', 'lz', 'rle']);
+    expect(keys).toEqual(['blosc', 'byte-shuffle', 'delta', 'gzip', 'lz', 'rle', 'zstd']);
   });
 
   it('does not contain scale-offset or bitround', () => {

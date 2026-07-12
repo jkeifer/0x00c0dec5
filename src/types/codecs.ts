@@ -14,6 +14,11 @@ export interface CodecDefinition {
   key: string;
   label: string;
   category: 'reordering' | 'entropy';
+  /** Present on codecs backed by an external runtime. 'pyodide' entries are
+   *  the real numcodecs codecs: the picker disables them until the runtime
+   *  loads, and the worker awaits runtime init before computes that use one
+   *  (see stateUsesPyodideCodec). Absent = educational codec, always available. */
+  runtime?: 'pyodide';
   description: string;
   params: Record<string, ParamDef>;
   applicableTo: (dtype: string) => boolean;
