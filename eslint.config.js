@@ -19,5 +19,11 @@ export default defineConfig([
       ecmaVersion: 2020,
       globals: globals.browser,
     },
+    rules: {
+      // The codebase's convention for deliberately-unused params/vars is a
+      // leading underscore (e.g. codec encode(bytes, _inputDtype) where the
+      // interface fixes the signature) — honor it instead of flagging it.
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    },
   },
 ])

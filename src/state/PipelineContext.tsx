@@ -91,6 +91,7 @@ export function PipelineProvider({
   return <PipelineContext.Provider value={value}>{children}</PipelineContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- context hook lives with its provider by design; losing fast-refresh here is acceptable
 export function usePipelineContext(): PipelineContextValue {
   const ctx = useContext(PipelineContext);
   if (!ctx) {

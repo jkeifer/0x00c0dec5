@@ -11,18 +11,21 @@ import { useWorkerPipeline } from '../../../src/hooks/useWorkerPipeline.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
 import type { WorkerLike } from '../../../src/worker/client.ts';
 import { createPipelineComputer, type PipelineDelta } from '../../../src/engine/pipelineCompute.ts';
+import type { WorkerRequest, WorkerResponse } from '../../../src/worker/protocol.ts';
 import type { AppState } from '../../../src/types/state.ts';
 
 // A real full delta (PERF-1 stage-delta protocol) — what the worker's first
 // compute produces. The hook itself only sees the assembled PipelineResult.
 const FULL_DELTA: PipelineDelta = createPipelineComputer()(DEFAULT_STATE);
 
+type Listener = (e: { data?: WorkerResponse; message?: string }) => void;
+
 class FakeWorker implements WorkerLike {
-  posted: any[] = [];
-  listeners: Record<string, ((e: any) => void)[]> = { message: [], error: [] };
+  posted: WorkerRequest[] = [];
+  listeners: Record<'message' | 'error', Listener[]> = { message: [], error: [] };
   terminated = false;
-  postMessage(msg: unknown) { this.posted.push(msg); }
-  addEventListener(type: 'message' | 'error', fn: (e: any) => void) { this.listeners[type].push(fn); }
+  postMessage(msg: unknown) { this.posted.push(msg as WorkerRequest); }
+  addEventListener(type: 'message' | 'error', fn: Listener) { this.listeners[type].push(fn); }
   terminate() { this.terminated = true; }
   emitResult(id: number, delta: PipelineDelta = FULL_DELTA) {
     this.listeners.message.forEach((f) => f({

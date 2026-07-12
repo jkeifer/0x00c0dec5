@@ -47,7 +47,7 @@ export function orderChunks(
   order: 'row-major' | 'column-major',
   variableOrder?: string[],
 ): EncodedChunk[] {
-  let sorted = [...chunks];
+  const sorted = [...chunks];
 
   // Apply spatial ordering first
   if (order === 'column-major' && chunkGrid.length > 1) {

@@ -84,7 +84,8 @@ function runFullPipeline(state: AppState) {
 }
 
 function getDtypeInfo(dtype: string) {
-  const map: Record<string, { size: number; TypedArray: any }> = {
+  type NumericTypedArrayCtor = new (buffer: ArrayBufferLike, byteOffset?: number, length?: number) => ArrayLike<number>;
+  const map: Record<string, { size: number; TypedArray: NumericTypedArrayCtor }> = {
     int8: { size: 1, TypedArray: Int8Array },
     uint8: { size: 1, TypedArray: Uint8Array },
     int16: { size: 2, TypedArray: Int16Array },

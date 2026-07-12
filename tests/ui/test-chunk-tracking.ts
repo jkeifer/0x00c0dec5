@@ -357,8 +357,6 @@ async function testChunkTracking() {
   await page.waitForTimeout(300);
 
   // Move to a left pane byte (scroll back to top)
-  const leftPanel = page.locator('#left-pane');
-  const scrollContainer = leftPanel.locator('div[style*="overflow"]').first();
   // Just hover on the first available left hex byte
   const firstLeftByte = await page.evaluate((dx: number) => {
     const allSpans = document.querySelectorAll('span');

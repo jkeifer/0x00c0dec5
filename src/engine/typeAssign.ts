@@ -185,7 +185,7 @@ export function reverseTypeAssignment(
   bytes: Uint8Array,
   assignment: TypeAssignment,
 ): ValueArray {
-  let dtype = assignment.storageDtype;
+  const dtype = assignment.storageDtype;
 
   // keepBits is irrecoverable (like bitround), so no reversal needed for it
   // Just read the values and reverse scale/offset

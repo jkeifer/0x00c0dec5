@@ -3,6 +3,7 @@ import {
   useContext,
   useReducer,
   useEffect,
+  useLayoutEffect,
   useRef,
   useCallback,
   type ReactNode,
@@ -274,7 +275,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   // data) without itself being recreated on every state change, so its
   // identity stays stable for consumers — a ref mirrors the latest state.
   const stateRef = useRef(state);
-  stateRef.current = state;
+  // Mirror after commit (a render-time ref write violates rules-of-react /
+  // the react compiler lint). useLayoutEffect, not useEffect: it runs
+  // synchronously in the commit task, so the SW-9 pagehide flush (below,
+  // reads stateRef) can never observe a committed state the mirror hasn't
+  // caught up with — passive effects could be deferred past a pagehide.
+  useLayoutEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   // Debounced save to localStorage
   useEffect(() => {
@@ -392,6 +400,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   return createElement(
     AppStateContext.Provider,
+    // eslint-disable-next-line react-hooks/refs -- conservative compiler heuristic: the callbacks close over stateRef (useEvent-style stable identity) but only ever read it in event handlers, never during render
     { value: { state, dispatch, switchDataModel, loadPreset, restoreCheckpoint, clearConfig } },
     children,
   );

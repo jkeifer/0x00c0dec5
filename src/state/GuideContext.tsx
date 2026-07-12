@@ -86,6 +86,7 @@ export function GuideProvider({ children }: { children: ReactNode }) {
   return <GuideContext.Provider value={value}>{children}</GuideContext.Provider>;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components -- context hook lives with its provider by design; losing fast-refresh here is acceptable
 export function useGuide(): GuideContextValue {
   return useContext(GuideContext);
 }

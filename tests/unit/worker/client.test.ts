@@ -1,18 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PipelineWorkerClient, type WorkerLike } from '../../../src/worker/client.ts';
-import { createPipelineComputer, type PipelineDelta } from '../../../src/engine/pipelineCompute.ts';
+import { createPipelineComputer, type PipelineDelta, type PipelineResult } from '../../../src/engine/pipelineCompute.ts';
+import type { WorkerRequest, WorkerResponse } from '../../../src/worker/protocol.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
 
 // A real full delta (every stage payload present) — what the worker's first
 // compute produces. Computed once; tests only need its shape, not freshness.
 const FULL_DELTA: PipelineDelta = createPipelineComputer()(DEFAULT_STATE);
 
+type Listener = (e: { data?: WorkerResponse; message?: string }) => void;
+
 class FakeWorker implements WorkerLike {
-  posted: any[] = [];
-  listeners: Record<string, ((e: any) => void)[]> = { message: [], error: [] };
+  posted: WorkerRequest[] = [];
+  listeners: Record<'message' | 'error', Listener[]> = { message: [], error: [] };
   terminated = false;
-  postMessage(msg: unknown) { this.posted.push(msg); }
-  addEventListener(type: 'message' | 'error', fn: (e: any) => void) { this.listeners[type].push(fn); }
+  postMessage(msg: unknown) { this.posted.push(msg as WorkerRequest); }
+  addEventListener(type: 'message' | 'error', fn: Listener) { this.listeners[type].push(fn); }
   terminate() { this.terminated = true; }
   emitResult(id: number, delta: PipelineDelta = FULL_DELTA) {
     this.listeners.message.forEach((f) => f({ data: { kind: 'result', id, ok: true, delta, timings: {}, totalMs: 1 } }));
@@ -89,7 +92,7 @@ describe('PipelineWorkerClient stage-delta protocol (PERF-1)', () => {
   });
   it('assembles a full result from a partial delta using stored payloads', () => {
     const w = new FakeWorker();
-    const results: any[] = [];
+    const results: PipelineResult[] = [];
     const c = new PipelineWorkerClient({ createWorker: () => w, onResult: (r) => results.push(r) });
     c.compute(DEFAULT_STATE);
     w.emitResult(w.posted[0].id); // full delta applied
