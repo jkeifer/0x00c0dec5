@@ -116,8 +116,8 @@ const ENCODED_CASES: { name: string; interleaving: 'row' | 'column'; fieldSteps?
   },
   { name: 'rle (entropy)', interleaving: 'column', fieldSteps: [{ codec: 'rle', params: {} }] },
   {
-    name: 'byte-shuffle+lz', interleaving: 'column',
-    fieldSteps: [{ codec: 'byte-shuffle', params: { elementSize: 4 } }, { codec: 'lz', params: {} }],
+    name: 'byte-shuffle+rle', interleaving: 'column',
+    fieldSteps: [{ codec: 'byte-shuffle', params: { elementSize: 4 } }, { codec: 'rle', params: {} }],
   },
   { name: 'row chunk pipeline rle', interleaving: 'row', chunkSteps: [{ codec: 'rle', params: {} }] },
   {

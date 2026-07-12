@@ -10,14 +10,84 @@ import { valuesToBytes, bytesToValues } from '../../../src/engine/elements.ts';
 import type { CodecStep } from '../../../src/types/codecs.ts';
 
 describe('codec registry', () => {
-  it('contains delta, byte-shuffle, rle, lz, and the pyodide-backed real codecs', () => {
+  it('contains delta, zigzag, byte-shuffle, bit-shuffle, rle, and the pyodide-backed real codecs', () => {
     const keys = Object.keys(CODEC_REGISTRY).sort();
-    expect(keys).toEqual(['blosc', 'byte-shuffle', 'delta', 'gzip', 'lz', 'rle', 'zstd']);
+    expect(keys).toEqual(['bit-shuffle', 'byte-shuffle', 'delta', 'gzip', 'rle', 'zigzag', 'zstd']);
   });
 
   it('does not contain scale-offset or bitround', () => {
     expect(CODEC_REGISTRY['scale-offset']).toBeUndefined();
     expect(CODEC_REGISTRY['bitround']).toBeUndefined();
+  });
+});
+
+describe('zigzag codec', () => {
+  it('is applicable to signed ints only', () => {
+    const z = CODEC_REGISTRY['zigzag'];
+    expect(z.category).toBe('reordering');
+    expect(z.applicableTo('int16')).toBe(true);
+    expect(z.applicableTo('int32')).toBe(true);
+    expect(z.applicableTo('uint16')).toBe(false);
+    expect(z.applicableTo('float32')).toBe(false);
+  });
+  it('maps small magnitudes to small unsigned values and round-trips exactly', () => {
+    const values = [0, -1, 1, -2, 2, -100, 100, -32768, 32767];
+    const bytes = valuesToBytes(values, 'int16');
+    const enc = CODEC_REGISTRY['zigzag'].encode(bytes, 'int16', {});
+    expect(enc.outputDtype).toBe('int16'); // dtype-preserving (stride unchanged)
+    // zigzag(0)=0, zigzag(-1)=1, zigzag(1)=2, zigzag(-2)=3, zigzag(2)=4
+    const encVals = bytesToValues(enc.bytes, 'uint16');
+    expect(Array.from(encVals as Float64Array).slice(0, 5)).toEqual([0, 1, 2, 3, 4]);
+    const dec = CODEC_REGISTRY['zigzag'].decode(enc.bytes, 'int16', {});
+    expect(Array.from(bytesToValues(dec.bytes, 'int16') as Float64Array)).toEqual(values);
+  });
+  it('isLossy false for signed ints', () => {
+    expect(CODEC_REGISTRY['zigzag'].isLossy('int16')).toBe(false);
+  });
+});
+
+describe('bit-shuffle codec', () => {
+  it('round-trips exactly for every multi-byte dtype and elementSize', () => {
+    for (const dtype of ['int16', 'int32', 'float32', 'float64'] as const) {
+      const values = Array.from({ length: 64 }, (_, i) => i - 32);
+      const bytes = valuesToBytes(values, dtype);
+      const enc = CODEC_REGISTRY['bit-shuffle'].encode(bytes, dtype, {});
+      expect(enc.bytes.length).toBe(bytes.length); // size-preserving
+      expect(enc.outputDtype).toBe(dtype);
+      const dec = CODEC_REGISTRY['bit-shuffle'].decode(enc.bytes, dtype, {});
+      expect(Array.from(dec.bytes)).toEqual(Array.from(bytes));
+    }
+  });
+  it('groups same-position bits: constant data becomes all-0xFF/0x00 planes', () => {
+    // 32 identical int16 values of 1 => bit plane 0 is all ones, rest zeros
+    const bytes = valuesToBytes(new Array(32).fill(1), 'int16');
+    const enc = CODEC_REGISTRY['bit-shuffle'].encode(bytes, 'int16', {});
+    const counts = new Map<number, number>();
+    for (const b of enc.bytes) counts.set(b, (counts.get(b) ?? 0) + 1);
+    // Only two byte values appear (0x00 and 0xFF): perfect plane separation
+    expect([...counts.keys()].sort()).toEqual([0, 255]);
+  });
+  it('handles trailing bytes not filling a whole element block (passes them through)', () => {
+    const bytes = new Uint8Array([1, 2, 3, 4, 5]); // int16 stride 2 -> 1 leftover byte
+    const enc = CODEC_REGISTRY['bit-shuffle'].encode(bytes, 'int16', {});
+    const dec = CODEC_REGISTRY['bit-shuffle'].decode(enc.bytes, 'int16', {});
+    expect(Array.from(dec.bytes)).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+describe('curation', () => {
+  it('registry has the exact curated order (picker order source of truth)', () => {
+    // dictionary/deflate join in Tasks 2-3; assert relative order of what exists now
+    const keys = Object.keys(CODEC_REGISTRY);
+    const expectOrder = ['delta', 'zigzag', 'byte-shuffle', 'bit-shuffle', 'rle', 'gzip', 'zstd'];
+    expect(keys.filter((k) => expectOrder.includes(k))).toEqual(expectOrder);
+  });
+  it('lz and blosc are gone', () => {
+    expect(CODEC_REGISTRY['lz']).toBeUndefined();
+    expect(CODEC_REGISTRY['blosc']).toBeUndefined();
+  });
+  it('no label contains "(real)"', () => {
+    for (const c of Object.values(CODEC_REGISTRY)) expect(c.label).not.toContain('(real)');
   });
 });
 
@@ -57,15 +127,6 @@ describe('byte-shuffle codec — isLossy', () => {
 describe('rle codec — isLossy', () => {
   it('is always false (exact expansion of runs)', () => {
     const codec = CODEC_REGISTRY['rle'];
-    for (const dtype of ['int8', 'uint16', 'int32', 'float32', 'float64'] as const) {
-      expect(codec.isLossy(dtype)).toBe(false);
-    }
-  });
-});
-
-describe('lz codec — isLossy', () => {
-  it('is always false (exact expansion of back-references)', () => {
-    const codec = CODEC_REGISTRY['lz'];
     for (const dtype of ['int8', 'uint16', 'int32', 'float32', 'float64'] as const) {
       expect(codec.isLossy(dtype)).toBe(false);
     }
@@ -170,40 +231,6 @@ describe('rle codec', () => {
   it('handles single byte', () => {
     const result = codec.encode(new Uint8Array([42]), 'uint8', {});
     expect(Array.from(result.bytes)).toEqual([1, 42]);
-  });
-});
-
-describe('lz codec', () => {
-  const codec = CODEC_REGISTRY['lz'];
-
-  it('finds back-references for repeated patterns', () => {
-    // "ABCABC" → literals for first 3, then a match for the second 3
-    const input = new Uint8Array([65, 66, 67, 65, 66, 67]);
-    const result = codec.encode(input, 'uint8', { windowSize: 256 });
-
-    // First 3 bytes are literals: [0x00, 65, 0x00, 66, 0x00, 67]
-    // Then match length=3, offset=3: [3, 0, 3]
-    expect(result.bytes[0]).toBe(0x00); // literal
-    expect(result.bytes[1]).toBe(65);
-    expect(result.bytes[6]).toBe(3); // match length
-    expect(result.bytes[8]).toBe(3); // match offset low byte
-    expect(result.outputDtype).toBe('uint8');
-  });
-
-  it('handles empty input', () => {
-    const result = codec.encode(new Uint8Array(0), 'uint8', { windowSize: 256 });
-    expect(result.bytes.length).toBe(0);
-  });
-
-  it('handles all unique bytes (no matches)', () => {
-    const input = new Uint8Array([1, 2, 3, 4, 5]);
-    const result = codec.encode(input, 'uint8', { windowSize: 256 });
-    // All literals: [0x00, 1, 0x00, 2, ...]
-    expect(result.bytes.length).toBe(10);
-    for (let i = 0; i < 5; i++) {
-      expect(result.bytes[i * 2]).toBe(0x00);
-      expect(result.bytes[i * 2 + 1]).toBe(input[i]);
-    }
   });
 });
 
@@ -351,38 +378,6 @@ describe('rle decode', () => {
   });
 });
 
-describe('lz decode', () => {
-  const codec = CODEC_REGISTRY['lz'];
-
-  it('roundtrips repeated pattern', () => {
-    const input = new Uint8Array([65, 66, 67, 65, 66, 67]);
-    const encoded = codec.encode(input, 'uint8', { windowSize: 256 });
-    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
-    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
-  });
-
-  it('roundtrips all unique bytes', () => {
-    const input = new Uint8Array([1, 2, 3, 4, 5]);
-    const encoded = codec.encode(input, 'uint8', { windowSize: 256 });
-    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
-    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
-  });
-
-  it('handles empty input', () => {
-    const encoded = codec.encode(new Uint8Array(0), 'uint8', { windowSize: 256 });
-    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
-    expect(decoded.bytes.length).toBe(0);
-  });
-
-  it('roundtrips longer data with multiple matches', () => {
-    const pattern = [10, 20, 30, 40, 50];
-    const input = new Uint8Array([...pattern, ...pattern, ...pattern, 99, 98, 97]);
-    const encoded = codec.encode(input, 'uint8', { windowSize: 256 });
-    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
-    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
-  });
-});
-
 // ─── applicableTo predicates (task 4.3, UI-4/SW-7) ─────────────────────
 //
 // Before this task every codec's `applicableTo` was `() => true`, so the
@@ -431,26 +426,19 @@ describe('rle codec — applicableTo', () => {
   });
 });
 
-describe('lz codec — applicableTo', () => {
-  it('is always applicable (byte-wise, no dtype assumptions)', () => {
-    const codec = CODEC_REGISTRY['lz'];
-    for (const dtype of ['int8', 'uint8', 'int16', 'uint32', 'float32', 'float64'] as const) {
-      expect(codec.applicableTo(dtype)).toBe(true);
-    }
-  });
-});
-
 // ─── outputDtypeFor (UI-15) ──────────────────────────────────────────────
 
 describe('outputDtypeFor', () => {
-  it('preserves dtype for reordering codecs (delta, byte-shuffle)', () => {
+  it('preserves dtype for reordering codecs (delta, byte-shuffle, zigzag, bit-shuffle)', () => {
     expect(outputDtypeFor(CODEC_REGISTRY['delta'], 'int16')).toBe('int16');
     expect(outputDtypeFor(CODEC_REGISTRY['byte-shuffle'], 'float32')).toBe('float32');
+    expect(outputDtypeFor(CODEC_REGISTRY['zigzag'], 'int16')).toBe('int16');
+    expect(outputDtypeFor(CODEC_REGISTRY['bit-shuffle'], 'float32')).toBe('float32');
   });
 
-  it('collapses to uint8 for entropy codecs (rle, lz)', () => {
+  it('collapses to uint8 for entropy codecs (rle, gzip)', () => {
     expect(outputDtypeFor(CODEC_REGISTRY['rle'], 'int32')).toBe('uint8');
-    expect(outputDtypeFor(CODEC_REGISTRY['lz'], 'float64')).toBe('uint8');
+    expect(outputDtypeFor(CODEC_REGISTRY['gzip'], 'float64')).toBe('uint8');
   });
 });
 
@@ -578,20 +566,6 @@ describe('codecs on charN input', () => {
     expect(encoded.bytes.length).toBeLessThan(repeated.length);
   });
 
-  it('LZ shrinks repeated-word (stepped text) chunks', () => {
-    const repeated = valuesToBytes(new Array(32).fill('Nairobi'), 'char8');
-    const encoded = CODEC_REGISTRY['lz'].encode(repeated, 'char8', { windowSize: 256 });
-    expect(encoded.bytes.length).toBeLessThan(repeated.length);
-  });
-
-  it('LZ roundtrips char8 bytes exactly (prefix-heavy station IDs)', () => {
-    const stations = valuesToBytes(['WX-0007-A', 'WX-0007-B', 'WX-0014-A', 'WX-0014-B'], 'char16');
-    const lz = CODEC_REGISTRY['lz'];
-    const encoded = lz.encode(stations, 'char16', { windowSize: 256 });
-    const decoded = lz.decode(encoded.bytes, 'uint8', { windowSize: 256 });
-    expect(Array.from(decoded.bytes)).toEqual(Array.from(stations));
-  });
-
   it('delta on char input falls back to byte-wise delta and roundtrips exactly (symmetric guard)', () => {
     const delta = CODEC_REGISTRY['delta'];
     const encoded = delta.encode(charBytes, 'char8', { order: 1 });
@@ -635,11 +609,10 @@ describe('codecs on charN input', () => {
     expect(warnings[0]).toMatch(/doesn't match dtype size 16/);
   });
 
-  it('stepWarnings is clean for RLE/LZ/matched-shuffle on char dtypes', () => {
+  it('stepWarnings is clean for RLE/matched-shuffle on char dtypes', () => {
     const steps: CodecStep[] = [
       { codec: 'byte-shuffle', params: { elementSize: 8 } },
       { codec: 'rle', params: {} },
-      { codec: 'lz', params: { windowSize: 256 } },
     ];
     expect(stepWarnings(steps, 'char8')).toEqual([]);
   });

@@ -122,22 +122,6 @@ describe('text variables — write/read roundtrip', () => {
     expect(readResult.reconstructedValues.get('city')).toEqual(expectedWords(city, 64));
   });
 
-  it('LZ on prefix-heavy station IDs shrinks the Encoded stage and reads back exactly', () => {
-    const station = textVar('station', 'char16', { wordSet: 'stations', generation: 'random' });
-    const state = makeState({
-      shape: [64], chunkShape: [64],
-      variables: [station],
-      fieldPipelines: { station: [{ codec: 'lz', params: { windowSize: 256 } } as CodecStep] },
-    });
-    const { stages, readResult } = computePipelineStages(state);
-    const linearized = stages.find((s) => s.name === 'Linearized')!;
-    const encoded = stages.find((s) => s.name === 'Encoded')!;
-    expect(encoded.stats.byteCount).toBeLessThan(linearized.stats.byteCount);
-    expect(readResult.success).toBe(true);
-    if (!readResult.success) return;
-    expect(readResult.reconstructedValues.get('station')).toEqual(expectedWords(station, 64));
-  });
-
   it.each(['json', 'binary'] as const)(
     'metadata %s serialization carries charN through schema/type_assignments and parses',
     (serialization) => {

@@ -333,7 +333,7 @@ describe('roundtrip matrix — codec pipelines (1-D single chunk, lossless dtype
         { codec: 'rle', params: {} },
       ],
     },
-    { label: '[lz]', steps: [{ codec: 'lz', params: { windowSize: 256 } }] },
+    { label: '[bit-shuffle]', steps: [{ codec: 'bit-shuffle', params: {} }] },
   ];
 
   for (const { label, steps } of pipelines) {
@@ -846,7 +846,7 @@ describe('roundtrip matrix — D3 metadata.include.chunkIndex', () => {
   );
 
   it(
-    'metadata.include.chunkIndex=false with a size-changing codec ([rle] or [lz]) fails with reason ' +
+    'metadata.include.chunkIndex=false with a size-changing codec ([rle]) fails with reason ' +
     '"no-chunk-index" ("the chunks have variable size after compression and nothing in the file records ' +
     'where each one starts")',
     () => {
@@ -862,19 +862,6 @@ describe('roundtrip matrix — D3 metadata.include.chunkIndex', () => {
       if (!rleResult.success) {
         expect(rleResult.reason).toBe('no-chunk-index');
         expect(rleResult.message).toContain('chunk index');
-      }
-
-      const lzState = stateWith({
-        shape: [4, 4],
-        chunkShape: [2, 2],
-        variables: [uintVar('humidity')],
-        fieldPipelines: { humidity: [{ codec: 'lz', params: { windowSize: 256 } }] },
-        metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
-      });
-      const { readResult: lzResult } = computePipelineStages(lzState);
-      expect(lzResult.success).toBe(false);
-      if (!lzResult.success) {
-        expect(lzResult.reason).toBe('no-chunk-index');
       }
     },
   );

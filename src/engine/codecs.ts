@@ -77,6 +77,57 @@ const delta: CodecDefinition = {
   },
 };
 
+// ─── Zigzag ─────────────────────────────────────────────────────────────
+
+const zigzagCodec: CodecDefinition = {
+  key: 'zigzag',
+  label: 'Zigzag',
+  category: 'reordering',
+  description:
+    'Maps signed integers to unsigned so small magnitudes get small byte values '
+    + '(0→0, −1→1, 1→2, −2→3 …) — Parquet applies this before RLE/bit-packing. '
+    + 'Bijective; byte width unchanged.',
+  params: {},
+  applicableTo: (dtype) => ['int8', 'int16', 'int32'].includes(dtype),
+  isLossy: () => false,
+  encode(bytes, inputDtype) {
+    return { bytes: zigzagMap(bytes, inputDtype as DtypeKey, 'encode'), outputDtype: inputDtype };
+  },
+  decode(bytes, encodedDtype) {
+    return { bytes: zigzagMap(bytes, encodedDtype as DtypeKey, 'decode'), outputDtype: encodedDtype };
+  },
+};
+
+/** Per-element zigzag within the dtype's width. Uses 32-bit int math (widest
+ * supported signed dtype is int32); encode: (n<<1)^(n>>31) on the
+ * sign-extended value, masked back to the dtype width; decode: (u>>>1)^-(u&1). */
+function zigzagMap(bytes: Uint8Array, dtype: DtypeKey, op: 'encode' | 'decode'): Uint8Array {
+  const size = getDtype(dtype).size;
+  const out = new Uint8Array(bytes.length);
+  const inView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const outView = new DataView(out.buffer);
+  const count = Math.floor(bytes.length / size);
+  for (let i = 0; i < count; i++) {
+    const off = i * size;
+    if (op === 'encode') {
+      const n = size === 1 ? inView.getInt8(off) : size === 2 ? inView.getInt16(off, true) : inView.getInt32(off, true);
+      const z = ((n << 1) ^ (n >> 31)) >>> 0;
+      if (size === 1) outView.setUint8(off, z & 0xff);
+      else if (size === 2) outView.setUint16(off, z & 0xffff, true);
+      else outView.setUint32(off, z, true);
+    } else {
+      const z = size === 1 ? inView.getUint8(off) : size === 2 ? inView.getUint16(off, true) : inView.getUint32(off, true);
+      const n = (z >>> 1) ^ -(z & 1);
+      if (size === 1) outView.setInt8(off, n);
+      else if (size === 2) outView.setInt16(off, n, true);
+      else outView.setInt32(off, n, true);
+    }
+  }
+  // Trailing partial element (shouldn't occur in practice): copy through.
+  for (let i = count * size; i < bytes.length; i++) out[i] = bytes[i];
+  return out;
+}
+
 // ─── Byte Shuffle ───────────────────────────────────────────────────────
 
 const byteShuffle: CodecDefinition = {
@@ -146,6 +197,52 @@ const byteShuffle: CodecDefinition = {
   },
 };
 
+// ─── Bit Shuffle ────────────────────────────────────────────────────────
+
+const bitShuffleCodec: CodecDefinition = {
+  key: 'bit-shuffle',
+  label: 'Bit Shuffle',
+  category: 'reordering',
+  description:
+    'Byte Shuffle one level finer: transposes the BITS of a block of elements '
+    + 'into bit planes (all elements’ bit 0, then bit 1, …). Slowly varying '
+    + 'data yields long constant bit runs — the transform inside blosc/bitshuffle.',
+  params: {},
+  applicableTo: (dtype) => getDtype(dtype as DtypeKey).size > 1,
+  isLossy: () => false,
+  encode(bytes, inputDtype) {
+    return { bytes: bitTranspose(bytes, getDtype(inputDtype as DtypeKey).size, 'encode'), outputDtype: inputDtype };
+  },
+  decode(bytes, encodedDtype) {
+    return { bytes: bitTranspose(bytes, getDtype(encodedDtype as DtypeKey).size, 'decode'), outputDtype: encodedDtype };
+  },
+};
+
+/** Transpose bits within each whole block of elements. Block = all complete
+ * elements (count*stride bytes); trailing bytes copied through unchanged.
+ * encode: output bit-plane p (p in [0, stride*8)) holds bit p of every
+ * element, packed in element order. decode is the inverse permutation.
+ * O(bits) with plain loops — a chunk is at most tens of MB and this runs in
+ * the worker; ponytail: no SIMD/word tricks until profiling asks. */
+function bitTranspose(bytes: Uint8Array, stride: number, op: 'encode' | 'decode'): Uint8Array {
+  const count = Math.floor(bytes.length / stride);
+  const blockBytes = count * stride;
+  const out = new Uint8Array(bytes.length);
+  const bitsPerElement = stride * 8;
+  const getBit = (arr: Uint8Array, bit: number) => (arr[bit >> 3] >> (bit & 7)) & 1;
+  const setBit = (arr: Uint8Array, bit: number, v: number) => { if (v) arr[bit >> 3] |= 1 << (bit & 7); };
+  for (let el = 0; el < count; el++) {
+    for (let p = 0; p < bitsPerElement; p++) {
+      const elementBit = el * bitsPerElement + p;   // bit position in element order
+      const planeBit = p * count + el;              // bit position in plane order
+      if (op === 'encode') setBit(out, planeBit, getBit(bytes, elementBit));
+      else setBit(out, elementBit, getBit(bytes, planeBit));
+    }
+  }
+  for (let i = blockBytes; i < bytes.length; i++) out[i] = bytes[i];
+  return out;
+}
+
 // ─── RLE ────────────────────────────────────────────────────────────────
 
 const rle: CodecDefinition = {
@@ -198,139 +295,14 @@ const rle: CodecDefinition = {
   },
 };
 
-// ─── LZ ─────────────────────────────────────────────────────────────────
-
-const lz: CodecDefinition = {
-  key: 'lz',
-  label: 'LZ (simple)',
-  category: 'entropy',
-  description: 'Simplified LZ77 with back-references',
-  params: {
-    windowSize: { label: 'Window Size', type: 'number', default: 256, min: 3, max: 32768, step: 1 },
-  },
-  // Task 4.3 (UI-4): same reasoning as RLE — LZ is a byte-wise back-reference
-  // scheme with no dtype-specific assumptions, so it is always applicable.
-  applicableTo: () => true,
-  isLossy: () => false,
-  encode(bytes, _inputDtype, params) {
-    const windowSize = Number(params.windowSize ?? 256);
-    if (bytes.length === 0) {
-      return { bytes: new Uint8Array(0), outputDtype: 'uint8' };
-    }
-
-    // Hash-chain LZ77 (how real encoders find matches): a head table maps a
-    // 3-byte-prefix hash to the most recent position, chained through prev[].
-    // Replaces the O(n*window) backward scan; format unchanged (see decode).
-    const HASH_BITS = 16;
-    const HASH_SIZE = 1 << HASH_BITS;
-    const MAX_CHAIN = 64; // candidates examined per position; quality/speed knob
-    const head = new Int32Array(HASH_SIZE).fill(-1);
-    const prev = new Int32Array(bytes.length).fill(-1);
-    const hashAt = (i: number) =>
-      ((bytes[i] << 10) ^ (bytes[i + 1] << 5) ^ bytes[i + 2]) & (HASH_SIZE - 1);
-    const insert = (i: number) => {
-      if (i + 2 >= bytes.length) return;
-      const h = hashAt(i);
-      prev[i] = head[h];
-      head[h] = i;
-    };
-
-    // Growable output (number[] push on multi-MB inputs is the old cliff).
-    let out = new Uint8Array(Math.max(64, bytes.length >> 2));
-    let outLen = 0;
-    const push = (...vals: number[]) => {
-      if (outLen + vals.length > out.length) {
-        const next = new Uint8Array(out.length * 2 + vals.length);
-        next.set(out.subarray(0, outLen));
-        out = next;
-      }
-      for (const v of vals) out[outLen++] = v;
-    };
-
-    let i = 0;
-    while (i < bytes.length) {
-      let bestLen = 0;
-      let bestOffset = 0;
-      if (i + 2 < bytes.length) {
-        let candidate = head[hashAt(i)];
-        let chain = 0;
-        const windowStart = i - windowSize;
-        while (candidate >= 0 && candidate >= windowStart && chain < MAX_CHAIN) {
-          let matchLen = 0;
-          while (
-            i + matchLen < bytes.length &&
-            bytes[candidate + matchLen] === bytes[i + matchLen] &&
-            matchLen < 255
-          ) {
-            matchLen++;
-          }
-          if (matchLen >= 3 && matchLen > bestLen) {
-            bestLen = matchLen;
-            bestOffset = i - candidate;
-            if (matchLen === 255) break;
-          }
-          candidate = prev[candidate];
-          chain++;
-        }
-      }
-
-      if (bestLen >= 3) {
-        // Match: [length, offset_hi, offset_lo] — candidates are always < i, so
-        // bytes[candidate + matchLen] may read at/past i; that's the legal
-        // overlapping-match case the decoder already supports byte-by-byte.
-        push(bestLen, (bestOffset >> 8) & 0xff, bestOffset & 0xff);
-        for (let k = 0; k < bestLen; k++) insert(i + k);
-        i += bestLen;
-      } else {
-        // Literal: [0x00, byte]
-        push(0x00, bytes[i]);
-        insert(i);
-        i++;
-      }
-    }
-
-    return { bytes: out.slice(0, outLen), outputDtype: 'uint8' };
-  },
-  decode(bytes, _encodedDtype) {
-    if (bytes.length === 0) {
-      return { bytes: new Uint8Array(0), outputDtype: 'uint8' };
-    }
-
-    const output: number[] = [];
-    let i = 0;
-
-    while (i < bytes.length) {
-      const token = bytes[i];
-      if (token === 0x00) {
-        // Literal: [0x00, byte]
-        output.push(bytes[i + 1]);
-        i += 2;
-      } else {
-        // Match: [length, offset_hi, offset_lo]
-        const matchLen = token;
-        const offset = (bytes[i + 1] << 8) | bytes[i + 2];
-        const start = output.length - offset;
-        for (let j = 0; j < matchLen; j++) {
-          output.push(output[start + j]);
-        }
-        i += 3;
-      }
-    }
-
-    return { bytes: new Uint8Array(output), outputDtype: 'uint8' };
-  },
-};
-
-// ─── Real codecs (project 4): actual numcodecs via Pyodide ─────────────────
+// ─── Real codecs: actual numcodecs via Pyodide ─────────────────────────────
 //
 // Ordinary entropy entries — uint8 output dtype, chunk-level trace
 // degradation, codec_pipelines metadata, and read-side reversal all come
-// from the same machinery RLE/LZ use. The only differences: `runtime:
+// from the same machinery RLE uses. The only differences: `runtime:
 // 'pyodide'` (picker/gating) and encode/decode delegating to numcodecs.
 // numcodecs.get_codec consumes the same config-dict shape Zarr metadata
 // stores, so params translate 1:1.
-
-const BLOSC_SHUFFLE: Record<string, number> = { none: 0, byte: 1, bit: 2 };
 
 function pyodideCodec(opts: {
   key: string;
@@ -361,7 +333,7 @@ function pyodideCodec(opts: {
 
 const zstdCodec = pyodideCodec({
   key: 'zstd',
-  label: 'Zstd (real)',
+  label: 'Zstd',
   description: 'Real Zstandard compression via numcodecs — the default compressor in modern Zarr.',
   params: {
     level: { label: 'Level', type: 'number', default: 3, min: 1, max: 22, step: 1 },
@@ -371,7 +343,7 @@ const zstdCodec = pyodideCodec({
 
 const gzipCodec = pyodideCodec({
   key: 'gzip',
-  label: 'GZip (real)',
+  label: 'GZip',
   description: 'Real DEFLATE/gzip via numcodecs — the same algorithm behind .gz files and PNG.',
   params: {
     level: { label: 'Level', type: 'number', default: 6, min: 0, max: 9, step: 1 },
@@ -379,33 +351,23 @@ const gzipCodec = pyodideCodec({
   config: (p) => ({ id: 'gzip', level: Number(p.level ?? 6) }),
 });
 
-const bloscCodec = pyodideCodec({
-  key: 'blosc',
-  label: 'Blosc (real)',
-  description: 'Real Blosc meta-compressor via numcodecs — note it has byte/bit shuffle BUILT IN, the same trick as the educational Byte Shuffle step.',
-  params: {
-    cname: { label: 'Compressor', type: 'select', default: 'lz4', options: ['lz4', 'zstd', 'zlib'] },
-    clevel: { label: 'Level', type: 'number', default: 5, min: 1, max: 9, step: 1 },
-    shuffle: { label: 'Shuffle', type: 'select', default: 'byte', options: ['none', 'byte', 'bit'] },
-  },
-  config: (p) => ({
-    id: 'blosc',
-    cname: String(p.cname ?? 'lz4'),
-    clevel: Number(p.clevel ?? 5),
-    shuffle: BLOSC_SHUFFLE[String(p.shuffle ?? 'byte')] ?? 1,
-  }),
-});
-
 // ─── Registry ───────────────────────────────────────────────────────────
+//
+// Insertion order IS the picker order (binding constraint — see CodecPipelineEditor).
+// Curated, pedagogical order: reordering transforms first (delta, zigzag,
+// byte-shuffle, bit-shuffle), then dictionary, then entropy codecs (rle,
+// deflate, gzip, zstd).
 
 export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
   'delta': delta,
+  'zigzag': zigzagCodec,
   'byte-shuffle': byteShuffle,
+  'bit-shuffle': bitShuffleCodec,
+  // Task 2 (codec-curation): 'dictionary' slots in here, before rle.
   'rle': rle,
-  'lz': lz,
-  zstd: zstdCodec,
+  // Task 3 (codec-curation): 'deflate' slots in here, between rle and gzip.
   gzip: gzipCodec,
-  blosc: bloscCodec,
+  zstd: zstdCodec,
 };
 
 // ─── Dtype flow (UI-15) ───────────────────────────────────────────────────

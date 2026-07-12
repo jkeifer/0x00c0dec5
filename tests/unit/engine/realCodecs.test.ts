@@ -17,10 +17,10 @@ import { DEFAULT_STATE } from '../../../src/types/state.ts';
 import type { CodecStep } from '../../../src/types/codecs.ts';
 import type { DtypeKey } from '../../../src/types/dtypes.ts';
 
-const REAL_KEYS = ['zstd', 'gzip', 'blosc'] as const;
+const REAL_KEYS = ['zstd', 'gzip'] as const;
 
 describe('real codec registry entries (no runtime needed)', () => {
-  it('registers all three as entropy codecs with runtime pyodide', () => {
+  it('registers both as entropy codecs with runtime pyodide', () => {
     for (const key of REAL_KEYS) {
       const codec = CODEC_REGISTRY[key];
       expect(codec, key).toBeDefined();
@@ -28,13 +28,13 @@ describe('real codec registry entries (no runtime needed)', () => {
       expect(codec.runtime).toBe('pyodide');
       expect(codec.applicableTo('float64')).toBe(true);
       expect(codec.isLossy('float64')).toBe(false);
-      // entropy => uint8 output, same as RLE/LZ (single source of truth)
+      // entropy => uint8 output, same as RLE (single source of truth)
       expect(outputDtypeFor(codec, 'int16')).toBe('uint8');
     }
   });
 
   it('educational codecs have no runtime field', () => {
-    for (const key of ['delta', 'byte-shuffle', 'rle', 'lz']) {
+    for (const key of ['delta', 'zigzag', 'byte-shuffle', 'bit-shuffle', 'rle']) {
       expect(CODEC_REGISTRY[key]?.runtime).toBeUndefined();
     }
   });
@@ -66,9 +66,7 @@ describe.skipIf(!!process.env.SKIP_PYODIDE)('real codecs through the engine pipe
   }
 
   it.each(REAL_KEYS.map((k) => [k]))('%s round-trips exactly via runCodecPipeline/reverseCodecPipeline', (key) => {
-    const params: Record<string, number | string> = key === 'blosc'
-      ? { cname: 'lz4', clevel: 5, shuffle: 'byte' }
-      : key === 'zstd' ? { level: 3 } : { level: 6 };
+    const params: Record<string, number | string> = key === 'zstd' ? { level: 3 } : { level: 6 };
     for (const dtype of dtypes) {
       const input = sampleBytes(dtype);
       const steps: CodecStep[] = [{ codec: key, params }];
@@ -89,15 +87,5 @@ describe.skipIf(!!process.env.SKIP_PYODIDE)('real codecs through the engine pipe
     const encoded = runCodecPipeline(input, steps, 'int16');
     const decoded = reverseCodecPipeline(encoded.bytes, steps, 'int16');
     expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
-  });
-
-  it('blosc shuffle param maps none/byte/bit and all round-trip', () => {
-    const input = sampleBytes('float32');
-    for (const shuffle of ['none', 'byte', 'bit']) {
-      const steps: CodecStep[] = [{ codec: 'blosc', params: { cname: 'zstd', clevel: 5, shuffle } }];
-      const encoded = runCodecPipeline(input, steps, 'float32');
-      const decoded = reverseCodecPipeline(encoded.bytes, steps, 'float32');
-      expect(Array.from(decoded.bytes), `shuffle=${shuffle}`).toEqual(Array.from(input));
-    }
   });
 });

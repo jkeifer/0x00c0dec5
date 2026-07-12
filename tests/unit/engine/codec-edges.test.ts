@@ -6,7 +6,6 @@
  *    empty input, single element (DC-2: clamping broke round-trip on unsigned dtypes;
  *    fixed by Phase 2 task 2.5 — the clamp is removed, typed-array writes wrap
  *    mod 2^N instead).
- *  - LZ codec: back-references with offset > 255, incompressible input.
  *  - Byte shuffle with elementSize != dtype size (garbled-but-reversible round-trip).
  *  - RLE: runs longer than 255, empty input, alternating (worst-case) input.
  *
@@ -14,6 +13,10 @@
  * round-trip) and marked `it.fails` per the task's "do not weaken assertions"
  * rule, ahead of the fix landing. Phase 2 task 2.5 has now landed, so they are
  * flipped to plain `it()`.
+ *
+ * (LZ-codec edge cases — back-references with offset > 255, incompressible
+ * input — were removed with LZ itself; see tests/unit/engine/codecs.test.ts's
+ * 'curation' describe.)
  */
 import { describe, it, expect } from 'vitest';
 import { CODEC_REGISTRY } from '../../../src/engine/codecs.ts';
@@ -22,7 +25,6 @@ import { valuesToBytes, bytesToValues } from '../../../src/engine/elements.ts';
 const delta = CODEC_REGISTRY['delta'];
 const byteShuffle = CODEC_REGISTRY['byte-shuffle'];
 const rle = CODEC_REGISTRY['rle'];
-const lz = CODEC_REGISTRY['lz'];
 
 describe('delta codec — edge cases', () => {
   // FIXED DC-2 (task 2.5) — delta encode/decode used to round/clamp diffs and
@@ -107,54 +109,6 @@ describe('delta codec — edge cases', () => {
     const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
     const values = bytesToValues(decoded.bytes, 'int16');
     expect(Array.from(values)).toEqual(original);
-  });
-});
-
-describe('LZ codec — back-reference offset > 255', () => {
-  it('round-trips exactly when a match source is more than 255 bytes back (2-byte offset path)', () => {
-    // 300 bytes of non-repeating filler (no run >= 3 so no accidental short-range
-    // matches), then a 5-byte pattern repeated far enough back to require an
-    // offset > 255 in the [length, offset_hi, offset_lo] encoding.
-    const filler = new Uint8Array(300);
-    for (let i = 0; i < filler.length; i++) filler[i] = i % 250;
-    const pattern = new Uint8Array([11, 22, 33, 44, 55]);
-    const input = new Uint8Array([...pattern, ...filler, ...pattern]);
-
-    const encoded = lz.encode(input, 'uint8', { windowSize: 32768 });
-
-    // Confirm the encoding actually exercises the 2-byte offset path (offset > 255)
-    // so this test is not vacuously true.
-    let sawBigOffset = false;
-    let i = 0;
-    while (i < encoded.bytes.length) {
-      const token = encoded.bytes[i];
-      if (token === 0x00) {
-        i += 2;
-      } else {
-        const offset = (encoded.bytes[i + 1] << 8) | encoded.bytes[i + 2];
-        if (offset > 255) sawBigOffset = true;
-        i += 3;
-      }
-    }
-    expect(sawBigOffset).toBe(true);
-
-    const decoded = lz.decode(encoded.bytes, encoded.outputDtype, { windowSize: 32768 });
-    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
-  });
-});
-
-describe('LZ codec — incompressible input', () => {
-  it('round-trips exactly even when output is larger than input', () => {
-    // Bytes chosen so no 3+ byte run repeats within the window (each literal costs
-    // 2 bytes: [0x00, byte]), so the encoded output should be larger than the input.
-    const input = new Uint8Array(50);
-    for (let i = 0; i < input.length; i++) input[i] = (i * 97 + 13) % 256;
-
-    const encoded = lz.encode(input, 'uint8', { windowSize: 256 });
-    expect(encoded.bytes.length).toBeGreaterThan(input.length);
-
-    const decoded = lz.decode(encoded.bytes, encoded.outputDtype, { windowSize: 256 });
-    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
   });
 });
 
