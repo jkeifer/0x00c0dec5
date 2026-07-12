@@ -59,6 +59,7 @@ function makeStage(name: string, bytes: Uint8Array, layout: StageLayout): Pipeli
 function buildLogicalValuesStage(
   variables: Pick<Variable, 'name' | 'color'>[],
   valuesByName: Map<string, ValueArray>,
+  byteOrder: 'little' | 'big' = 'little',
 ): { bytes: Uint8Array } {
   const partBytes: Uint8Array[] = [];
   for (const v of variables) {
@@ -81,7 +82,7 @@ function buildLogicalValuesStage(
       continue;
     }
 
-    partBytes.push(valuesToBytes(vals, 'float64'));
+    partBytes.push(valuesToBytes(vals, 'float64', byteOrder));
   }
   return { bytes: concatBytes(partBytes) };
 }
@@ -100,6 +101,7 @@ export interface ValuesStageResult {
 export function computeValuesStage(
   shape: number[],
   variables: Variable[],
+  byteOrder: 'little' | 'big' = 'little',
 ): ValuesStageResult {
   const totalElements = shape.reduce((a, b) => a * b, 1);
 
@@ -108,7 +110,7 @@ export function computeValuesStage(
     variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }
 
-  const { bytes } = buildLogicalValuesStage(variables, variableValues);
+  const { bytes } = buildLogicalValuesStage(variables, variableValues, byteOrder);
   const layout = buildValueBlocksLayout(
     variables, shape, variableValues,
     (name) => (variableValues.get(name) ?? []).some((v) => typeof v === 'string') ? 'text' : 'float64',
@@ -132,6 +134,7 @@ export function computeTypedStage(
   shape: number[],
   variables: Variable[],
   variableValues: Map<string, ValueArray>,
+  byteOrder: 'little' | 'big' = 'little',
 ): TypedStageResult {
   const typedPartBytes: Uint8Array[] = [];
   const variableStats = new Map<string, VariableStats>();
@@ -139,16 +142,16 @@ export function computeTypedStage(
 
   for (const v of variables) {
     const vals = variableValues.get(v.name) ?? [];
-    const result = assignType(vals, v.logicalType, v.typeAssignment);
+    const result = assignType(vals, v.logicalType, v.typeAssignment, byteOrder);
     const storageDtype = v.typeAssignment.storageDtype;
 
     typedPartBytes.push(result.bytes);
     variableStats.set(v.name, result.stats);
 
-    // Read back the typed values for use in chunking — bytesToValues has the
-    // same LE semantics as the TypedArray view it replaced, and handles char
-    // dtypes (strings) through the same single code path.
-    const typedVals = bytesToValues(result.bytes, storageDtype);
+    // Read back the typed values for use in chunking — bytesToValues honors the
+    // same byteOrder the bytes were written with, and handles char dtypes
+    // (strings) through the same single code path.
+    const typedVals = bytesToValues(result.bytes, storageDtype, byteOrder);
     typedVariableValues.set(v.name, typedVals);
   }
   const typedBytes = concatBytes(typedPartBytes);
@@ -182,6 +185,7 @@ export function computeLinearizedStage(
   variables: Variable[],
   typedVariableValues: Map<string, ValueArray>,
   linearization: LinearizationOrder = 'c',
+  byteOrder: 'little' | 'big' = 'little',
 ): LinearizedStageResult {
   const chunkVariables = variables.map((v) => ({
     ...v,
@@ -190,7 +194,7 @@ export function computeLinearizedStage(
   const chunks = interleaving === 'column'
     ? chunkDataPerVariable(shape, chunkShape, chunkVariables, typedVariableValues, linearization)
     : chunkData(shape, chunkShape, chunkVariables, typedVariableValues, linearization);
-  const linearizedChunks = chunks.map((chunk) => linearizeChunk(chunk, interleaving));
+  const linearizedChunks = chunks.map((chunk) => linearizeChunk(chunk, interleaving, byteOrder));
   const linearizedBytes = concatBytes(linearizedChunks.map((lc) => lc.bytes));
 
   const linearizedLayout = buildLinearizedLayout(chunks, linearizedChunks, interleaving, shape, chunkShape, linearization);
@@ -354,6 +358,7 @@ export function computeReadStage(
   shape: number[],
   variables: Variable[],
   magicNumber: string,
+  byteOrder: 'little' | 'big' = 'little',
 ): ReadStageResult {
   // Per D2, the reader is given the format's magic number as bytes (not the
   // raw hex-string config) and verifies it rather than blindly stripping it.
@@ -364,7 +369,7 @@ export function computeReadStage(
     for (const v of variables) {
       logicalValues.set(v.name, readResult.reconstructedValues.get(v.name) ?? []);
     }
-    const { bytes } = buildLogicalValuesStage(variables, logicalValues);
+    const { bytes } = buildLogicalValuesStage(variables, logicalValues, byteOrder);
     const layout = buildValueBlocksLayout(variables, shape, logicalValues, () => 'float64');
     return { stage: makeStage('Read', bytes, layout), readResult, logicalValues };
   }
@@ -431,8 +436,8 @@ export function computePipelineStages(
     return out;
   };
 
-  const values = timed('values', () => computeValuesStage(state.shape, state.variables));
-  const typed = timed('typed', () => computeTypedStage(state.shape, state.variables, values.variableValues));
+  const values = timed('values', () => computeValuesStage(state.shape, state.variables, state.byteOrder));
+  const typed = timed('typed', () => computeTypedStage(state.shape, state.variables, values.variableValues, state.byteOrder));
   const linearized = timed('linearized', () => computeLinearizedStage(
     state.shape,
     state.chunkShape,
@@ -440,6 +445,7 @@ export function computePipelineStages(
     state.variables,
     typed.typedVariableValues,
     state.linearization,
+    state.byteOrder,
   ));
   const encoded = timed('encoded', () => computeEncodedStage(
     linearized.chunks,
@@ -452,7 +458,7 @@ export function computePipelineStages(
   ));
   const metadata = timed('metadata', () => computeMetadataStage(state, encoded.encodedChunks, typed.variableStats));
   const files = timed('write', () => computeFilesStage(state, encoded.encodedChunks, typed.variableStats, encoded.stage.layout));
-  const read = timed('read', () => computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber));
+  const read = timed('read', () => computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber, state.byteOrder));
 
   const stages: PipelineStage[] = [
     values.stage,
@@ -576,16 +582,18 @@ export function createPipelineComputer(): (
     let t0 = performance.now();
     const valuesM = memo(
       'values',
-      { shape: state.shape, variables: state.variables },
-      () => computeValuesStage(state.shape, state.variables),
+      // buildLogicalValuesStage writes the Values-stage display bytes with
+      // state.byteOrder, so the Values stage's OUTPUT bytes depend on it.
+      { shape: state.shape, variables: state.variables, byteOrder: state.byteOrder },
+      () => computeValuesStage(state.shape, state.variables, state.byteOrder),
     );
     const values = report('values', t0, valuesM);
 
     t0 = performance.now();
     const typedM = memo(
       'typed',
-      { valuesKey: valuesM.key, shape: state.shape, variables: state.variables },
-      () => computeTypedStage(state.shape, state.variables, values.variableValues),
+      { valuesKey: valuesM.key, shape: state.shape, variables: state.variables, byteOrder: state.byteOrder },
+      () => computeTypedStage(state.shape, state.variables, values.variableValues, state.byteOrder),
     );
     const typed = report('typed', t0, typedM);
 
@@ -598,6 +606,7 @@ export function createPipelineComputer(): (
         chunkShape: state.chunkShape,
         interleaving: state.interleaving,
         linearization: state.linearization,
+        byteOrder: state.byteOrder,
         variables: state.variables,
       },
       () => computeLinearizedStage(
@@ -607,6 +616,7 @@ export function createPipelineComputer(): (
         state.variables,
         typed.typedVariableValues,
         state.linearization,
+        state.byteOrder,
       ),
     );
     const linearized = report('linearized', t0, linearizedM);
@@ -652,8 +662,8 @@ export function createPipelineComputer(): (
     t0 = performance.now();
     const readM = memo(
       'read',
-      { filesKey: filesM.key, shape: state.shape, variables: state.variables, magicNumber: state.write.magicNumber },
-      () => computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber),
+      { filesKey: filesM.key, shape: state.shape, variables: state.variables, magicNumber: state.write.magicNumber, byteOrder: state.byteOrder },
+      () => computeReadStage(files.files, state.shape, state.variables, state.write.magicNumber, state.byteOrder),
     );
     const read = report('read', t0, readM);
 

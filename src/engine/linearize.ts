@@ -16,6 +16,7 @@ import { concatBytes } from './bytes.ts';
 export function linearizeChunk(
   chunk: Chunk,
   interleaving: 'row' | 'column',
+  byteOrder: 'little' | 'big' = 'little',
 ): LinearizedChunk {
   // Per-variable chunks in column mode get variable-specific chunkIds
   const isSingleVarColumn = interleaving === 'column' && chunk.variables.length === 1;
@@ -23,15 +24,19 @@ export function linearizeChunk(
     ? makeChunkTraceId(`${chunk.variables[0].variableName}:${chunk.coords.join(',')}`)
     : makeChunkTraceId(chunk.coords.join(','));
   const variableName = isSingleVarColumn ? chunk.variables[0].variableName : undefined;
-  const bytes = buildBytes(chunk, interleaving);
+  const bytes = buildBytes(chunk, interleaving, byteOrder);
 
   return { chunkId, coords: chunk.coords, bytes, variableName };
 }
 
-function buildBytes(chunk: Chunk, interleaving: 'row' | 'column'): Uint8Array {
+function buildBytes(
+  chunk: Chunk,
+  interleaving: 'row' | 'column',
+  byteOrder: 'little' | 'big',
+): Uint8Array {
   if (interleaving === 'column') {
     const parts: Uint8Array[] = chunk.variables.map((cv) =>
-      valuesToBytes(cv.values, cv.dtype as DtypeKey),
+      valuesToBytes(cv.values, cv.dtype as DtypeKey, byteOrder),
     );
     return concatBytes(parts);
   } else {
@@ -39,7 +44,7 @@ function buildBytes(chunk: Chunk, interleaving: 'row' | 'column'): Uint8Array {
     const parts: Uint8Array[] = [];
     for (let i = 0; i < elementCount; i++) {
       for (const cv of chunk.variables) {
-        parts.push(valuesToBytes([cv.values[i]], cv.dtype as DtypeKey));
+        parts.push(valuesToBytes([cv.values[i]], cv.dtype as DtypeKey, byteOrder));
       }
     }
     return concatBytes(parts);

@@ -24,6 +24,7 @@ describe('metadata.include migration', () => {
       codecs: true,
       chunkIndex: false,
       descriptive: true,
+      endianness: true,
     });
     expect('includeChunkIndex' in result!.metadata).toBe(false);
   });
@@ -41,6 +42,7 @@ describe('metadata.include migration', () => {
       codecs: true,
       chunkIndex: true,
       descriptive: true,
+      endianness: true,
     });
   });
 
@@ -57,6 +59,7 @@ describe('metadata.include migration', () => {
       codecs: true,
       chunkIndex: true,
       descriptive: true,
+      endianness: true,
     });
   });
 
@@ -68,6 +71,7 @@ describe('metadata.include migration', () => {
       codecs: false,
       chunkIndex: true,
       descriptive: false,
+      endianness: true,
     };
 
     const result = validateExternalState(raw, 'tabular');
@@ -78,6 +82,7 @@ describe('metadata.include migration', () => {
       codecs: false,
       chunkIndex: true,
       descriptive: false,
+      endianness: true,
     });
   });
 });

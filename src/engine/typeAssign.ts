@@ -24,6 +24,7 @@ export function assignType(
   values: ValueArray,
   _logicalType: LogicalTypeConfig,
   assignment: TypeAssignment,
+  byteOrder: 'little' | 'big' = 'little',
 ): TypeAssignResult {
   const outDtype = assignment.storageDtype;
   const outInfo = getDtype(outDtype);
@@ -122,16 +123,16 @@ export function assignType(
   }
 
   // Convert to bytes
-  let bytes = valuesToBytes(transformed, outDtype);
+  let bytes = valuesToBytes(transformed, outDtype, byteOrder);
 
   // Apply keepBits (mantissa truncation) for float output
   if (assignment.keepBits !== undefined && outInfo.float) {
-    bytes = applyBitround(bytes, outDtype, assignment.keepBits);
+    bytes = applyBitround(bytes, outDtype, assignment.keepBits, byteOrder);
   }
 
   // For float types, detect rounding by reading back
   if (outInfo.float) {
-    const readBack = bytesToValues(bytes, outDtype) as Float64Array;
+    const readBack = bytesToValues(bytes, outDtype, byteOrder) as Float64Array;
     for (let i = 0; i < values.length; i++) {
       let expected = values[i] as number;
       if (hasScaleOffset) {
@@ -184,12 +185,13 @@ export function assignType(
 export function reverseTypeAssignment(
   bytes: Uint8Array,
   assignment: TypeAssignment,
+  byteOrder: 'little' | 'big' = 'little',
 ): ValueArray {
   const dtype = assignment.storageDtype;
 
   // keepBits is irrecoverable (like bitround), so no reversal needed for it
   // Just read the values and reverse scale/offset
-  const values = bytesToValues(bytes, dtype);
+  const values = bytesToValues(bytes, dtype, byteOrder);
 
   // Char storage: bytesToValues already produced right-trimmed strings, and
   // there is no scale/offset to reverse for text.
@@ -210,8 +212,16 @@ export function reverseTypeAssignment(
   return (values as Float64Array).map((v) => v / scale + offset);
 }
 
-/** Apply mantissa bit truncation to float bytes. */
-function applyBitround(bytes: Uint8Array, dtype: DtypeKey, keepBits: number): Uint8Array {
+/** Apply mantissa bit truncation to float bytes. Reads/writes the mantissa
+ * words with the same `byteOrder` the bytes were produced in, so the mask
+ * lands on the real low mantissa bits regardless of endianness. */
+function applyBitround(
+  bytes: Uint8Array,
+  dtype: DtypeKey,
+  keepBits: number,
+  byteOrder: 'little' | 'big' = 'little',
+): Uint8Array {
+  const le = byteOrder === 'little';
   const result = new Uint8Array(bytes.length);
   result.set(bytes);
 
@@ -219,8 +229,8 @@ function applyBitround(bytes: Uint8Array, dtype: DtypeKey, keepBits: number): Ui
     const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
     const mask = 0xffffffff << (23 - keepBits);
     for (let i = 0; i < result.length; i += 4) {
-      const bits = view.getUint32(i, true);
-      view.setUint32(i, bits & mask, true);
+      const bits = view.getUint32(i, le);
+      view.setUint32(i, bits & mask, le);
     }
   } else if (dtype === 'float64') {
     const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
@@ -232,11 +242,14 @@ function applyBitround(bytes: Uint8Array, dtype: DtypeKey, keepBits: number): Ui
     // `0` branch, which is correct: keepBits=20 keeps 0 bits of the low 32-bit word
     // (all 20 kept bits live in the high word/exponent side).
     const maskLow = keepBits > 20 ? 0xffffffff << (52 - keepBits) : 0;
+    // Byte offsets of the low/high 32-bit mantissa words swap with endianness.
+    const lowOff = le ? 0 : 4;
+    const highOff = le ? 4 : 0;
     for (let i = 0; i < result.length; i += 8) {
-      const low = view.getUint32(i, true);
-      const high = view.getUint32(i + 4, true);
-      view.setUint32(i, low & maskLow, true);
-      view.setUint32(i + 4, high & maskHigh, true);
+      const low = view.getUint32(i + lowOff, le);
+      const high = view.getUint32(i + highOff, le);
+      view.setUint32(i + lowOff, low & maskLow, le);
+      view.setUint32(i + highOff, high & maskHigh, le);
     }
   }
 

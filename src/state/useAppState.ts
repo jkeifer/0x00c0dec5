@@ -41,6 +41,8 @@ export type AppAction =
   | { type: 'SET_INTERLEAVING'; interleaving: 'row' | 'column' }
   // Linearization order (cl-6)
   | { type: 'SET_LINEARIZATION'; linearization: AppState['linearization'] }
+  // Byte order (cl-8)
+  | { type: 'SET_BYTE_ORDER'; byteOrder: AppState['byteOrder'] }
   // Codecs
   | { type: 'SET_FIELD_PIPELINE'; variableId: string; steps: CodecStep[] }
   | { type: 'SET_CHUNK_PIPELINE'; steps: CodecStep[] }
@@ -148,6 +150,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case 'SET_LINEARIZATION':
       return produce(state, (draft) => {
         draft.linearization = action.linearization;
+      });
+
+    case 'SET_BYTE_ORDER':
+      return produce(state, (draft) => {
+        draft.byteOrder = action.byteOrder;
       });
 
     // ─── Codecs ──────────────────────────────────────────────────────

@@ -18,6 +18,14 @@ import { CODEC_REGISTRY } from './codecs.ts';
 import { coordsToFlatIndex, computeChunkGrid, enumerateChunkCoords } from './chunk.ts';
 import { orderCoordsOf, LINEARIZATION_ORDERS, type LinearizationOrder } from './order.ts';
 
+/** The runtime host's byte order — a real check, not a hardcoded assumption:
+ * write 1 as a Uint16 and see whether the low byte lands first. Browsers and
+ * Node are little-endian in practice, but the reader's assume-host fallback is
+ * only honest if it reports the byte order the code is actually running on. */
+export function hostByteOrder(): 'little' | 'big' {
+  return new Uint8Array(Uint16Array.of(1).buffer)[0] === 1 ? 'little' : 'big';
+}
+
 /** D3: thrown by `resolveChunkIndex` when `chunk_index` is absent from
  * metadata AND at least one codec pipeline in play is size-changing, so
  * encoded chunk sizes can't be derived from chunkShape x dtype size alone.
@@ -77,6 +85,14 @@ interface ParsedStructure {
   typeAssignments: Record<string, TypeAssignment> | null;
   variableStatistics: Record<string, VariableStatsLike> | null;
   totalElements: number;
+  /** Byte order to decode multi-byte values with. Taken from the `byte_order`
+   * metadata entry when present; falls back to the host's order when absent
+   * (`byteOrderRecorded === false`) — a silent assumption, NOT a failure (spec
+   * risk 5): a big-endian file written with the entry omitted reads
+   * successfully with garbled values, and the decode step narrates the guess. */
+  byteOrder: 'little' | 'big';
+  /** Whether the `byte_order` entry was actually present in the metadata. */
+  byteOrderRecorded: boolean;
   /** Read plan Task 3: whether the `codec_pipelines` key was present in
    * metadata at all. When false, the reader proceeds via assume-identity
    * (empty pipelines) — `decode-chunks`' step detail distinguishes "no
@@ -319,6 +335,12 @@ function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructure {
     linearizationStr && (LINEARIZATION_ORDERS as string[]).includes(linearizationStr)
       ? (linearizationStr as LinearizationOrder)
       : 'c';
+  const byteOrderStr = metaMap.get('byte_order');
+  const byteOrderRecorded = byteOrderStr === 'little' || byteOrderStr === 'big';
+  const byteOrder: 'little' | 'big' = byteOrderRecorded
+    ? (byteOrderStr as 'little' | 'big')
+    : hostByteOrder();
+
   const codecPipelinesStr = metaMap.get('codec_pipelines');
   const chunkIndexStr = metaMap.get('chunk_index');
   const typeAssignmentsStr = metaMap.get('type_assignments');
@@ -350,6 +372,8 @@ function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructure {
     variableStatistics: variableStatisticsStr ? JSON.parse(variableStatisticsStr) : null,
     totalElements: shape.reduce((a, b) => a * b, 1),
     codecInfoPresent: codecPipelinesStr !== undefined,
+    byteOrder,
+    byteOrderRecorded,
   };
 }
 
@@ -380,7 +404,7 @@ function reconstruct(
   chunkDataStart: number,
   recorder: StepRecorder,
 ): ReadFileResult {
-  const { schema, shape, chunkShape, interleaving, linearization, fieldPipelines, chunkPipeline, typeAssignments, variableStatistics, totalElements, codecInfoPresent } = structure;
+  const { schema, shape, chunkShape, interleaving, linearization, fieldPipelines, chunkPipeline, typeAssignments, variableStatistics, totalElements, codecInfoPresent, byteOrder, byteOrderRecorded } = structure;
 
   const typeAssignLossy = new Set<string>();
   if (variableStatistics) {
@@ -425,6 +449,7 @@ function reconstruct(
     chunkIndex: resolvedChunkIndex,
     totalElements,
     codecInfoPresent,
+    byteOrder,
   };
 
   const getChunkBytes = dataFiles.length === 1
@@ -434,14 +459,14 @@ function reconstruct(
   recorder.ok(
     'decode-chunks',
     `${schema.length} variable(s) decoded through their codec pipeline(s)`,
-    describeDecodeDetail(codecInfoPresent),
+    describeDecodeDetail(codecInfoPresent, byteOrderRecorded, byteOrder),
   );
 
   if (typeAssignments) {
     for (const [varName, assignment] of Object.entries(typeAssignments)) {
       const values = reconstructedValues.get(varName);
       if (!values) continue;
-      reconstructedValues.set(varName, reverseTypeAssignmentValues(values, assignment));
+      reconstructedValues.set(varName, reverseTypeAssignmentValues(values, assignment, byteOrder));
     }
   }
   recorder.ok('reassemble', `${totalElements} element(s) reassembled per variable`);
@@ -466,10 +491,26 @@ function reconstruct(
  * size-changing sub-case never reaches this text at all (caught earlier, as
  * a genuine decode-error, by the byte-count check in `reconstructValues`).
  * When codec info WAS present, no extra detail is needed — the step's plain
- * `found` text already says the pipeline was used. */
-function describeDecodeDetail(codecInfoPresent: boolean): string | undefined {
-  if (codecInfoPresent) return undefined;
-  return 'no codec info — assumed raw bytes (honest if none were applied at write time; garbled if they were)';
+ * `found` text already says the pipeline was used.
+ *
+ * The endianness mini-lesson (spec §3b, risk 5) is orthogonal and additive:
+ * when the `byte_order` entry was ABSENT, the reader silently assumed the host
+ * order and decoded anyway (no failure, no lossy mark) — a big-endian file
+ * written with the entry omitted reads successfully with garbled values. That
+ * assumption is narrated here so the Read-process view can show the guess the
+ * diff view then exposes as corruption. */
+function describeDecodeDetail(
+  codecInfoPresent: boolean,
+  byteOrderRecorded: boolean,
+  byteOrder: 'little' | 'big',
+): string | undefined {
+  const codecDetail = codecInfoPresent
+    ? undefined
+    : 'no codec info — assumed raw bytes (honest if none were applied at write time; garbled if they were)';
+  const endianDetail = byteOrderRecorded
+    ? undefined
+    : `byte order not recorded — assuming host (${byteOrder}-endian)`;
+  return [codecDetail, endianDetail].filter(Boolean).join('; ') || undefined;
 }
 
 function totalBytes(dataFiles: VirtualFile[]): number {
@@ -957,6 +998,8 @@ interface ReassemblyContext {
   chunkPipeline: CodecStep[] | null;
   chunkIndex: ChunkIndexEntry[] | null;
   totalElements: number;
+  /** Byte order for decoding multi-byte values (see ParsedStructure). */
+  byteOrder: 'little' | 'big';
   /** Read plan Task 3 §3: whether `codec_pipelines` was present in metadata.
    * When false, the reader assumes an empty (identity) pipeline per variable/
    * chunk — correct if no codecs were actually applied at write time, wrong
@@ -1049,7 +1092,7 @@ function resolveChunkIndex(
   // `linearization` intentionally excluded: chunk byte SIZE (and thus offset)
   // depends only on chunk geometry x dtype size, not on intra-chunk element
   // order, so this function never needs it.
-  ctx: Omit<ReassemblyContext, 'chunkIndex' | 'totalElements' | 'codecInfoPresent' | 'linearization'>,
+  ctx: Omit<ReassemblyContext, 'chunkIndex' | 'totalElements' | 'codecInfoPresent' | 'linearization' | 'byteOrder'>,
   magicLength: number,
 ): ChunkIndexEntry[] {
   if (chunkIndex) return chunkIndex;
@@ -1124,7 +1167,7 @@ function reconstructValues(
   ctx: ReassemblyContext,
   getChunkBytes: ChunkBytesReader,
 ): Map<string, ValueArray> {
-  const { schema, shape, chunkShape, interleaving, linearization, fieldPipelines, chunkPipeline, chunkIndex, totalElements, codecInfoPresent } = ctx;
+  const { schema, shape, chunkShape, interleaving, linearization, fieldPipelines, chunkPipeline, chunkIndex, totalElements, codecInfoPresent, byteOrder } = ctx;
   const result = new Map<string, ValueArray>();
 
   if (interleaving === 'column') {
@@ -1146,7 +1189,7 @@ function reconstructValues(
           checkAssumedIdentitySize(chunkBytes.length, expectedBytes, varInfo.name, entry.coords);
         }
         const decoded = reverseCodecPipeline(chunkBytes, steps, varInfo.dtype);
-        const chunkValues = bytesToValues(decoded.bytes, decoded.outputDtype as DtypeKey);
+        const chunkValues = bytesToValues(decoded.bytes, decoded.outputDtype as DtypeKey, byteOrder);
         scatterChunkValues(values, chunkValues, entry.coords, chunkShape, shape, linearization);
       }
 
@@ -1173,7 +1216,7 @@ function reconstructValues(
       }
       const decoded = reverseCodecPipeline(chunkBytes, steps, inputDtype);
       const chunkElementN = chunkGeometry(entry.coords, chunkShape, shape).elementCount;
-      const perVarChunkValues = deinterleaveRowChunk(decoded.bytes, schema, chunkElementN);
+      const perVarChunkValues = deinterleaveRowChunk(decoded.bytes, schema, chunkElementN, byteOrder);
       for (const varInfo of schema) {
         scatterChunkValues(
           result.get(varInfo.name)!,
@@ -1223,6 +1266,7 @@ function deinterleaveRowChunk(
   bytes: Uint8Array,
   schema: SchemaEntry[],
   chunkElementCount: number,
+  byteOrder: 'little' | 'big' = 'little',
 ): Map<string, LogicalValue[]> {
   const bytesPerElement = schema.reduce((sum, v) => sum + getDtype(v.dtype).size, 0);
   const result = new Map<string, LogicalValue[]>();
@@ -1236,7 +1280,7 @@ function deinterleaveRowChunk(
       const dtypeInfo = getDtype(varInfo.dtype);
       const start = elem * bytesPerElement + varByteOffset;
       const elemBytes = bytes.slice(start, start + dtypeInfo.size);
-      const values = bytesToValues(elemBytes, varInfo.dtype);
+      const values = bytesToValues(elemBytes, varInfo.dtype, byteOrder);
       if (values.length > 0) {
         result.get(varInfo.name)!.push(values[0]);
       }
@@ -1250,7 +1294,11 @@ function deinterleaveRowChunk(
 /** Reverse a type assignment on already-decoded numeric values: re-encode to
  * bytes and call the shared `reverseTypeAssignment` rather than
  * re-implementing scale/offset reversal inline here. */
-function reverseTypeAssignmentValues(values: ValueArray, assignment: TypeAssignment): ValueArray {
-  const bytes = valuesToBytes(values, assignment.storageDtype);
-  return reverseTypeAssignment(bytes, assignment);
+function reverseTypeAssignmentValues(
+  values: ValueArray,
+  assignment: TypeAssignment,
+  byteOrder: 'little' | 'big',
+): ValueArray {
+  const bytes = valuesToBytes(values, assignment.storageDtype, byteOrder);
+  return reverseTypeAssignment(bytes, assignment, byteOrder);
 }

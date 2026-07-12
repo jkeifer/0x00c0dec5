@@ -215,10 +215,15 @@ describe('collectMetadata', () => {
     expect(keys).toContain('chunk_index');
   });
 
-  it('sets byte_order to little', () => {
+  it('sets byte_order from state.byteOrder (default little)', () => {
     const entries = collectMetadata(DEFAULT_STATE, [], undefined);
-    const byteOrder = entries.find((e) => e.key === 'byte_order');
-    expect(byteOrder?.value).toBe('little');
+    expect(entries.find((e) => e.key === 'byte_order')?.value).toBe('little');
+  });
+
+  it('records byte_order: big when state.byteOrder is big (cl-8)', () => {
+    const state = { ...DEFAULT_STATE, byteOrder: 'big' as const };
+    const entries = collectMetadata(state, [], undefined);
+    expect(entries.find((e) => e.key === 'byte_order')?.value).toBe('big');
   });
 
   it('skips custom entries with empty keys', () => {

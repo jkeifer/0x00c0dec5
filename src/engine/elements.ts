@@ -11,8 +11,15 @@ type DataViewGetter = (byteOffset: number, littleEndian?: boolean) => number;
  * charN dtypes: each value is stringified, non-ASCII chars replaced with '?',
  * truncated to N chars, and space-padded to exactly N bytes. (ASCII-only this
  * phase — UTF-8 truncation mid-codepoint is a great future lesson, out of scope.)
+ *
+ * `byteOrder` defaults to 'little' so every untouched call site is byte-identical
+ * to the pre-endianness behavior. Char dtypes ignore it (one byte per char).
  */
-export function valuesToBytes(values: ValueArray, dtype: DtypeKey): Uint8Array {
+export function valuesToBytes(
+  values: ValueArray,
+  dtype: DtypeKey,
+  byteOrder: 'little' | 'big' = 'little',
+): Uint8Array {
   const info = getDtype(dtype);
   const byteLength = values.length * info.size;
 
@@ -33,9 +40,10 @@ export function valuesToBytes(values: ValueArray, dtype: DtypeKey): Uint8Array {
   const buffer = new ArrayBuffer(byteLength);
   const view = new DataView(buffer);
 
+  const littleEndian = byteOrder === 'little';
   const setter = getDataViewSetter(view, dtype);
   for (let i = 0; i < values.length; i++) {
-    setter(i * info.size, values[i] as number, true);
+    setter(i * info.size, values[i] as number, littleEndian);
   }
 
   return new Uint8Array(buffer);
@@ -46,8 +54,14 @@ export function valuesToBytes(values: ValueArray, dtype: DtypeKey): Uint8Array {
  *
  * charN dtypes: each N-byte slice decodes to an ASCII string with trailing
  * spaces (the padding) trimmed.
+ *
+ * `byteOrder` defaults to 'little' (see valuesToBytes). Char dtypes ignore it.
  */
-export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): ValueArray {
+export function bytesToValues(
+  bytes: Uint8Array,
+  dtype: DtypeKey,
+  byteOrder: 'little' | 'big' = 'little',
+): ValueArray {
   const info = getDtype(dtype);
   const count = bytes.length / info.size;
   if (!Number.isInteger(count)) {
@@ -80,9 +94,10 @@ export function bytesToValues(bytes: Uint8Array, dtype: DtypeKey): ValueArray {
   // simplest ValueArray shape regardless of storage dtype width/signedness.
   const values = new Float64Array(count);
 
+  const littleEndian = byteOrder === 'little';
   const getter = getDataViewGetter(view, dtype);
   for (let i = 0; i < count; i++) {
-    values[i] = getter(i * info.size, true);
+    values[i] = getter(i * info.size, littleEndian);
   }
 
   return values;

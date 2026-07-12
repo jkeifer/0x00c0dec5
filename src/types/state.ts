@@ -61,6 +61,15 @@ export interface MetadataIncludeConfig {
   codecs: boolean; // codec_pipelines
   chunkIndex: boolean; // chunk_index (absorbs legacy includeChunkIndex — D3 semantics unchanged)
   descriptive: boolean; // variable_statistics + ALL customEntries
+  /**
+   * Task cl-8: gates the `byte_order` metadata entry. Its OWN group, NOT part
+   * of `layout`, because its failure mode is unique: unlike every other group
+   * (which hard-fails a named read step when off), a missing `byte_order` entry
+   * does NOT fail the read — the reader assumes the host's byte order and
+   * proceeds. A big-endian file authored with this off reads successfully with
+   * silently corrupted values (spec §3b). Default true.
+   */
+  endianness: boolean;
 }
 
 export interface AppState {
@@ -77,6 +86,13 @@ export interface AppState {
    * (key absent) default to 'c' on read.
    */
   linearization: LinearizationOrder;
+  /**
+   * Task cl-8: byte order for multi-byte dtypes, applied to BOTH data models.
+   * 'little' (default) is byte-identical to the pre-task behavior; 'big'
+   * writes MSB-first. Serialized as the `byte_order` metadata entry (gated by
+   * `metadata.include.endianness`). See the endianness mini-lesson in spec §3b.
+   */
+  byteOrder: 'little' | 'big';
   variables: Variable[];
   /**
    * D5 (remediation-plan.md, Phase 3.1): keyed by Variable.id, not name — names
@@ -153,6 +169,7 @@ export const DEFAULT_STATE: AppState = {
   chunkShape: [32],
   interleaving: 'column',
   linearization: 'c',
+  byteOrder: 'little',
   variables: DEFAULT_VARIABLES,
   // Keyed by Variable.id (see AppState.fieldPipelines doc comment above). The
   // starter variables' ids happen to equal their names today, but that is
@@ -166,7 +183,7 @@ export const DEFAULT_STATE: AppState = {
   metadata: {
     customEntries: [],
     serialization: 'json',
-    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true },
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
   },
   write: {
     includeMetadata: false,

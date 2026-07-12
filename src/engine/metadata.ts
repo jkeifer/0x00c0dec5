@@ -12,9 +12,11 @@ export interface MetadataEntry {
  * can emit to the `MetadataIncludeConfig` group that gates it. `custom`
  * entries and `variable_statistics` gate on `descriptive` inline at their
  * push sites rather than through this map (they aren't fixed single keys).
- * `metadata_format` and `byte_order` are envelope keys: always written,
- * never gated (they describe the metadata blob itself; parse-metadata needs
- * them regardless of which groups are on).
+ * `metadata_format` is an envelope key: always written, never gated (it
+ * describes the metadata blob itself; parse-metadata needs it regardless of
+ * which groups are on). `byte_order` is NOT an envelope key — it's gated by
+ * its own `endianness` group (cl-8), whose absence is the silent-corruption
+ * lesson (the reader assumes host order rather than failing).
  */
 export const METADATA_KEY_GROUPS: Record<string, keyof MetadataIncludeConfig> = {
   schema: 'schema', type_assignments: 'schema', logical_types: 'schema',
@@ -24,6 +26,7 @@ export const METADATA_KEY_GROUPS: Record<string, keyof MetadataIncludeConfig> = 
   codec_pipelines: 'codecs',
   chunk_index: 'chunkIndex',
   variable_statistics: 'descriptive',
+  byte_order: 'endianness',
 };
 
 /**
@@ -153,8 +156,12 @@ export function collectMetadata(
   // blob itself; parse-metadata needs it regardless of which groups are on).
   entries.push({ key: 'metadata_format', value: state.metadata.serialization });
 
-  // Byte order — envelope key: always written (see above).
-  entries.push({ key: 'byte_order', value: 'little' });
+  // Byte order — gated by its own `endianness` group (cl-8). When off, the
+  // entry is omitted and the reader silently assumes host order (the
+  // silent-corruption lesson) rather than failing a read step.
+  if (include.endianness) {
+    entries.push({ key: 'byte_order', value: state.byteOrder });
+  }
 
   // Append custom entries, gated on `descriptive` (same group as
   // variable_statistics — both are "descriptive" content layered on top of

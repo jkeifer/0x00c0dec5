@@ -44,7 +44,7 @@ function baseState(c: Case, order: LinearizationOrder, interleaving: 'row' | 'co
     // Ensure a fully self-describing file so the reader has everything.
     metadata: {
       ...DEFAULT_STATE.metadata,
-      include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true },
+      include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
     },
     write: { ...DEFAULT_STATE.write, includeMetadata: true },
   };

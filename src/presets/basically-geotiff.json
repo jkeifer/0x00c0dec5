@@ -63,7 +63,8 @@
       "layout": true,
       "codecs": true,
       "chunkIndex": true,
-      "descriptive": true
+      "descriptive": true,
+      "endianness": true
     }
   },
   "write": {
@@ -80,5 +81,6 @@
     "leftPaneView": "grid",
     "rightPaneView": "hex",
     "showDiff": false
-  }
+  },
+  "byteOrder": "little"
 }

@@ -40,6 +40,7 @@ const GROUP_KEYS: Record<string, string[]> = {
   layout: ['shape', 'chunk_shape', 'chunk_grid', 'chunk_order', 'partitioning', 'interleaving'],
   codecs: ['codec_pipelines'],
   chunkIndex: ['chunk_index'],
+  endianness: ['byte_order'],
 };
 
 describe('collectMetadata group filtering', () => {
@@ -67,16 +68,24 @@ describe('collectMetadata group filtering', () => {
     expect(off).not.toContain('author');
   });
 
-  it('envelope keys are always present regardless of toggles', () => {
-    const allOff = collectFor(stateWith({ schema: false, layout: false, codecs: false, chunkIndex: false, descriptive: false }));
+  it('metadata_format envelope key is always present regardless of toggles', () => {
+    const allOff = collectFor(stateWith({
+      schema: false, layout: false, codecs: false, chunkIndex: false, descriptive: false, endianness: false,
+    }));
     const keys = allOff.map((e) => e.key);
     expect(keys).toContain('metadata_format');
-    expect(keys).toContain('byte_order');
+  });
+
+  it('endianness off omits byte_order (cl-8: its own group, not envelope)', () => {
+    const off = collectFor(stateWith({ endianness: false })).map((e) => e.key);
+    expect(off).not.toContain('byte_order');
+    // metadata_format (the true envelope key) still present.
+    expect(off).toContain('metadata_format');
   });
 
   it('METADATA_KEY_GROUPS covers every non-envelope auto key collectMetadata emits', () => {
     const keys = collectFor(stateWith({})).map((e) => e.key);
-    const envelope = new Set(['metadata_format', 'byte_order']);
+    const envelope = new Set(['metadata_format']);
     for (const k of keys) {
       if (envelope.has(k) || k === 'author') continue;
       expect(METADATA_KEY_GROUPS[k], `unmapped auto key: ${k}`).toBeDefined();
