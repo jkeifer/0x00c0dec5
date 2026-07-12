@@ -7,6 +7,11 @@
 // existing chunk-index toggle already uses (Sidebar.tsx), and all five are
 // disabled with a note when write.includeMetadata is false (nothing is
 // written, so the toggles are moot).
+//
+// Task 9 (codec-curation plan): a 6th toggle, `include-endianness-toggle`,
+// wired to metadata.include.endianness the same way. Its failure mode is
+// unique — off doesn't fail a read step, it silently produces wrong values
+// on big-endian files (see the mini-lesson in MetadataEditor.tsx's hint).
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { AppStateProvider, useAppState } from '../../../src/state/useAppState.ts';
@@ -51,7 +56,7 @@ function renderEditor() {
   );
 }
 
-const GROUPS = ['schema', 'layout', 'codecs', 'chunk-index', 'descriptive'];
+const GROUPS = ['schema', 'layout', 'codecs', 'chunk-index', 'descriptive', 'endianness'];
 
 describe('MetadataEditor include-group toggles', () => {
   it('renders all five toggles, enabled and checked per default state (all true)', () => {
@@ -112,6 +117,15 @@ describe('MetadataEditor include-group toggles', () => {
     }
 
     expect(screen.getByText(/metadata is not being written/i)).toBeTruthy();
+  });
+
+  it('endianness toggle hint states the silent-corruption lesson', () => {
+    renderEditor();
+
+    const row = screen.getByTestId('include-endianness-toggle');
+    expect(row.textContent).toMatch(
+      /reader assumes the host's byte order.*reads may silently succeed with wrong values/i,
+    );
   });
 });
 

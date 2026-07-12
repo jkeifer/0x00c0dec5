@@ -109,6 +109,10 @@ export function Sidebar() {
             onLinearizationChange={(linearization) =>
               dispatch({ type: 'SET_LINEARIZATION', linearization })
             }
+            byteOrder={state.byteOrder}
+            onByteOrderChange={(byteOrder) =>
+              dispatch({ type: 'SET_BYTE_ORDER', byteOrder })
+            }
           />
         );
       case 'Interleave':

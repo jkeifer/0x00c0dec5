@@ -26,6 +26,11 @@ const INCLUDE_GROUPS: { key: keyof MetadataIncludeConfig; testid: string; label:
   { key: 'codecs', testid: 'include-codecs-toggle', label: 'Include Codecs', hint: 'without this, the reader stops at: decode chunks (or reads garbage)' },
   { key: 'chunkIndex', testid: 'include-chunk-index-toggle', label: 'Include Chunk Index', hint: 'without this, the reader stops at: locate chunks (single-file entropy configs)' },
   { key: 'descriptive', testid: 'include-descriptive-toggle', label: 'Include Descriptive', hint: 'without this, the reader loses: nothing — the reader doesn\'t need it' },
+  // Task cl-9: 6th group, gating byte_order (Task cl-8). Its failure mode is
+  // NOT a hard-failed read step (that's why the hint reads differently from
+  // the five above) — off, a big-endian file reads successfully with wrong
+  // values, because the reader silently assumes host byte order.
+  { key: 'endianness', testid: 'include-endianness-toggle', label: 'Include Endianness', hint: 'off: the reader assumes the host\'s byte order — reads may silently succeed with wrong values.' },
 ];
 
 /**

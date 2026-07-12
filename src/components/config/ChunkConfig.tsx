@@ -11,12 +11,22 @@ interface ChunkConfigProps {
   dataModel: 'tabular' | 'array';
   linearization: LinearizationOrder;
   onLinearizationChange: (linearization: LinearizationOrder) => void;
+  byteOrder: 'little' | 'big';
+  onByteOrderChange: (byteOrder: 'little' | 'big') => void;
 }
 
 const LINEARIZATION_OPTIONS: { value: LinearizationOrder; label: string; title: string }[] = [
   { value: 'c', label: 'C order (row-major)', title: 'Last dimension varies fastest — standard row-major layout.' },
   { value: 'fortran', label: 'Fortran order (column-major)', title: 'First dimension varies fastest — standard column-major layout.' },
   { value: 'morton', label: 'Morton (Z-order)', title: 'Bit-interleaved coordinates — spatial locality in the byte stream.' },
+];
+
+// Task cl-9: unlike linearization, byte order applies to both data models
+// and every ndim (any multi-byte dtype has an endianness, even scalar-shaped
+// data), so this control has no visibility gate.
+const BYTE_ORDER_OPTIONS: { value: 'little' | 'big'; label: string; title: string }[] = [
+  { value: 'little', label: 'Little-endian', title: 'LSB first — the default, matches most consumer hardware.' },
+  { value: 'big', label: 'Big-endian', title: 'MSB first — network byte order.' },
 ];
 
 export function ChunkConfig({
@@ -26,6 +36,8 @@ export function ChunkConfig({
   dataModel,
   linearization,
   onLinearizationChange,
+  byteOrder,
+  onByteOrderChange,
 }: ChunkConfigProps) {
   const grid = computeChunkGrid(shape, chunkShape);
   const count = computeChunkCount(shape, chunkShape);
@@ -73,6 +85,24 @@ export function ChunkConfig({
           </select>
         </div>
       )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm }}>
+        <span style={{ fontSize: fontSizes.sm, color: colors.textSecondary }}>
+          Byte order
+        </span>
+        <select
+          data-testid="byte-order-toggle"
+          value={byteOrder}
+          onChange={(e) => onByteOrderChange(e.target.value as 'little' | 'big')}
+          style={{ ...inputStyle(), cursor: 'pointer' }}
+        >
+          {BYTE_ORDER_OPTIONS.map((opt) => (
+            <option key={opt.value} value={opt.value} title={opt.title}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <div style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>
         Grid: {grid.join(' x ')}
