@@ -17,7 +17,7 @@ import { DEFAULT_STATE } from '../../../src/types/state.ts';
 import type { CodecStep } from '../../../src/types/codecs.ts';
 import type { DtypeKey } from '../../../src/types/dtypes.ts';
 
-const REAL_KEYS = ['zstd', 'gzip'] as const;
+const REAL_KEYS = ['zstd', 'gzip', 'deflate'] as const;
 
 describe('real codec registry entries (no runtime needed)', () => {
   it('registers both as entropy codecs with runtime pyodide', () => {
@@ -87,5 +87,13 @@ describe.skipIf(!!process.env.SKIP_PYODIDE)('real codecs through the engine pipe
     const encoded = runCodecPipeline(input, steps, 'int16');
     const decoded = reverseCodecPipeline(encoded.bytes, steps, 'int16');
     expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
+  });
+
+  it('deflate (zlib wrapper) differs from gzip only by container: gzip starts 1f 8b, zlib does not', () => {
+    const input = sampleBytes('int16');
+    const gz = runCodecPipeline(input, [{ codec: 'gzip', params: { level: 6 } }], 'int16');
+    const df = runCodecPipeline(input, [{ codec: 'deflate', params: { level: 6 } }], 'int16');
+    expect([gz.bytes[0], gz.bytes[1]]).toEqual([0x1f, 0x8b]);
+    expect([df.bytes[0], df.bytes[1]]).not.toEqual([0x1f, 0x8b]);
   });
 });

@@ -437,6 +437,16 @@ const gzipCodec = pyodideCodec({
   config: (p) => ({ id: 'gzip', level: Number(p.level ?? 6) }),
 });
 
+const deflateCodec = pyodideCodec({
+  key: 'deflate',
+  label: 'Deflate',
+  description: "The algorithm inside GZip, in a bare zlib container — compare the first bytes with GZip's 1f 8b magic: same compressed stream, different wrapper.",
+  params: {
+    level: { label: 'Level', type: 'number', default: 6, min: 1, max: 9, step: 1 },
+  },
+  config: (p) => ({ id: 'zlib', level: Number(p.level ?? 6) }),
+});
+
 // ─── Registry ───────────────────────────────────────────────────────────
 //
 // Insertion order IS the picker order (binding constraint — see CodecPipelineEditor).
@@ -451,7 +461,7 @@ export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
   'bit-shuffle': bitShuffleCodec,
   'dictionary': dictionary,
   'rle': rle,
-  // Task 3 (codec-curation): 'deflate' slots in here, between rle and gzip.
+  'deflate': deflateCodec,
   gzip: gzipCodec,
   zstd: zstdCodec,
 };

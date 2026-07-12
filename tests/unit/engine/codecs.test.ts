@@ -12,7 +12,7 @@ import type { CodecStep } from '../../../src/types/codecs.ts';
 describe('codec registry', () => {
   it('contains delta, zigzag, byte-shuffle, bit-shuffle, dictionary, rle, and the pyodide-backed real codecs', () => {
     const keys = Object.keys(CODEC_REGISTRY).sort();
-    expect(keys).toEqual(['bit-shuffle', 'byte-shuffle', 'delta', 'dictionary', 'gzip', 'rle', 'zigzag', 'zstd']);
+    expect(keys).toEqual(['bit-shuffle', 'byte-shuffle', 'deflate', 'delta', 'dictionary', 'gzip', 'rle', 'zigzag', 'zstd']);
   });
 
   it('does not contain scale-offset or bitround', () => {
@@ -77,9 +77,8 @@ describe('bit-shuffle codec', () => {
 
 describe('curation', () => {
   it('registry has the exact curated order (picker order source of truth)', () => {
-    // deflate joins in Task 3; assert relative order of what exists now
     const keys = Object.keys(CODEC_REGISTRY);
-    const expectOrder = ['delta', 'zigzag', 'byte-shuffle', 'bit-shuffle', 'dictionary', 'rle', 'gzip', 'zstd'];
+    const expectOrder = ['delta', 'zigzag', 'byte-shuffle', 'bit-shuffle', 'dictionary', 'rle', 'deflate', 'gzip', 'zstd'];
     expect(keys.filter((k) => expectOrder.includes(k))).toEqual(expectOrder);
   });
   it('lz and blosc are gone', () => {

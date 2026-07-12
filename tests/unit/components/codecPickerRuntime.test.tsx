@@ -19,7 +19,7 @@ describe('codec picker real-codec group', () => {
     expect(group).not.toBeNull();
     expect(group.getAttribute('label')).toContain('Real codecs');
     const keys = Array.from(group.querySelectorAll('option')).map((o) => o.getAttribute('value'));
-    expect(keys).toEqual(['gzip', 'zstd']);
+    expect(keys).toEqual(['deflate', 'gzip', 'zstd']);
     // Educational groups no longer contain the real entries
     const allOtherKeys = Array.from(select.querySelectorAll('optgroup:not([data-testid="codec-group-real"]) option'))
       .map((o) => o.getAttribute('value'));
