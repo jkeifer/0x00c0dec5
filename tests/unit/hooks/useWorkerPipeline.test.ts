@@ -122,4 +122,34 @@ describe('useWorkerPipeline compute trigger scope', () => {
     rerender(shapeChange);
     expect(worker.posted).toHaveLength(2);
   });
+
+  // Codec-curation regression: `linearization` and `byteOrder` were added to
+  // AppState after this hook's dependency allowlist was written, and were
+  // initially missing from it — changing either control silently showed
+  // stale pipeline results. These two cases pin them as compute triggers.
+  it('DOES post a compute for a linearization-only change', () => {
+    const worker = new FakeWorker();
+    const { rerender } = renderHook((state: AppState) => useWorkerPipeline(state, () => worker), {
+      initialProps: DEFAULT_STATE,
+    });
+    expect(worker.posted).toHaveLength(1);
+    act(() => worker.emitResult(worker.posted[0].id));
+
+    const linearizationChange: AppState = { ...DEFAULT_STATE, linearization: 'morton' };
+    rerender(linearizationChange);
+    expect(worker.posted).toHaveLength(2);
+  });
+
+  it('DOES post a compute for a byteOrder-only change', () => {
+    const worker = new FakeWorker();
+    const { rerender } = renderHook((state: AppState) => useWorkerPipeline(state, () => worker), {
+      initialProps: DEFAULT_STATE,
+    });
+    expect(worker.posted).toHaveLength(1);
+    act(() => worker.emitResult(worker.posted[0].id));
+
+    const byteOrderChange: AppState = { ...DEFAULT_STATE, byteOrder: 'big' };
+    rerender(byteOrderChange);
+    expect(worker.posted).toHaveLength(2);
+  });
 });

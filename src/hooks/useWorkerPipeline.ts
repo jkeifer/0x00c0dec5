@@ -60,12 +60,19 @@ export function useWorkerPipeline(
   // slice identities stable, so depending on the slices themselves skips
   // ui-only changes. The posted state still carries `ui`; the worker's
   // stage memos never key on it.
-  const { dataModel, shape, chunkShape, interleaving, variables, fieldPipelines, chunkPipeline, metadata, write } = state;
+  //
+  // `linearization` and `byteOrder` (added by the codec-curation project)
+  // are pipeline inputs like any other: linearization permutes each chunk's
+  // element order, byteOrder changes every multi-byte value's encoding at
+  // every stage. They were originally missing from this list, which made the
+  // Chunk section's Order/Byte order controls silently show stale results —
+  // any new AppState field that reaches pipelineCompute must be added here.
+  const { dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write } = state;
   useEffect(() => {
     setComputing(true);
     clientRef.current!.compute(state);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: `state` is posted whole, but only pipeline slices trigger
-  }, [dataModel, shape, chunkShape, interleaving, variables, fieldPipelines, chunkPipeline, metadata, write]);
+  }, [dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write]);
 
   useEffect(() => () => clientRef.current!.dispose(), []);
 
