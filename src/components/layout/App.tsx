@@ -15,7 +15,50 @@ import { GuideProvider } from '../../state/GuideContext.tsx';
 import { GuidePanel } from '../guide/GuidePanel.tsx';
 import type { PipelineResult } from '../../engine/pipelineCompute.ts';
 
-function MainLayout({ result, computing }: { result: PipelineResult | null; computing: boolean }) {
+/** Shown while `result` is still null. PERF-1: an ok:false FIRST compute used
+ * to leave the "starting…" screen up forever (the stale-view design has no
+ * last-good result to fall back to, and the error only reached the About
+ * modal's diagnostics, unreachable behind this screen) — so a boot-time
+ * `lastError` renders the error itself, with the Header's Clear button (still
+ * mounted above this screen) as the recovery path. */
+export function BootScreen({ error }: { error: string | null }) {
+  return (
+    <div
+      data-testid={error === null ? 'pipeline-booting' : 'pipeline-boot-error'}
+      style={{
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: colors.textSecondary,
+        fontFamily: fonts.mono,
+        fontSize: fontSizes.md,
+        padding: 24,
+        textAlign: 'center',
+      }}
+    >
+      {error === null ? (
+        'starting…'
+      ) : (
+        <>
+          <div style={{ color: colors.error }}>pipeline failed to start</div>
+          <div style={{ fontSize: fontSizes.sm }}>{error}</div>
+          <div style={{ fontSize: fontSizes.sm }}>
+            Use the Clear button above to reset the configuration.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MainLayout({ result, computing, bootError }: {
+  result: PipelineResult | null;
+  computing: boolean;
+  bootError: string | null;
+}) {
   const { state, dispatch } = useAppState();
 
   const mainPersist = useDefaultLayout({ id: 'main-layout' });
@@ -27,22 +70,7 @@ function MainLayout({ result, computing }: { result: PipelineResult | null; comp
   // re-triggers (stale-view UX keeps the last-good result mounted while a
   // later `computing` pass runs in the background).
   if (result === null) {
-    return (
-      <div
-        data-testid="pipeline-booting"
-        style={{
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: colors.textSecondary,
-          fontFamily: fonts.mono,
-          fontSize: fontSizes.md,
-        }}
-      >
-        starting…
-      </div>
-    );
+    return <BootScreen error={bootError} />;
   }
 
   return (
@@ -187,7 +215,11 @@ export function App() {
       <div style={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <ErrorBoundary>
-            <MainLayout result={result} computing={computing} />
+            <MainLayout
+              result={result}
+              computing={computing}
+              bootError={result === null ? diagnostics.lastError : null}
+            />
           </ErrorBoundary>
         </div>
         <GuidePanel />
