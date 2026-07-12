@@ -25,6 +25,14 @@
  * are a unique bit pattern, and the interleave is a bijection on bit
  * patterns) — so sorting elements by key and compacting to dense [0, n) is
  * total and bijective for arbitrary, including edge-clipped, dims.
+ *
+ * Ceiling: the total interleaved bit width (sum of per-dim widths) must be
+ * ≤ 53. Keys are accumulated with plain arithmetic rather than JS bitwise
+ * ops (which coerce to 32-bit signed ints and would silently corrupt keys
+ * at ≥ 32 total bits — e.g. 16 dims of size 3), so they stay exact through
+ * Float64's integer range; buildMortonPermutation throws a named Error
+ * beyond 53 bits rather than corrupting silently. 53 total bits is far
+ * beyond any realistic chunk (≥ 2^~42 elements at minimum).
  */
 
 export type LinearizationOrder = 'c' | 'fortran' | 'morton';
@@ -37,18 +45,30 @@ function bitWidth(n: number): number {
   return Math.ceil(Math.log2(n));
 }
 
-function mortonKey(coords: number[], dims: number[]): number {
+/**
+ * Morton key for `coords` per the pinned convention above. Exported for
+ * tests that pin the key arithmetic directly (the smallest dims that
+ * overflow 32 bits produce ~43M elements — far too large to pin via a full
+ * permutation build in the unit suite).
+ *
+ * Uses plain arithmetic, not bitwise ops: JS bitwise operators coerce to
+ * 32-bit signed ints, which silently corrupts keys once the total
+ * interleaved width reaches 32 bits (e.g. 16 dims of size 3). Arithmetic
+ * keeps keys exact up to Float64's integer range — total interleaved width
+ * ≤ 53 bits, guarded in buildMortonPermutation.
+ */
+export function mortonKey(coords: number[], dims: number[]): number {
   const ndim = dims.length;
   const widths = dims.map(bitWidth);
   const maxWidth = Math.max(0, ...widths);
   let key = 0;
-  let keyBit = 0;
+  let placeValue = 1; // 2^keyBit
   for (let bit = 0; bit < maxWidth; bit++) {
+    const coordBit = 2 ** bit;
     for (let d = ndim - 1; d >= 0; d--) {
       if (bit < widths[d]) {
-        const b = (coords[d] >> bit) & 1;
-        key |= b << keyBit;
-        keyBit++;
+        key += (Math.floor(coords[d] / coordBit) % 2) * placeValue;
+        placeValue *= 2;
       }
     }
   }
@@ -100,6 +120,13 @@ const PERMUTATION_CACHE_CAP = 32;
 const permutationCache = new Map<string, Permutation>();
 
 function buildMortonPermutation(dims: number[]): Permutation {
+  const totalBits = dims.reduce((sum, d) => sum + bitWidth(d), 0);
+  if (totalBits > 53) {
+    throw new Error(
+      `morton order supports up to 53 total interleaved bits; ` +
+        `dims [${dims.join(', ')}] need ${totalBits}`,
+    );
+  }
   const n = dims.reduce((a, b) => a * b, 1);
   const order = new Uint32Array(n);
   for (let i = 0; i < n; i++) order[i] = i;

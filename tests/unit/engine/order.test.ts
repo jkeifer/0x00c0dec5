@@ -4,6 +4,7 @@ import {
   orderIndexOf,
   orderCoordsOf,
   orderPermutation,
+  mortonKey,
   type LinearizationOrder,
 } from '../../../src/engine/order.ts';
 import { coordsToFlatIndex } from '../../../src/engine/chunk.ts';
@@ -141,6 +142,65 @@ describe('morton order', () => {
     for (let i = 0; i < 9; i++) {
       expect(orderCoordsOf(i, dims, 'morton')).toEqual([0, i]);
     }
+  });
+});
+
+describe('morton key overflow safety (32+ total interleaved bits)', () => {
+  // Reviewer repro: 16 dims of size 3 → per-dim width 2, total 32 interleaved
+  // bits. JS bitwise ops coerce to 32-bit signed ints, so the old
+  // `key |= b << keyBit` implementation went negative at key bit 31 and
+  // silently broke the spatial ordering. The smallest dims that trigger this
+  // produce 3^16 ≈ 43M elements — too large to pin via a full permutation
+  // build in the unit suite — so these tests pin the key arithmetic directly.
+  // Key layout per the pinned convention: the round for coordinate bit 0
+  // assigns key bits 0..15 (last dim first), the round for coordinate bit 1
+  // assigns key bits 16..31.
+  const dims16x3 = Array(16).fill(3) as number[];
+
+  it('all-zero coordinate has key 0 (maps to Morton index 0)', () => {
+    expect(mortonKey(Array(16).fill(0), dims16x3)).toBe(0);
+  });
+
+  it('first few Morton keys are sane (dense prefix from the last dims)', () => {
+    const at = (d: number, v: number) => {
+      const c = Array(16).fill(0);
+      c[d] = v;
+      return c;
+    };
+    expect(mortonKey(at(15, 1), dims16x3)).toBe(1);
+    expect(mortonKey(at(14, 1), dims16x3)).toBe(2);
+    const both = at(15, 1);
+    both[14] = 1;
+    expect(mortonKey(both, dims16x3)).toBe(3);
+  });
+
+  it('key bit 31 stays positive (old bitwise code returned negative here)', () => {
+    // coords[0] = 2 → bit 1 of dim 0 → key bit 31 → 2^31, not -2^31
+    const coords = Array(16).fill(0);
+    coords[0] = 2;
+    expect(mortonKey(coords, dims16x3)).toBe(2 ** 31);
+  });
+
+  it('all-max coordinate uses the full 32-bit key exactly', () => {
+    // coord 2 = binary 10 per dim: bit 1 of every dim → key bits 16..31 set
+    expect(mortonKey(Array(16).fill(2), dims16x3)).toBe(0xffff0000);
+  });
+
+  it('keys are exact through the full 53-bit ceiling', () => {
+    // 53 dims of size 2 → width 1 each, total 53 bits; all-1 coords set
+    // every key bit → 2^53 - 1 === Number.MAX_SAFE_INTEGER, exactly.
+    const dims = Array(53).fill(2) as number[];
+    expect(mortonKey(Array(53).fill(1), dims)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('throws a named error above 53 total interleaved bits', () => {
+    const dims = Array(54).fill(2) as number[];
+    expect(() => orderPermutation(dims, 'morton')).toThrow(
+      /morton order supports up to 53 total interleaved bits/,
+    );
+    expect(() => orderIndexOf(Array(54).fill(0), dims, 'morton')).toThrow(
+      /53 total interleaved bits/,
+    );
   });
 });
 
