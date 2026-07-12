@@ -28,6 +28,7 @@ import { getDtype } from '../../../src/types/dtypes.ts';
 import { generateValues } from '../../../src/engine/generate.ts';
 import { assignType, type TypeAssignResult } from '../../../src/engine/typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid, flatIndexToCoords } from '../../../src/engine/chunk.ts';
+import type { LinearizationOrder } from '../../../src/engine/order.ts';
 import { valuesToBytes, bytesToValues, formatValue, formatLogicalValue } from '../../../src/engine/elements.ts';
 import type { ValueArray } from '../../../src/engine/layout.ts';
 import { CODEC_REGISTRY } from '../../../src/engine/codecs.ts';
@@ -325,11 +326,12 @@ function referenceLinearize(
   interleaving: 'row' | 'column',
   variables: Variable[],
   typedVariableValues: Map<string, ValueArray>,
+  order: LinearizationOrder = 'c',
 ): ReferenceChunkResult {
   const chunkVariables = variables.map((v) => ({ ...v, dtype: v.typeAssignment.storageDtype as string }));
   const chunks = interleaving === 'column'
-    ? chunkDataPerVariable(shape, chunkShape, chunkVariables, typedVariableValues)
-    : chunkData(shape, chunkShape, chunkVariables, typedVariableValues);
+    ? chunkDataPerVariable(shape, chunkShape, chunkVariables, typedVariableValues, order)
+    : chunkData(shape, chunkShape, chunkVariables, typedVariableValues, order);
 
   const linearizedBytes: Uint8Array[] = [];
   const linearizedTraces: ByteTrace[][] = [];
@@ -645,7 +647,7 @@ export function referenceStageTraces(state: AppState): Map<StageName, ByteTrace[
 
   const { traces: typedTraces, typedVariableValues } = buildTypedTraces(state.shape, state.variables, variableValues);
 
-  const lin = referenceLinearize(state.shape, state.chunkShape, state.interleaving, state.variables, typedVariableValues);
+  const lin = referenceLinearize(state.shape, state.chunkShape, state.interleaving, state.variables, typedVariableValues, state.linearization);
   const linearizedTraces = lin.linearizedTraces.flat();
 
   const { encodedChunks } = referenceEncode(lin, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
@@ -682,7 +684,7 @@ export function referenceFileTraces(state: AppState): { name: string; traces: By
     variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
   }
   const { typedVariableValues } = buildTypedTraces(state.shape, state.variables, variableValues);
-  const lin = referenceLinearize(state.shape, state.chunkShape, state.interleaving, state.variables, typedVariableValues);
+  const lin = referenceLinearize(state.shape, state.chunkShape, state.interleaving, state.variables, typedVariableValues, state.linearization);
   const { encodedChunks } = referenceEncode(lin, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline);
   const variableStats = referenceVariableStats(state.variables, variableValues);
   const refFiles = referenceAssembleFileTraces(state, encodedChunks, variableStats);

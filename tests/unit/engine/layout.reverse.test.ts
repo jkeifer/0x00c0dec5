@@ -36,28 +36,37 @@ type MatrixCase = {
   shape: number[];
   chunkShape: number[];
   useEntropy?: boolean;
+  order?: 'c' | 'fortran' | 'morton';
 };
 
 const MATRIX: MatrixCase[] = [
   { name: 'column multi chunk', interleaving: 'column', shape: [4, 8], chunkShape: [2, 4] },
   { name: 'row multi chunk', interleaving: 'row', shape: [4, 8], chunkShape: [2, 4] },
   { name: 'rle (entropy)', interleaving: 'column', shape: [4, 8], chunkShape: [2, 4], useEntropy: true },
+  // cl-6: non-'c' orders through the same trace-inversion + chunkRegions
+  // equivalence harness, both interleavings, edge-clipped chunks.
+  { name: 'fortran column edge-clipped', interleaving: 'column', shape: [6, 4], chunkShape: [4, 3], order: 'fortran' },
+  { name: 'fortran row edge-clipped', interleaving: 'row', shape: [6, 4], chunkShape: [4, 3], order: 'fortran' },
+  { name: 'morton column edge-clipped', interleaving: 'column', shape: [6, 4], chunkShape: [4, 3], order: 'morton' },
+  { name: 'morton row edge-clipped', interleaving: 'row', shape: [6, 4], chunkShape: [4, 3], order: 'morton' },
 ];
 
 function buildStages(c: MatrixCase) {
   const state: AppState = {
     ...DEFAULT_STATE,
+    dataModel: 'array',
     shape: c.shape,
     chunkShape: c.chunkShape,
     interleaving: c.interleaving,
+    linearization: c.order ?? 'c',
     fieldPipelines: c.useEntropy
       ? Object.fromEntries(DEFAULT_STATE.variables.map((v) => [v.id, [{ codec: 'rle' as const, params: {} }]]))
       : DEFAULT_STATE.fieldPipelines,
   };
   const values = computeValuesStage(state.shape, state.variables);
   const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
-  const lin = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues);
-  const linLayout = buildLinearizedLayout(lin.chunks, lin.linearizedChunks, state.interleaving, state.shape, state.chunkShape);
+  const lin = computeLinearizedStage(state.shape, state.chunkShape, state.interleaving, state.variables, typed.typedVariableValues, state.linearization);
+  const linLayout = buildLinearizedLayout(lin.chunks, lin.linearizedChunks, state.interleaving, state.shape, state.chunkShape, state.linearization);
 
   const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linLayout);
 

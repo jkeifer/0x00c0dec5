@@ -39,6 +39,8 @@ export type AppAction =
   | { type: 'SET_CHUNK_SHAPE'; chunkShape: number[] }
   // Interleave
   | { type: 'SET_INTERLEAVING'; interleaving: 'row' | 'column' }
+  // Linearization order (cl-6)
+  | { type: 'SET_LINEARIZATION'; linearization: AppState['linearization'] }
   // Codecs
   | { type: 'SET_FIELD_PIPELINE'; variableId: string; steps: CodecStep[] }
   | { type: 'SET_CHUNK_PIPELINE'; steps: CodecStep[] }
@@ -141,6 +143,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
     case 'SET_INTERLEAVING':
       return produce(state, (draft) => {
         draft.interleaving = action.interleaving;
+      });
+
+    case 'SET_LINEARIZATION':
+      return produce(state, (draft) => {
+        draft.linearization = action.linearization;
       });
 
     // ─── Codecs ──────────────────────────────────────────────────────

@@ -66,6 +66,7 @@ const basicallyParquet: AppState = {
   shape: [64],
   chunkShape: [16], // "row groups"
   interleaving: 'column',
+  linearization: 'c',
   variables: parquetVariables,
   fieldPipelines: {
     temperature: [],
@@ -123,6 +124,7 @@ const basicallyGeotiff: AppState = {
   shape: [16, 16],
   chunkShape: [8, 8], // tiles
   interleaving: 'column',
+  linearization: 'c',
   variables: geotiffVariables,
   fieldPipelines: {
     elevation: [],
@@ -178,6 +180,7 @@ const basicallyZarr: AppState = {
   shape: [16, 16],
   chunkShape: [8, 8],
   interleaving: 'column',
+  linearization: 'c',
   variables: zarrVariables,
   fieldPipelines: {
     temperature: [],

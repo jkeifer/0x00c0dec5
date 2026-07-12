@@ -12,6 +12,7 @@ import type {
 } from '../types/pipeline.ts';
 import { STAGE_ORDER } from '../types/pipeline.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
+import type { LinearizationOrder } from './order.ts';
 import { generateValues } from './generate.ts';
 import { assignType } from './typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid } from './chunk.ts';
@@ -180,18 +181,19 @@ export function computeLinearizedStage(
   interleaving: 'row' | 'column',
   variables: Variable[],
   typedVariableValues: Map<string, ValueArray>,
+  linearization: LinearizationOrder = 'c',
 ): LinearizedStageResult {
   const chunkVariables = variables.map((v) => ({
     ...v,
     dtype: v.typeAssignment.storageDtype as string,
   }));
   const chunks = interleaving === 'column'
-    ? chunkDataPerVariable(shape, chunkShape, chunkVariables, typedVariableValues)
-    : chunkData(shape, chunkShape, chunkVariables, typedVariableValues);
+    ? chunkDataPerVariable(shape, chunkShape, chunkVariables, typedVariableValues, linearization)
+    : chunkData(shape, chunkShape, chunkVariables, typedVariableValues, linearization);
   const linearizedChunks = chunks.map((chunk) => linearizeChunk(chunk, interleaving));
   const linearizedBytes = concatBytes(linearizedChunks.map((lc) => lc.bytes));
 
-  const linearizedLayout = buildLinearizedLayout(chunks, linearizedChunks, interleaving, shape, chunkShape);
+  const linearizedLayout = buildLinearizedLayout(chunks, linearizedChunks, interleaving, shape, chunkShape, linearization);
 
   return {
     stage: makeStage('Linearized', linearizedBytes, linearizedLayout),
@@ -437,6 +439,7 @@ export function computePipelineStages(
     state.interleaving,
     state.variables,
     typed.typedVariableValues,
+    state.linearization,
   ));
   const encoded = timed('encoded', () => computeEncodedStage(
     linearized.chunks,
@@ -594,6 +597,7 @@ export function createPipelineComputer(): (
         shape: state.shape,
         chunkShape: state.chunkShape,
         interleaving: state.interleaving,
+        linearization: state.linearization,
         variables: state.variables,
       },
       () => computeLinearizedStage(
@@ -602,6 +606,7 @@ export function createPipelineComputer(): (
         state.interleaving,
         state.variables,
         typed.typedVariableValues,
+        state.linearization,
       ),
     );
     const linearized = report('linearized', t0, linearizedM);

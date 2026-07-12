@@ -9,6 +9,7 @@
     8
   ],
   "interleaving": "column",
+  "linearization": "c",
   "variables": [
     {
       "id": "temperature",

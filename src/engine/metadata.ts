@@ -20,6 +20,7 @@ export const METADATA_KEY_GROUPS: Record<string, keyof MetadataIncludeConfig> = 
   schema: 'schema', type_assignments: 'schema', logical_types: 'schema',
   shape: 'layout', chunk_shape: 'layout', chunk_grid: 'layout',
   chunk_order: 'layout', partitioning: 'layout', interleaving: 'layout',
+  linearization: 'layout',
   codec_pipelines: 'codecs',
   chunk_index: 'chunkIndex',
   variable_statistics: 'descriptive',
@@ -105,6 +106,15 @@ export function collectMetadata(
   // Interleaving
   if (include.layout) {
     entries.push({ key: 'interleaving', value: state.interleaving });
+  }
+
+  // Linearization order (cl-6). Only meaningful for the array model with
+  // ndim>1 — the 1-D / tabular case is the identity for all three orders, so
+  // emitting it would be noise (and old 1-D files never carried it). The
+  // reader defaults to 'c' when the key is absent, so omitting it here for the
+  // identity cases is byte-identical to the pre-cl-6 file.
+  if (include.layout && state.dataModel === 'array' && state.shape.length > 1) {
+    entries.push({ key: 'linearization', value: state.linearization });
   }
 
   // Type assignments (per-variable)

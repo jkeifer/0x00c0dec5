@@ -6,6 +6,7 @@ import { CODEC_REGISTRY, outputDtypeFor } from './codecs.ts';
 import { makeTraceId, makeChunkTraceId, parseTraceId } from './trace.ts';
 import { formatValue, formatLogicalValue } from './elements.ts';
 import { flatIndexToCoords, coordsToFlatIndex } from './chunk.ts';
+import { orderCoordsOf, orderIndexOf, type LinearizationOrder } from './order.ts';
 
 export type ValueArray = LogicalValue[] | Float64Array;
 
@@ -41,6 +42,11 @@ export interface ChunkBlockRegion {
   fields: ChunkFieldLayout[]; // value-preserving only; [] for chunk-level
   origin: number[];           // element-space origin: chunkCoords[d] * chunkShape[d]
   elementDims: number[];      // this chunk's (edge-clipped) element dims
+  // cl-6: linearization order of elements within the chunk. A STRING, never a
+  // materialized permutation (PERF-1) — each side of the thread boundary
+  // derives the permutation on demand via order.ts's orderPermutation cache.
+  // 'c' means the pre-cl-6 closed-form flat-index math (identity permutation).
+  order: LinearizationOrder;
 }
 
 export interface StructuralRegion {
@@ -113,6 +119,7 @@ export function buildLinearizedLayout(
   interleaving: 'row' | 'column',
   shape: number[],
   chunkShape: number[],
+  order: LinearizationOrder = 'c',
 ): StageLayout {
   const regions: LayoutRegion[] = [];
   let cursor = 0;
@@ -144,7 +151,7 @@ export function buildLinearizedLayout(
       chunkId: lc.chunkId,
       variableName: isSingleVar ? chunk.variables[0].variableName : '',
       variableColor: isSingleVar ? chunk.variables[0].variableColor : '',
-      mode: 'value-preserving', interleaving, fields, origin, elementDims,
+      mode: 'value-preserving', interleaving, fields, origin, elementDims, order,
     });
     cursor += lc.bytes.length;
   }
@@ -205,11 +212,18 @@ export function buildEncodedLayout(
   return { byteLength: cursor, shape: linearizedLayout.shape, regions };
 }
 
-/** Chunk-local flat element index -> global coords. Must mirror the
- *  enumeration order chunkData/chunkDataPerVariable use for sourceCoords
- *  (row-major over elementDims) — the equivalence tests are the check. */
-export function chunkElementCoords(origin: number[], elementDims: number[], elemFlat: number): number[] {
-  const local = flatIndexToCoords(elemFlat, elementDims);
+/** Chunk-local flat element index (position in the linearized byte sequence)
+ *  -> global coords. Must mirror the enumeration order
+ *  chunkData/chunkDataPerVariable use for sourceCoords (orderCoordsOf over
+ *  elementDims) — the equivalence tests are the check. Defaults to 'c'
+ *  (flatIndexToCoords) so callers with no order get the pre-cl-6 behavior. */
+export function chunkElementCoords(
+  origin: number[],
+  elementDims: number[],
+  elemFlat: number,
+  order: LinearizationOrder = 'c',
+): number[] {
+  const local = orderCoordsOf(elemFlat, elementDims, order);
   return local.map((l, d) => origin[d] + l);
 }
 
@@ -302,7 +316,7 @@ export function traceAt(layout: StageLayout, byteIndex: number, sources: ValueSo
       byteInValue = inRecord - field.offset;
     }
     if (elemFlat >= elementCount) return null;
-    const coords = chunkElementCoords(r.origin, r.elementDims, elemFlat);
+    const coords = chunkElementCoords(r.origin, r.elementDims, elemFlat, r.order);
     const arr = sources.values.get(field.variableName) ?? [];
     const globalFlat = coordsToFlatIndex(coords, layout.shape);
     return {
@@ -386,7 +400,7 @@ export function byteRangesForTrace(layout: StageLayout, traceId: string): ByteRa
       const inBounds = r.origin.every((o, d) => coords[d] >= o && coords[d] < o + r.elementDims[d]);
       if (!inBounds) continue;
       const local = coords.map((c, d) => c - r.origin[d]);
-      const elemFlat = coordsToFlatIndex(local, r.elementDims);
+      const elemFlat = orderIndexOf(local, r.elementDims, r.order);
       let start: number;
       if (r.interleaving === 'column') {
         start = r.start + field.offset + elemFlat * field.size;

@@ -15,7 +15,8 @@ import {
 import { reverseCodecPipeline } from './decode.ts';
 import { reverseTypeAssignment } from './typeAssign.ts';
 import { CODEC_REGISTRY } from './codecs.ts';
-import { flatIndexToCoords, coordsToFlatIndex, computeChunkGrid, enumerateChunkCoords } from './chunk.ts';
+import { coordsToFlatIndex, computeChunkGrid, enumerateChunkCoords } from './chunk.ts';
+import { orderCoordsOf, LINEARIZATION_ORDERS, type LinearizationOrder } from './order.ts';
 
 /** D3: thrown by `resolveChunkIndex` when `chunk_index` is absent from
  * metadata AND at least one codec pipeline in play is size-changing, so
@@ -67,6 +68,9 @@ interface ParsedStructure {
   shape: number[];
   chunkShape: number[];
   interleaving: 'row' | 'column';
+  /** cl-6: element linearization order within each chunk. Defaults to 'c' when
+   * the metadata key is absent (old files), keeping them byte-compatible. */
+  linearization: LinearizationOrder;
   fieldPipelines: Record<string, CodecStep[]> | null;
   chunkPipeline: CodecStep[] | null;
   chunkIndex: ChunkIndexEntry[] | null;
@@ -308,6 +312,13 @@ function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructure {
   }
 
   const interleavingStr = metaMap.get('interleaving') ?? 'column';
+  // cl-6: absent key (old files, or 1-D/identity cases) => 'c'. Guard against a
+  // hand-edited/unknown value falling through as a bogus order string.
+  const linearizationStr = metaMap.get('linearization');
+  const linearization: LinearizationOrder =
+    linearizationStr && (LINEARIZATION_ORDERS as string[]).includes(linearizationStr)
+      ? (linearizationStr as LinearizationOrder)
+      : 'c';
   const codecPipelinesStr = metaMap.get('codec_pipelines');
   const chunkIndexStr = metaMap.get('chunk_index');
   const typeAssignmentsStr = metaMap.get('type_assignments');
@@ -331,6 +342,7 @@ function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructure {
     shape,
     chunkShape: JSON.parse(chunkShapeStr),
     interleaving: interleavingStr as 'row' | 'column',
+    linearization,
     fieldPipelines,
     chunkPipeline,
     chunkIndex: chunkIndexStr ? JSON.parse(chunkIndexStr) : null,
@@ -368,7 +380,7 @@ function reconstruct(
   chunkDataStart: number,
   recorder: StepRecorder,
 ): ReadFileResult {
-  const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, typeAssignments, variableStatistics, totalElements, codecInfoPresent } = structure;
+  const { schema, shape, chunkShape, interleaving, linearization, fieldPipelines, chunkPipeline, typeAssignments, variableStatistics, totalElements, codecInfoPresent } = structure;
 
   const typeAssignLossy = new Set<string>();
   if (variableStatistics) {
@@ -407,6 +419,7 @@ function reconstruct(
     shape,
     chunkShape,
     interleaving,
+    linearization,
     fieldPipelines,
     chunkPipeline,
     chunkIndex: resolvedChunkIndex,
@@ -938,6 +951,8 @@ interface ReassemblyContext {
   shape: number[];
   chunkShape: number[];
   interleaving: 'row' | 'column';
+  /** cl-6: element linearization order within each chunk (see ParsedStructure). */
+  linearization: LinearizationOrder;
   fieldPipelines: Record<string, CodecStep[]> | null;
   chunkPipeline: CodecStep[] | null;
   chunkIndex: ChunkIndexEntry[] | null;
@@ -982,11 +997,15 @@ function scatterChunkValues(
   coords: number[],
   chunkShape: number[],
   shape: number[],
+  order: LinearizationOrder,
 ): void {
   const { startIndices, extent, elementCount } = chunkGeometry(coords, chunkShape, shape);
 
   for (let i = 0; i < elementCount && i < chunkValues.length; i++) {
-    const localCoords = flatIndexToCoords(i, extent);
+    // Inverse of chunk.ts's extractChunkValues gather: the i-th decoded value
+    // (its position in the linearized byte sequence) came from the element at
+    // orderCoordsOf(i, extent, order). For 'c' this is flatIndexToCoords.
+    const localCoords = orderCoordsOf(i, extent, order);
     const globalCoords = localCoords.map((lc, d) => lc + startIndices[d]);
     const globalFlatIndex = coordsToFlatIndex(globalCoords, shape);
     target[globalFlatIndex] = chunkValues[i];
@@ -1027,7 +1046,10 @@ function makePerChunkFileReader(dataFiles: VirtualFile[], magicBytes: Uint8Array
  */
 function resolveChunkIndex(
   chunkIndex: ChunkIndexEntry[] | null,
-  ctx: Omit<ReassemblyContext, 'chunkIndex' | 'totalElements' | 'codecInfoPresent'>,
+  // `linearization` intentionally excluded: chunk byte SIZE (and thus offset)
+  // depends only on chunk geometry x dtype size, not on intra-chunk element
+  // order, so this function never needs it.
+  ctx: Omit<ReassemblyContext, 'chunkIndex' | 'totalElements' | 'codecInfoPresent' | 'linearization'>,
   magicLength: number,
 ): ChunkIndexEntry[] {
   if (chunkIndex) return chunkIndex;
@@ -1102,7 +1124,7 @@ function reconstructValues(
   ctx: ReassemblyContext,
   getChunkBytes: ChunkBytesReader,
 ): Map<string, ValueArray> {
-  const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, chunkIndex, totalElements, codecInfoPresent } = ctx;
+  const { schema, shape, chunkShape, interleaving, linearization, fieldPipelines, chunkPipeline, chunkIndex, totalElements, codecInfoPresent } = ctx;
   const result = new Map<string, ValueArray>();
 
   if (interleaving === 'column') {
@@ -1125,7 +1147,7 @@ function reconstructValues(
         }
         const decoded = reverseCodecPipeline(chunkBytes, steps, varInfo.dtype);
         const chunkValues = bytesToValues(decoded.bytes, decoded.outputDtype as DtypeKey);
-        scatterChunkValues(values, chunkValues, entry.coords, chunkShape, shape);
+        scatterChunkValues(values, chunkValues, entry.coords, chunkShape, shape, linearization);
       }
 
       result.set(varInfo.name, values);
@@ -1159,6 +1181,7 @@ function reconstructValues(
           entry.coords,
           chunkShape,
           shape,
+          linearization,
         );
       }
     }

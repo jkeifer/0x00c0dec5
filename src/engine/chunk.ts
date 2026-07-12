@@ -1,6 +1,7 @@
 import type { Chunk, ChunkVariable } from '../types/pipeline.ts';
 import type { LogicalValue } from '../types/dtypes.ts';
 import type { ValueArray } from './layout.ts';
+import { orderCoordsOf, type LinearizationOrder } from './order.ts';
 
 /** Minimal variable interface needed by chunking — decoupled from state.Variable. */
 export interface ChunkableVariable {
@@ -59,6 +60,7 @@ export function chunkData(
   chunkShape: number[],
   variables: ChunkableVariable[],
   variableValues: Map<string, ValueArray>,
+  order: LinearizationOrder = 'c',
 ): Chunk[] {
   const clampedChunkShape = chunkShape.map((cs, d) => Math.min(cs, shape[d]));
   const chunkGrid = computeChunkGrid(shape, chunkShape);
@@ -82,6 +84,7 @@ export function chunkData(
         shape,
         clampedChunkShape,
         coords,
+        order,
       );
 
       return {
@@ -107,6 +110,7 @@ export function chunkDataPerVariable(
   chunkShape: number[],
   variables: ChunkableVariable[],
   variableValues: Map<string, ValueArray>,
+  order: LinearizationOrder = 'c',
 ): Chunk[] {
   const clampedChunkShape = chunkShape.map((cs, d) => Math.min(cs, shape[d]));
   const chunkGrid = computeChunkGrid(shape, chunkShape);
@@ -126,6 +130,7 @@ export function chunkDataPerVariable(
               shape,
               clampedChunkShape,
               coords,
+              order,
             );
             return {
               variableName: v.name,
@@ -160,6 +165,7 @@ function extractChunkValues(
   shape: number[],
   clampedChunkShape: number[],
   chunkCoords: number[],
+  order: LinearizationOrder,
 ): { values: LogicalValue[]; sourceCoords: number[][] } {
   const startIndices = chunkCoords.map((c, d) => c * clampedChunkShape[d]);
   const endIndices = startIndices.map((s, d) => Math.min(s + clampedChunkShape[d], shape[d]));
@@ -170,7 +176,9 @@ function extractChunkValues(
   const sourceCoords: number[][] = new Array(totalElements);
 
   for (let i = 0; i < totalElements; i++) {
-    const localCoords = flatIndexToCoords(i, chunkExtent);
+    // The i-th element in the linearized byte sequence: its in-chunk coords
+    // per the chosen order. For 'c' this is exactly flatIndexToCoords.
+    const localCoords = orderCoordsOf(i, chunkExtent, order);
     const globalCoords = localCoords.map((lc, d) => lc + startIndices[d]);
     const globalFlatIndex = coordsToFlatIndex(globalCoords, shape);
 

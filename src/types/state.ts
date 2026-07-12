@@ -1,6 +1,7 @@
 import type { DtypeKey } from './dtypes.ts';
 import type { CodecStep } from './codecs.ts';
 import type { StageName } from './pipeline.ts';
+import type { LinearizationOrder } from '../engine/order.ts';
 
 export type LogicalType = 'integer' | 'decimal' | 'continuous' | 'text';
 
@@ -67,6 +68,15 @@ export interface AppState {
   shape: number[];
   chunkShape: number[];
   interleaving: 'row' | 'column';
+  /**
+   * Task cl-6: the order in which N-D elements within a chunk are flattened to
+   * the 1-D byte sequence — 'c' (row-major, default; byte-identical to the
+   * pre-task behavior), 'fortran' (column-major), or 'morton' (Z-curve). Only
+   * observable for array-model datasets with ndim>1; the identity for 1-D.
+   * Serialized into metadata's layout group as `linearization`; old files
+   * (key absent) default to 'c' on read.
+   */
+  linearization: LinearizationOrder;
   variables: Variable[];
   /**
    * D5 (remediation-plan.md, Phase 3.1): keyed by Variable.id, not name — names
@@ -142,6 +152,7 @@ export const DEFAULT_STATE: AppState = {
   shape: [32],
   chunkShape: [32],
   interleaving: 'column',
+  linearization: 'c',
   variables: DEFAULT_VARIABLES,
   // Keyed by Variable.id (see AppState.fieldPipelines doc comment above). The
   // starter variables' ids happen to equal their names today, but that is
