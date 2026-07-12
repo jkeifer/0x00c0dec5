@@ -104,6 +104,11 @@ export function Sidebar() {
             onChunkShapeChange={(chunkShape) =>
               dispatch({ type: 'SET_CHUNK_SHAPE', chunkShape })
             }
+            dataModel={state.dataModel}
+            linearization={state.linearization}
+            onLinearizationChange={(linearization) =>
+              dispatch({ type: 'SET_LINEARIZATION', linearization })
+            }
           />
         );
       case 'Interleave':
