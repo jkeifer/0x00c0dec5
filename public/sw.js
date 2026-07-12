@@ -10,8 +10,19 @@
 const VERSION = new URL(self.location.href).searchParams.get('v') || 'dev';
 const CACHE = `0xc-${VERSION}`;
 
-// Origins whose GETs we persist: same-origin only for now (the app shell +
-// its assets). A CDN origin (e.g. for Pyodide) can be added here later.
+// Project 4: the Pyodide runtime (+ numpy/numcodecs wheels) from the CDN.
+// SEPARATE cache from the per-commit app-shell cache: these URLs are pinned
+// and immutable, and evicting ~30MB of runtime on every deploy (the app
+// cache's lifecycle) would force a re-download for no reason. Keep this
+// version in sync with src/engine/pyodideRuntime.ts's PYODIDE_VERSION —
+// tests/unit/engine/pyodideVersionSync.test.ts enforces the match.
+const PYODIDE_VERSION = '314.0.2';
+const PYODIDE_CACHE = `0xc-pyodide-${PYODIDE_VERSION}`;
+const PYODIDE_ORIGIN = 'https://cdn.jsdelivr.net';
+const PYODIDE_PATH_PREFIX = `/pyodide/v${PYODIDE_VERSION}/`;
+
+// Origins whose GETs we persist: same-origin (the app shell + its assets)
+// plus the pinned Pyodide CDN origin, handled separately below.
 const CACHEABLE_ORIGINS = [self.location.origin];
 
 self.addEventListener('install', () => {
@@ -24,7 +35,7 @@ self.addEventListener('activate', event => {
             const names = await self.caches.keys();
             await Promise.all(
                 names
-                    .filter(name => name.startsWith('0xc-') && name !== CACHE)
+                    .filter(name => name.startsWith('0xc-') && name !== CACHE && name !== PYODIDE_CACHE)
                     .map(name => self.caches.delete(name))
             );
             await self.clients.claim();
@@ -40,6 +51,26 @@ self.addEventListener('fetch', event => {
         return;
     }
     const url = new URL(request.url);
+    if (url.origin === PYODIDE_ORIGIN) {
+        if (!url.pathname.startsWith(PYODIDE_PATH_PREFIX)) {
+            return; // some other jsdelivr URL: not ours to cache
+        }
+        event.respondWith(
+            (async () => {
+                const cache = await self.caches.open(PYODIDE_CACHE);
+                const cached = await cache.match(request);
+                if (cached) {
+                    return cached;
+                }
+                const response = await fetch(request);
+                if (response.ok) {
+                    await cache.put(request, response.clone());
+                }
+                return response;
+            })()
+        );
+        return;
+    }
     if (!CACHEABLE_ORIGINS.includes(url.origin)) {
         return;
     }
