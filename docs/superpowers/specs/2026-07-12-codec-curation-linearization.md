@@ -49,11 +49,16 @@ everything for nothing. Only display grouping changes.
 
 ## 2. Presentation: no tiers
 
-- Picker: two optgroups by function — **"Transforms"** (delta, zigzag,
-  byte-shuffle) and **"Compression"** (dictionary, rle, gzip, zstd, blosc).
+- Picker: **one flat list, no group labels** (design decision: category
+  labels over-explain; ordering carries the hint). Option order — pinned
+  by `CODEC_REGISTRY` insertion order, which the picker iterates — runs
+  transforms → structural/symbol compression → entropy coders, subtly
+  reinforcing sensible pipeline order without enforcing it:
+  Delta, Zigzag, Byte Shuffle, Bit Shuffle, Dictionary, RLE, Deflate,
+  GZip, Zstd (Dictionary→RLE also mirrors Parquet's real composition).
   The `codec-group-real` optgroup and testid are deleted; pyodide-backed
-  entries are simply disabled (with the existing suffix) inside their
-  functional group until the runtime is ready.
+  entries are simply disabled inline (with the existing suffix) until the
+  runtime is ready.
 - Labels: no "(real)" suffixes anywhere.
 - Runtime banner copy goes neutral: "Loading compression runtime:" /
   "Compression codecs unavailable: … Everything else works." (testids
@@ -105,8 +110,10 @@ layout group toggled off, the existing layout-starved read failure covers
 it (no new failure taxonomy). Read-process step text mentions the order
 where it narrates chunk decoding.
 
-**UI:** Chunking sidebar section gains the control (`data-testid`
-`linearization-select`), rendered only for array model with ndim > 1.
+**UI:** the **Chunk** sidebar section (`ChunkConfig`) gains the control
+(`data-testid` `linearization-select`), rendered only for array model
+with ndim > 1 — directly beside chunk shape, so the section reads as the
+"how elements become bytes" panel.
 
 ## 3b. Endianness setting + the silent-corruption metadata lesson
 
@@ -116,9 +123,10 @@ little-endian assumption.
 
 - **Setting:** `AppState.byteOrder: 'little' | 'big'` (default `'little'`,
   today's behavior byte-identical; persistence backfills). Applies to BOTH
-  data models (any multi-byte dtype). UI control lives beside the
-  linearization select (`data-testid` `byte-order-toggle`), visible always
-  (it's not ndim-gated). New action `SET_BYTE_ORDER`.
+  data models (any multi-byte dtype). UI control lives in the same Chunk
+  section beside the linearization select (`data-testid`
+  `byte-order-toggle`), visible for both models (not ndim-gated). New
+  action `SET_BYTE_ORDER`.
 - **Engine:** `valuesToBytes`/`bytesToValues` (and the DataView call sites
   behind them) gain the byte-order parameter; Typed-stage bytes,
   linearized chunks, and read-side decoding all honor it. Codec dtype flow
