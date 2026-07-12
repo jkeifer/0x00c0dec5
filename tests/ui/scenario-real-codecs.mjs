@@ -83,8 +83,18 @@ async function main() {
 
     await waitForPipelineIdle(page, 60_000);
 
-    const zstdOption = page.locator('option[value="zstd"]').first();
-    const zstdReady = await zstdOption.isEnabled({ timeout: 180_000 }).catch(() => false);
+    // waitForFunction, not isEnabled({timeout}): the <option> exists disabled
+    // from first render, and isEnabled's timeout only waits for element
+    // PRESENCE, not for the disabled attribute to clear — on a cold-cache run
+    // (full CDN download) the plain check reads false before the runtime is
+    // ready (final whole-branch review finding).
+    const zstdReady = await page
+      .waitForFunction(() => {
+        const opt = document.querySelector('option[value="zstd"]');
+        return opt !== null && !opt.disabled;
+      }, { timeout: 180_000 })
+      .then(() => true)
+      .catch(() => false);
     h.check(
       'runtime banner appears while loading OR runtime is already ready (zstd enabled) by first attach',
       bannerAppeared || zstdReady,
