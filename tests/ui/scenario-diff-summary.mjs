@@ -10,7 +10,7 @@
 //
 // Run: node tests/ui/scenario-diff-summary.mjs   (dev server must be running)
 
-import { launch, shot, createHarness } from './scenario-helpers.mjs';
+import { launch, shot, createHarness, waitForPipelineIdle } from './scenario-helpers.mjs';
 
 const h = createHarness('scenario-diff-summary');
 
@@ -47,6 +47,10 @@ async function main() {
   const includeMetadataYes = page.locator('[data-testid="include-metadata-toggle"] button', { hasText: /^Yes$/ });
   await includeMetadataYes.click();
   await page.waitForTimeout(400);
+  // Project 4's eager Pyodide init keeps the worker busy for the first few
+  // seconds after boot — wait for the pipeline to actually go idle before
+  // reading the read-status.
+  await waitForPipelineIdle(page);
 
   // ── 3. Enable diff mode in the Read section. ──
   const readSection = page.locator('[data-testid="sidebar-section-read"]');

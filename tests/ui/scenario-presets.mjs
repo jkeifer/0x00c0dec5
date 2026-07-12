@@ -16,7 +16,7 @@
 //
 // Run: node tests/ui/scenario-presets.mjs   (dev server must be running)
 
-import { launch, shot, createHarness } from './scenario-helpers.mjs';
+import { launch, shot, createHarness, waitForPipelineIdle } from './scenario-helpers.mjs';
 
 const h = createHarness('scenario-presets');
 
@@ -27,6 +27,10 @@ async function readStatusText(page) {
 async function selectPreset(page, value) {
   await page.locator('[data-testid="preset-select"]').selectOption(value);
   await page.waitForTimeout(600);
+  // Project 4's eager Pyodide init keeps the worker busy for the first few
+  // seconds after boot — wait for the pipeline to actually go idle before
+  // reading the read-status.
+  await waitForPipelineIdle(page);
 }
 
 async function openSidebarSection(page, name) {

@@ -26,7 +26,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { launch, shot, createHarness, boundaryShown } from './scenario-helpers.mjs';
+import { launch, shot, createHarness, boundaryShown, waitForPipelineIdle } from './scenario-helpers.mjs';
 
 const h = createHarness('scenario-talk-arc');
 
@@ -66,6 +66,10 @@ async function addCodecToHumidity(page, codecValue) {
   // scenario-placement-matrix.mjs's addRleToHumidity).
   await addCodecSelects.nth(2).selectOption(codecValue);
   await page.waitForTimeout(400);
+  // Project 4's eager Pyodide init keeps the worker busy for the first few
+  // seconds after boot, so early recomputes can land well after a flat wait —
+  // wait for the pipeline to actually go idle before reading stage stats.
+  await waitForPipelineIdle(page);
 }
 
 async function selectPreset(page, value) {
