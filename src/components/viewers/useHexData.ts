@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
-import type { ChunkRegion } from '../../types/pipeline.ts';
 import type { StageLayout, ValueSources } from '../../engine/layout.ts';
-import { chunkRegionsOf, byteRangesForTrace } from '../../engine/layout.ts';
+import { byteRangesForTrace } from '../../engine/layout.ts';
 
 /** One section of hex-viewable bytes: a single stage's bytes, or one file's
  * bytes when a Write-stage view has multiple output files. `header` is
@@ -22,7 +21,6 @@ export interface HexSection {
   bytes: Uint8Array;
   layout: StageLayout;
   sources: ValueSources;
-  chunkRegions?: ChunkRegion[];
 }
 
 export interface HexSectionData {
@@ -31,9 +29,11 @@ export interface HexSectionData {
   bytes: Uint8Array;
   layout: StageLayout;
   sources: ValueSources;
-  chunkRegions: ChunkRegion[];
   regionByByte: Uint8Array;
-  regionBoundaries: Set<number>;
+  /** 1 where a region boundary starts at that byte (0 elsewhere) — a byte
+   * array, not a Set<number>: at 8M+ values there's one boundary per element
+   * and a Set that size costs hundreds of MB (PERF-1). */
+  boundaryByByte: Uint8Array;
   rowCount: number;
   /** True when this section renders a bounded WINDOW_ROWS-row window (with a
    * FileMapStrip + offset-jump input above its rows) instead of virtualizing
@@ -95,23 +95,53 @@ export interface HexData {
   showHeaders: boolean;
 }
 
-function computeRegions(bytes: Uint8Array, layout: StageLayout, chunkRegions?: ChunkRegion[]) {
-  // computeRegions builds regionByByte: Uint8Array — O(bytes) but 1 byte/byte;
-  // kept as-is for now per the brief (cheap), just re-derived from
-  // chunkRegionsOf(layout) instead of the materialized traces array.
-  const regions = chunkRegions ?? chunkRegionsOf(layout);
+/** Per-byte region shading (alternating tint) and boundary flags, derived
+ * directly from the stage layout. Semantically equivalent to filling from
+ * `chunkRegionsOf(layout)` — same span order, same consecutive-same-label
+ * merging — but WITHOUT materializing the spans: for value-block regions
+ * that's one span object plus a traceId string per ELEMENT (8.4M of each at
+ * PERF-1 scale, the bulk of the oversized worker result this replaced), while
+ * this is just two O(bytes) array fills. Exported for the equivalence test
+ * (tests/unit/viewers/computeRegions.test.ts), which pins it against the
+ * chunkRegionsOf-based reference. */
+export function computeRegions(bytes: Uint8Array, layout: StageLayout) {
   const regionByByte = new Uint8Array(bytes.length);
-  for (let r = 0; r < regions.length; r++) {
-    const region = regions[r];
-    for (let i = region.startByte; i < region.endByte; i++) {
-      regionByByte[i] = r % 2;
+  const boundaryByByte = new Uint8Array(bytes.length);
+  let regionCount = 0; // merged-region counter — parity source, exactly chunkRegionsOf's index
+  let prevLabel: string | null = null; // null = can never merge with the next span
+
+  // One span: merges into the previous region iff labels match (values
+  // elements pass null — consecutive element traceIds are always distinct,
+  // so no label string is ever needed for them).
+  const emit = (start: number, end: number, label: string | null) => {
+    if (label === null || label !== prevLabel) {
+      if (start > 0) boundaryByByte[start] = 1;
+      regionCount++;
+    }
+    prevLabel = label;
+    if ((regionCount - 1) % 2 === 1) regionByByte.fill(1, start, end);
+  };
+
+  for (const r of layout.regions) {
+    if (r.kind === 'structural') {
+      emit(r.start, r.start + r.byteLength, r.traceId);
+    } else if (r.kind === 'chunk') {
+      emit(r.start, r.start + r.byteLength, r.chunkId);
+    } else if (r.offsets) {
+      for (let el = 0; el < r.elementCount; el++) {
+        // Zero-width text elements (empty string) emit no span — mirrors
+        // chunkRegionsOf's skip, which mirrors buildLogicalValuesStage.
+        if (r.offsets[el] === r.offsets[el + 1]) continue;
+        emit(r.start + r.offsets[el], r.start + r.offsets[el + 1], null);
+      }
+    } else {
+      const stride = r.stride!;
+      for (let el = 0; el < r.elementCount; el++) {
+        emit(r.start + el * stride, r.start + (el + 1) * stride, null);
+      }
     }
   }
-  const regionBoundaries = new Set<number>();
-  for (const region of regions) {
-    if (region.startByte > 0) regionBoundaries.add(region.startByte);
-  }
-  return { regions, regionByByte, regionBoundaries };
+  return { regionByByte, boundaryByByte };
 }
 
 /** Byte offset of the first byte belonging to `traceId` (or `chunkId` as a
@@ -148,11 +178,7 @@ export function useHexData(sections: HexSection[], bytesPerRow: number): HexData
     let rowOffset = 0;
     let extraPx = 0;
     const sectionData: HexSectionData[] = sections.map((section) => {
-      const { regions, regionByByte, regionBoundaries } = computeRegions(
-        section.bytes,
-        section.layout,
-        section.chunkRegions,
-      );
+      const { regionByByte, boundaryByByte } = computeRegions(section.bytes, section.layout);
       const rowCount = Math.max(1, Math.ceil(section.bytes.length / bytesPerRow));
       const windowed = rowCount > WINDOWED_SECTION_ROWS;
       const visibleRowCount = windowed ? Math.min(rowCount, WINDOW_ROWS) : rowCount;
@@ -162,9 +188,8 @@ export function useHexData(sections: HexSection[], bytesPerRow: number): HexData
         bytes: section.bytes,
         layout: section.layout,
         sources: section.sources,
-        chunkRegions: regions,
         regionByByte,
-        regionBoundaries,
+        boundaryByByte,
         rowCount,
         windowed,
         rowOffset,

@@ -55,7 +55,10 @@ export interface ChunkRegion {
 export interface PipelineStage {
   name: string;
   bytes: Uint8Array;
-  chunkRegions: ChunkRegion[];
+  // NO materialized chunkRegions (PERF-1): one region per element at 8M+
+  // values was the bulk of the oversized worker result. Region info is
+  // derived from `layout` on demand (chunkRegionsOf, or useHexData's
+  // computeRegions for the per-byte fills).
   layout: StageLayout;
   stats: {
     byteCount: number;

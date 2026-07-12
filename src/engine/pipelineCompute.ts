@@ -10,6 +10,7 @@ import type {
   VariableStats,
   StageName,
 } from '../types/pipeline.ts';
+import { STAGE_ORDER } from '../types/pipeline.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
 import { generateValues } from './generate.ts';
 import { assignType } from './typeAssign.ts';
@@ -27,7 +28,6 @@ import {
   buildEncodedLayout,
   buildMetadataLayout,
   encodedChunkMeta,
-  chunkRegionsOf,
   type StageLayout,
   type ValueArray,
   type ValueSources,
@@ -38,7 +38,6 @@ function makeStage(name: string, bytes: Uint8Array, layout: StageLayout): Pipeli
   return {
     name,
     bytes,
-    chunkRegions: chunkRegionsOf(layout),
     layout,
     stats: {
       byteCount: bytes.length,
@@ -473,6 +472,54 @@ export function computePipelineStages(
   };
 }
 
+// ─── Stage-delta protocol (PERF-1) ──────────────────────────────────────────
+//
+// The worker never posts a full PipelineResult: at ~8.38M values the
+// structured clone of one (~400MB) throws "Data cannot be cloned, out of
+// memory". Instead each compute returns a per-stage delta — the client sends
+// the memo keys it already holds (`knownKeys`), and a stage's payload is
+// included only when its key changed. Included payloads are posted with a
+// transfer list (zero-copy, no clone ceiling); the client keeps a per-stage
+// payload store and reassembles a PipelineResult via assemblePipelineResult.
+
+/** The client-facing slice of each stage's output. Only what viewers/UI
+ * consume crosses the thread boundary — worker-internal intermediates
+ * (chunks, linearizedChunks, encodedChunks) stay in the worker cache. */
+export interface StagePayloads {
+  values: { stage: PipelineStage; logicalValues: Map<string, ValueArray> };
+  typed: { stage: PipelineStage; typedValues: Map<string, ValueArray>; variableStats: Map<string, VariableStats> };
+  linearized: { stage: PipelineStage };
+  encoded: { stage: PipelineStage };
+  metadata: { stage: PipelineStage };
+  write: { stage: PipelineStage; files: VirtualFile[] };
+  read: { stage: PipelineStage; readResult: ReadFileResult; readLogicalValues: Map<string, ValueArray> };
+}
+
+export type StageKnownKeys = Partial<Record<StageName, string>>;
+
+export type PipelineDelta = {
+  [S in StageName]: { key: string; payload?: StagePayloads[S] };
+};
+
+/** Client-side reassembly of a full PipelineResult from the per-stage payload
+ * store (all seven stages must be present — the first delta always carries
+ * all of them, and later deltas only replace entries). */
+export function assemblePipelineResult(payloads: StagePayloads): PipelineResult {
+  return {
+    stages: STAGE_ORDER.map((s) => payloads[s].stage),
+    files: payloads.write.files,
+    readResult: payloads.read.readResult,
+    variableStats: payloads.typed.variableStats,
+    logicalValues: payloads.values.logicalValues,
+    typedValues: payloads.typed.typedValues,
+    stageSources: buildStageSources(
+      payloads.values.logicalValues,
+      payloads.typed.typedValues,
+      payloads.read.readLogicalValues,
+    ),
+  };
+}
+
 // ─── Worker-side stateful memoizer ──────────────────────────────────────────
 //
 // Replaces the old chained-useMemo hook's dependency boundaries (SW-3): a
@@ -485,11 +532,22 @@ export function computePipelineStages(
 // for the dependency rationale — with the upstream stage's memo key folded
 // into the downstream key so an upstream change invalidates every stage after
 // it, matching the useMemo dependency chain this replaces.
+//
+// Transfer vs. memoization (PERF-1, superseding Task 13's clone-everything
+// fix): a payload included in the returned delta is about to have its buffers
+// TRANSFERRED (detached) by the worker's postMessage, so its stage is evicted
+// from the cache — a later hit would hand back detached memory (the Task 13
+// bug). Eviction is safe because a sent stage's key changed, which (chained
+// keys) means every downstream stage was sent and evicted too; an omitted
+// stage's buffers never enter the message, so its cache entry stays valid.
+// Cost: one extra recompute per stage the first time it's needed again after
+// being resent — steady-state edits recompute only stages that changed anyway.
 
 export function createPipelineComputer(): (
   state: AppState,
+  knownKeys?: StageKnownKeys,
   onStage?: (stage: StageName, ms: number) => void,
-) => PipelineResult {
+) => PipelineDelta {
   const cache = new Map<StageName, { key: string; value: unknown }>();
 
   const memo = <T,>(stage: StageName, deps: unknown, fn: () => T): { value: T; key: string; hit: boolean } => {
@@ -501,7 +559,7 @@ export function createPipelineComputer(): (
     return { value, key, hit: false };
   };
 
-  return (state, onStage) => {
+  return (state, knownKeys = {}, onStage) => {
     // memo() has already run (and decided hit vs. miss) by the time `report`
     // sees it, so per the brief: report 0ms for a hit, and the wall-clock
     // time actually spent for a miss (measured by the caller wrapping the
@@ -594,24 +652,34 @@ export function createPipelineComputer(): (
     );
     const read = report('read', t0, readM);
 
-    const stages: PipelineStage[] = [
-      values.stage,
-      typed.stage,
-      linearized.stage,
-      encoded.stage,
-      metadata.stage,
-      files.stage,
-      read.stage,
-    ];
-
-    return {
-      stages,
-      files: files.files,
-      readResult: read.readResult,
-      variableStats: typed.variableStats,
-      logicalValues: values.variableValues,
-      typedValues: typed.typedVariableValues,
-      stageSources: buildStageSources(values.variableValues, typed.typedVariableValues, read.logicalValues),
+    const delta = {} as PipelineDelta;
+    const emit = <S extends StageName>(s: S, key: string, payload: StagePayloads[S]) => {
+      if (knownKeys[s] === key) {
+        delta[s] = { key };
+        return;
+      }
+      delta[s] = { key, payload };
+      // Evict-on-send: this payload's buffers are about to be transferred
+      // (detached) by postMessage — the cached value would be garbage.
+      cache.delete(s);
     };
+
+    emit('values', valuesM.key, { stage: values.stage, logicalValues: values.variableValues });
+    emit('typed', typedM.key, {
+      stage: typed.stage,
+      typedValues: typed.typedVariableValues,
+      variableStats: typed.variableStats,
+    });
+    emit('linearized', linearizedM.key, { stage: linearized.stage });
+    emit('encoded', encodedM.key, { stage: encoded.stage });
+    emit('metadata', metadataM.key, { stage: metadata.stage });
+    emit('write', filesM.key, { stage: files.stage, files: files.files });
+    emit('read', readM.key, {
+      stage: read.stage,
+      readResult: read.readResult,
+      readLogicalValues: read.logicalValues,
+    });
+
+    return delta;
   };
 }

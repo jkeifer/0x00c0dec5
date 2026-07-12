@@ -25,7 +25,7 @@ function renderRow(byteStart: number, byteEnd: number, totalBytes: number): stri
         layout={layout}
         sources={sources}
         regionByByte={new Uint8Array(totalBytes)}
-        regionBoundaries={new Set()}
+        boundaryByByte={new Uint8Array(totalBytes)}
         offsetWidth={8}
         totalBytes={totalBytes}
         hoveredTraceId={null}

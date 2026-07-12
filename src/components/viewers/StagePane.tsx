@@ -168,7 +168,7 @@ export function StagePane({
     if (!stage) return [];
     const sources = stageSources.get(selectedStage);
     if (!sources) return [];
-    return [{ key: stage.name, bytes: stage.bytes, layout: stage.layout, sources, chunkRegions: stage.chunkRegions }];
+    return [{ key: stage.name, bytes: stage.bytes, layout: stage.layout, sources }];
   }, [isWriteStage, files, stage, stageSources, selectedStage]);
 
   function renderViewer() {

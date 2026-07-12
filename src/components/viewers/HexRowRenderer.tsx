@@ -12,7 +12,7 @@ interface HexRowRendererProps {
   layout: StageLayout;
   sources: ValueSources;
   regionByByte: Uint8Array;
-  regionBoundaries: Set<number>;
+  boundaryByByte: Uint8Array;
   offsetWidth: number;
   totalBytes: number;
   hoveredTraceId: string | null;
@@ -31,7 +31,7 @@ export function HexRowRenderer({
   layout,
   sources,
   regionByByte,
-  regionBoundaries,
+  boundaryByByte,
   offsetWidth,
   totalBytes,
   hoveredTraceId,
@@ -43,7 +43,7 @@ export function HexRowRenderer({
 }: HexRowRendererProps) {
   const rowHasBoundary = byteStart > 0 && Array.from(
     { length: Math.min(bytesPerRow, byteEnd - byteStart) },
-    (_, col) => regionBoundaries.has(byteStart + col),
+    (_, col) => boundaryByByte[byteStart + col] === 1,
   ).some(Boolean);
 
   // Task 8 (perf plan): per-byte trace info for this row (at most

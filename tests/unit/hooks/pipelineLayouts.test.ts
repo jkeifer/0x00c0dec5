@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computePipelineStages } from '../../../src/hooks/usePipeline.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
-import { chunkRegionsOf, traceAt } from '../../../src/engine/layout.ts';
+import { traceAt } from '../../../src/engine/layout.ts';
 import { referenceStageTraces } from '../helpers/referenceTraces.ts';
 import { STAGE_ORDER } from '../../../src/types/pipeline.ts';
 import type { StageName } from '../../../src/types/pipeline.ts';
@@ -14,7 +14,10 @@ const NAME_TO_STAGE_NAME: Record<number, StageName> = Object.fromEntries(
 );
 
 describe('pipeline stage layouts', () => {
-  it('every stage layout byteLength matches its bytes, chunkRegions match chunkRegionsOf(layout), and traceAt spot-checks against the reference tracer', () => {
+  // PERF-1: PipelineStage.chunkRegions was deleted (regions derive from
+  // layout on demand — see useHexData's computeRegions and its equivalence
+  // test), so this now checks byteLength + traceAt only.
+  it('every stage layout byteLength matches its bytes, and traceAt spot-checks against the reference tracer', () => {
     const result = computePipelineStages(DEFAULT_STATE);
     const reference = referenceStageTraces(DEFAULT_STATE);
 
@@ -24,7 +27,6 @@ describe('pipeline stage layouts', () => {
       const stageName = NAME_TO_STAGE_NAME[i];
 
       expect(stage.layout.byteLength).toBe(stage.bytes.length);
-      expect(stage.chunkRegions).toEqual(chunkRegionsOf(stage.layout));
 
       if (stage.bytes.length > 0) {
         const sources = result.stageSources.get(stageName);

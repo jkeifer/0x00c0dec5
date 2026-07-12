@@ -4,30 +4,22 @@
 // react-free; see CLAUDE.md/Task 13 brief's react-free-bundle requirement,
 // verified by inspecting the built worker chunk for `react`/`useMemo`).
 import { createPipelineComputer } from '../engine/pipelineCompute.ts';
+import { collectTransferables } from './protocol.ts';
 import type { WorkerRequest, WorkerResponse, StageTimings } from './protocol.ts';
 
 // One memoizing computer for the worker's lifetime (Task 13 Step 2b): caches
 // each stage's output keyed by the state slices it reads, so a metadata
 // keystroke does not re-run generation/typing/chunking/encoding.
-const computePipelineStages = createPipelineComputer();
+const computeDelta = createPipelineComputer();
 
-// NOT using protocol.ts's collectTransferables()/Task 12's transfer-list
-// optimization here: Task 12 built it against an uncached compute (every
-// message's buffers were fresh). Task 13's memoizer reuses the SAME
-// ArrayBuffer instances across messages for cache-hit stages (that's the
-// whole point — no recompute), but a transferred buffer is DETACHED from
-// this thread; a cache hit on a later message would then hand back a
-// reference to already-detached memory, and postMessage throws synchronously
-// trying to clone/transfer it ("ArrayBuffer ... already detached" /
-// "detached and could not be cloned") — which surfaced as every subsequent
-// compute silently failing (`ok: false`) with no way to recover, since the
-// bad buffer stays cached forever. Transfer and per-stage memoization are
-// incompatible for the same object: whichever stages are cached must never
-// be transferred. Rather than track cache-hit/miss per buffer (fragile —
-// today's miss is next message's hit), we drop the transfer list and let
-// structured clone copy the result; the memoizer's whole point is avoiding
-// *recompute*, and a clone of the (already-small, serialized) stage bytes is
-// far cheaper than that recompute, so this is the right trade.
+// PERF-1: results are posted as stage DELTAS with a transfer list. The full
+// PipelineResult's structured clone threw "Data cannot be cloned, out of
+// memory" above ~8.38M values (~400MB); transfer is zero-copy and has no such
+// ceiling. Transfer detaches buffers on this side — the Task 13 conflict with
+// memoization — which the computer resolves by evicting every stage whose
+// payload is included in the delta (see the evict-on-send comment in
+// pipelineCompute.ts). Omitted stages (memo key already held by the client,
+// per msg.knownKeys) contribute no buffers to the message at all.
 
 // `self` here is typed via the DOM lib (this file is compiled under the same
 // tsconfig as the rest of src/, which has "DOM" not "WebWorker" in `lib` —
@@ -41,12 +33,13 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
   const timings: StageTimings = {};
   const t0 = performance.now();
   try {
-    const result = computePipelineStages(msg.state, (stage, ms) => {
+    const delta = computeDelta(msg.state, msg.knownKeys, (stage, ms) => {
       timings[stage] = ms;
       (self as unknown as Worker).postMessage({ kind: 'progress', id: msg.id, stage } satisfies WorkerResponse);
     });
     (self as unknown as Worker).postMessage(
-      { kind: 'result', id: msg.id, ok: true, result, timings, totalMs: performance.now() - t0 } satisfies WorkerResponse,
+      { kind: 'result', id: msg.id, ok: true, delta, timings, totalMs: performance.now() - t0 } satisfies WorkerResponse,
+      collectTransferables(delta),
     );
   } catch (err) {
     (self as unknown as Worker).postMessage(

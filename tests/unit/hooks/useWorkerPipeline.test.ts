@@ -10,8 +10,12 @@ import { renderHook, act } from '@testing-library/react';
 import { useWorkerPipeline } from '../../../src/hooks/useWorkerPipeline.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
 import type { WorkerLike } from '../../../src/worker/client.ts';
-import type { PipelineResult } from '../../../src/engine/pipelineCompute.ts';
+import { createPipelineComputer, type PipelineDelta } from '../../../src/engine/pipelineCompute.ts';
 import type { AppState } from '../../../src/types/state.ts';
+
+// A real full delta (PERF-1 stage-delta protocol) — what the worker's first
+// compute produces. The hook itself only sees the assembled PipelineResult.
+const FULL_DELTA: PipelineDelta = createPipelineComputer()(DEFAULT_STATE);
 
 class FakeWorker implements WorkerLike {
   posted: any[] = [];
@@ -20,9 +24,9 @@ class FakeWorker implements WorkerLike {
   postMessage(msg: unknown) { this.posted.push(msg); }
   addEventListener(type: 'message' | 'error', fn: (e: any) => void) { this.listeners[type].push(fn); }
   terminate() { this.terminated = true; }
-  emitResult(id: number, result: Partial<PipelineResult> = {}) {
+  emitResult(id: number, delta: PipelineDelta = FULL_DELTA) {
     this.listeners.message.forEach((f) => f({
-      data: { kind: 'result', id, ok: true, result: result as PipelineResult, timings: {}, totalMs: 1 },
+      data: { kind: 'result', id, ok: true, delta, timings: {}, totalMs: 1 },
     }));
   }
 }
@@ -44,10 +48,10 @@ describe('useWorkerPipeline', () => {
     });
 
     expect(worker.posted).toHaveLength(1);
-    const fakeResult = { stages: [], files: [] } as unknown as Partial<PipelineResult>;
-    act(() => worker.emitResult(worker.posted[0].id, fakeResult));
+    act(() => worker.emitResult(worker.posted[0].id));
 
-    expect(result.current.result).toEqual(fakeResult);
+    expect(result.current.result).not.toBeNull();
+    expect(result.current.result!.stages).toHaveLength(7);
     expect(result.current.computing).toBe(false);
   });
 
@@ -57,9 +61,9 @@ describe('useWorkerPipeline', () => {
       initialProps: DEFAULT_STATE,
     });
 
-    const fakeResult = { stages: [], files: [] } as unknown as Partial<PipelineResult>;
-    act(() => worker.emitResult(worker.posted[0].id, fakeResult));
+    act(() => worker.emitResult(worker.posted[0].id));
     expect(result.current.computing).toBe(false);
+    const firstResult = result.current.result;
 
     const nextState: AppState = { ...DEFAULT_STATE, interleaving: 'row' };
     rerender(nextState);
@@ -68,7 +72,7 @@ describe('useWorkerPipeline', () => {
     // Task 12's concern; here we only assert the hook's own contract).
     expect(result.current.computing).toBe(true);
     // Stale-view contract: the previous result is still what's returned.
-    expect(result.current.result).toEqual(fakeResult);
+    expect(result.current.result).toBe(firstResult);
   });
 
   it('disposes the client on unmount', () => {
@@ -89,7 +93,7 @@ describe('useWorkerPipeline compute trigger scope', () => {
       initialProps: DEFAULT_STATE,
     });
     expect(worker.posted).toHaveLength(1);
-    act(() => worker.emitResult(worker.posted[0].id, { stages: [] } as never));
+    act(() => worker.emitResult(worker.posted[0].id));
     expect(result.current.computing).toBe(false);
 
     // New state identity, same pipeline-relevant slices, different ui — this
@@ -109,7 +113,7 @@ describe('useWorkerPipeline compute trigger scope', () => {
     expect(worker.posted).toHaveLength(1);
     // Settle the in-flight compute first — the client queues (not posts)
     // while one is outstanding (Task 12 coalescing).
-    act(() => worker.emitResult(worker.posted[0].id, { stages: [] } as never));
+    act(() => worker.emitResult(worker.posted[0].id));
 
     const shapeChange: AppState = { ...DEFAULT_STATE, shape: [64] };
     rerender(shapeChange);

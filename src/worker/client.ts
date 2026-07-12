@@ -1,5 +1,7 @@
 import type { AppState } from '../types/state.ts';
-import type { PipelineResult } from '../engine/pipelineCompute.ts';
+import { assemblePipelineResult } from '../engine/pipelineCompute.ts';
+import type { PipelineResult, StagePayloads, StageKnownKeys, PipelineDelta } from '../engine/pipelineCompute.ts';
+import { STAGE_ORDER } from '../types/pipeline.ts';
 import type { WorkerRequest, WorkerResponse, StageTimings } from './protocol.ts';
 
 export interface WorkerDiagnostics {
@@ -37,6 +39,13 @@ export class PipelineWorkerClient {
   private lastTimings: StageTimings | null = null;
   private lastTotalMs: number | null = null;
   private lastError: string | null = null;
+
+  // PERF-1 stage-delta protocol: the per-stage payloads of the last applied
+  // result and their memo keys. `knownKeys` rides along on every compute
+  // request so the worker can omit stages this side already holds; payloads
+  // survive worker crashes/respawns (the data itself is still valid here).
+  private payloads: Partial<StagePayloads> = {};
+  private knownKeys: StageKnownKeys = {};
 
   constructor(opts: {
     createWorker: () => WorkerLike;
@@ -86,7 +95,7 @@ export class PipelineWorkerClient {
     this.inFlight = { id, state };
     this.status = 'computing';
     this.armWatchdog();
-    this.worker.postMessage({ kind: 'compute', id, state } satisfies WorkerRequest);
+    this.worker.postMessage({ kind: 'compute', id, state, knownKeys: { ...this.knownKeys } } satisfies WorkerRequest);
     this.onStatus?.(this.diagnostics());
   }
 
@@ -116,10 +125,13 @@ export class PipelineWorkerClient {
     this.status = 'idle';
 
     if (msg.ok) {
-      this.lastTimings = msg.timings;
-      this.lastTotalMs = msg.totalMs;
-      this.lastError = null;
-      this.onResult(msg.result, this.diagnostics()); // superseded result still published
+      const result = this.applyDelta(msg.delta);
+      if (result !== null) {
+        this.lastTimings = msg.timings;
+        this.lastTotalMs = msg.totalMs;
+        this.lastError = null;
+        this.onResult(result, this.diagnostics()); // superseded result still published
+      }
     } else {
       this.lastError = msg.error;
     }
@@ -130,6 +142,24 @@ export class PipelineWorkerClient {
       this.queued = null;
       this.post(next);
     }
+  }
+
+  /** Merge a stage delta into the payload store and reassemble the full
+   * result. Returns null (recording lastError) if an omitted stage isn't in
+   * the store — a protocol violation that can't happen when the worker
+   * honors `knownKeys`, but must not crash the message handler. */
+  private applyDelta(delta: PipelineDelta): PipelineResult | null {
+    for (const s of STAGE_ORDER) {
+      const entry = delta[s];
+      if (entry.payload !== undefined) {
+        (this.payloads as Record<string, unknown>)[s] = entry.payload;
+      } else if (this.payloads[s] === undefined) {
+        this.lastError = `worker omitted stage "${s}" but no prior payload is held`;
+        return null;
+      }
+      this.knownKeys[s] = entry.key;
+    }
+    return assemblePipelineResult(this.payloads as StagePayloads);
   }
 
   private handleCrash(error: string): void {

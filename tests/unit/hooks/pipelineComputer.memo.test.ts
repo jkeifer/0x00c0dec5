@@ -1,75 +1,98 @@
-// Gate test for Phase 3.2 (remediation-plan.md, fixes SW-3) and Task 13's
-// Step 2b (perf plan): the old chained-useMemo `usePipeline` hook was deleted
-// (its pure compute code moved to src/engine/pipelineCompute.ts, react-free
-// so pipeline.worker.ts's bundle doesn't pull react in). Its dependency-
-// boundary guarantee — typing into a metadata custom-entry field (or any
-// other late-stage-only input) must not recompute generation/typing/
-// chunking/encoding — now lives in `createPipelineComputer`'s per-stage
-// memoization, exercised here directly (no React/jsdom needed: the computer
-// is a plain closure over a state, unlike the deleted hook).
+// Gate test for Phase 3.2 (remediation-plan.md, fixes SW-3), Task 13's Step
+// 2b (perf plan), and PERF-1's stage-delta protocol: the worker-side
+// `createPipelineComputer` memoizes each stage on exactly the state slices it
+// reads, and now returns a per-stage DELTA instead of a full PipelineResult —
+// a stage whose memo key matches the caller's `knownKeys` entry has its
+// payload omitted (the main thread already holds it), and any stage whose
+// payload IS included is evicted from the worker cache (its buffers get
+// transferred/detached by postMessage, so the cached value would be garbage).
+// The old dependency-boundary guarantee — typing a metadata custom entry must
+// not recompute generation/typing/chunking/encoding — is now expressed as
+// "only metadata/write/read payloads are resent".
 import { describe, it, expect } from 'vitest';
-import { createPipelineComputer, computePipelineStages } from '../../../src/engine/pipelineCompute.ts';
+import {
+  createPipelineComputer,
+  computePipelineStages,
+  assemblePipelineResult,
+  type PipelineDelta,
+  type StagePayloads,
+} from '../../../src/engine/pipelineCompute.ts';
+import { STAGE_ORDER, type StageName } from '../../../src/types/pipeline.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
 import type { AppState } from '../../../src/types/state.ts';
 
-const STAGE_NAMES = ['Values', 'Typed', 'Linearized', 'Encoded', 'Metadata', 'Write', 'Read'] as const;
-
-function stageByName(result: ReturnType<typeof computePipelineStages>, name: string) {
-  const stage = result.stages.find((s) => s.name === name);
-  if (!stage) throw new Error(`stage ${name} not found`);
-  return stage;
+function knownKeysOf(delta: PipelineDelta): Partial<Record<StageName, string>> {
+  const keys: Partial<Record<StageName, string>> = {};
+  for (const s of STAGE_ORDER) keys[s] = delta[s].key;
+  return keys;
 }
 
-describe('createPipelineComputer memoization boundaries', () => {
-  it('produces the fixed 7-stage list', () => {
+function applyDelta(store: Partial<StagePayloads>, delta: PipelineDelta): StagePayloads {
+  for (const s of STAGE_ORDER) {
+    const payload = delta[s].payload;
+    if (payload !== undefined) (store as Record<StageName, unknown>)[s] = payload;
+  }
+  return store as StagePayloads;
+}
+
+function sentStages(delta: PipelineDelta): StageName[] {
+  return STAGE_ORDER.filter((s) => delta[s].payload !== undefined);
+}
+
+const metadataChanged: AppState = {
+  ...DEFAULT_STATE,
+  metadata: { ...DEFAULT_STATE.metadata, customEntries: [{ key: 'note', value: 'hello' }] },
+};
+
+describe('createPipelineComputer delta protocol', () => {
+  it('first compute (no knownKeys) sends every stage payload; assembled result matches the uncached reference', () => {
     const compute = createPipelineComputer();
-    const result = compute(DEFAULT_STATE);
-    expect(result.stages.map((s) => s.name)).toEqual(STAGE_NAMES);
+    const delta = compute(DEFAULT_STATE);
+    expect(sentStages(delta)).toEqual(STAGE_ORDER);
+
+    const assembled = assemblePipelineResult(applyDelta({}, delta));
+    const reference = computePipelineStages(DEFAULT_STATE);
+    expect(assembled.stages.map((s) => s.name)).toEqual(reference.stages.map((s) => s.name));
+    for (let i = 0; i < assembled.stages.length; i++) {
+      expect(Array.from(assembled.stages[i].bytes)).toEqual(Array.from(reference.stages[i].bytes));
+    }
+    expect(assembled.logicalValues).toEqual(reference.logicalValues);
+    expect(assembled.typedValues).toEqual(reference.typedValues);
+    expect(assembled.variableStats).toEqual(reference.variableStats);
+    expect(assembled.readResult.success).toBe(reference.readResult.success);
+    expect(assembled.files.map((f) => f.name)).toEqual(reference.files.map((f) => f.name));
+    expect([...assembled.stageSources.keys()]).toEqual([...reference.stageSources.keys()]);
   });
 
-  it('a metadata customEntries change leaves stages[0..3] (Values..Encoded) reference-identical across calls', () => {
+  it('same state again with knownKeys sends nothing (keys only)', () => {
     const compute = createPipelineComputer();
-    const before = compute(DEFAULT_STATE);
+    const first = compute(DEFAULT_STATE);
+    const second = compute(DEFAULT_STATE, knownKeysOf(first));
+    expect(sentStages(second)).toEqual([]);
+    for (const s of STAGE_ORDER) expect(second[s].key).toBe(first[s].key);
+  });
 
-    const changed: AppState = {
-      ...DEFAULT_STATE,
-      metadata: {
-        ...DEFAULT_STATE.metadata,
-        customEntries: [{ key: 'note', value: 'hello' }],
-      },
-    };
-    const after = compute(changed);
-
-    // stages[0..3]: Values, Typed, Linearized, Encoded
-    for (let i = 0; i <= 3; i++) {
-      expect(after.stages[i]).toBe(before.stages[i]);
+  it('a metadata customEntries change resends only metadata/write/read', () => {
+    const compute = createPipelineComputer();
+    const first = compute(DEFAULT_STATE);
+    const second = compute(metadataChanged, knownKeysOf(first));
+    expect(sentStages(second)).toEqual(['metadata', 'write', 'read']);
+    // Upstream keys unchanged — the main thread's copies are still valid.
+    for (const s of ['values', 'typed', 'linearized', 'encoded'] as const) {
+      expect(second[s].key).toBe(first[s].key);
     }
-
-    // Sanity: the Metadata stage itself DID pick up the change.
-    const metaText = new TextDecoder().decode(stageByName(after, 'Metadata').bytes);
+    // Sanity: the Metadata stage payload actually picked up the change.
+    const metaText = new TextDecoder().decode(second.metadata.payload!.stage.bytes);
     expect(metaText).toContain('hello');
   });
 
-  it('a shape change invalidates everything (no stage is reference-identical)', () => {
-    const compute = createPipelineComputer();
-    const before = compute(DEFAULT_STATE);
-
-    const changed: AppState = { ...DEFAULT_STATE, shape: [DEFAULT_STATE.shape[0] * 2] };
-    const after = compute(changed);
-
-    for (let i = 0; i < before.stages.length; i++) {
-      expect(after.stages[i]).not.toBe(before.stages[i]);
-    }
-  });
-
-  it('a codec param change leaves Values/Typed/Linearized stable but changes Encoded', () => {
+  it('a codec param change resends only encoded/metadata/write/read', () => {
     const withEmptyPipeline: AppState = {
       ...DEFAULT_STATE,
       fieldPipelines: { ...DEFAULT_STATE.fieldPipelines, temperature: [] },
     };
     const compute = createPipelineComputer();
-    const before = compute(withEmptyPipeline);
-
+    const first = compute(withEmptyPipeline);
     const withDelta: AppState = {
       ...withEmptyPipeline,
       fieldPipelines: {
@@ -77,42 +100,64 @@ describe('createPipelineComputer memoization boundaries', () => {
         temperature: [{ codec: 'delta', params: { order: 1 } }],
       },
     };
-    const after = compute(withDelta);
-
-    expect(stageByName(after, 'Values')).toBe(stageByName(before, 'Values'));
-    expect(stageByName(after, 'Typed')).toBe(stageByName(before, 'Typed'));
-    expect(stageByName(after, 'Linearized')).toBe(stageByName(before, 'Linearized'));
-    expect(stageByName(after, 'Encoded')).not.toBe(stageByName(before, 'Encoded'));
-    expect(Array.from(stageByName(after, 'Encoded').bytes)).not.toEqual(Array.from(stageByName(before, 'Encoded').bytes));
+    const second = compute(withDelta, knownKeysOf(first));
+    expect(sentStages(second)).toEqual(['encoded', 'metadata', 'write', 'read']);
   });
 
-  it('reports 0ms via onStage for cache hits, non-zero-or-real timing for misses', () => {
+  it('a shape change resends everything', () => {
     const compute = createPipelineComputer();
-    compute(DEFAULT_STATE); // warm the cache
+    const first = compute(DEFAULT_STATE);
+    const changed: AppState = { ...DEFAULT_STATE, shape: [DEFAULT_STATE.shape[0] * 2] };
+    const second = compute(changed, knownKeysOf(first));
+    expect(sentStages(second)).toEqual(STAGE_ORDER);
+  });
 
-    const changed: AppState = {
-      ...DEFAULT_STATE,
-      metadata: { ...DEFAULT_STATE.metadata, customEntries: [{ key: 'a', value: 'b' }] },
-    };
+  it('assembled result stays correct across incremental delta applications', () => {
+    const compute = createPipelineComputer();
+    const store: Partial<StagePayloads> = {};
+    const first = compute(DEFAULT_STATE);
+    applyDelta(store, first);
+    const beforeValuesStage = store.values!.stage;
+
+    const second = compute(metadataChanged, knownKeysOf(first));
+    applyDelta(store, second);
+
+    const assembled = assemblePipelineResult(store as StagePayloads);
+    const reference = computePipelineStages(metadataChanged);
+    for (let i = 0; i < assembled.stages.length; i++) {
+      expect(Array.from(assembled.stages[i].bytes)).toEqual(Array.from(reference.stages[i].bytes));
+    }
+    // Omitted upstream stage objects are literally the ones from the first
+    // delta — reference identity, same contract the old memo test pinned.
+    expect(store.values!.stage).toBe(beforeValuesStage);
+  });
+
+  it('sent stages are evicted (recomputed next call), unsent stages stay cached: onStage reports 0ms only once warm', () => {
+    const compute = createPipelineComputer();
+    const first = compute(DEFAULT_STATE); // everything sent -> everything evicted
+
+    // Second call, same state: keys match knownKeys so nothing is sent, but
+    // the evicted stages had to be recomputed (real timings, not asserted).
+    // Because nothing was sent this time, the cache is warm again afterward.
+    const second = compute(DEFAULT_STATE, knownKeysOf(first));
+    expect(sentStages(second)).toEqual([]);
+
+    // Third call, metadata-only change: upstream stages are true cache hits.
     const timings: Record<string, number> = {};
-    compute(changed, (stage, ms) => { timings[stage] = ms; });
-
-    // Upstream stages (unaffected by a metadata-only change) are cache hits -> 0ms.
+    compute(metadataChanged, knownKeysOf(second), (stage, ms) => { timings[stage] = ms; });
     expect(timings['values']).toBe(0);
     expect(timings['typed']).toBe(0);
     expect(timings['linearized']).toBe(0);
     expect(timings['encoded']).toBe(0);
-    // Metadata (and downstream) changed -> a miss, timings key still present.
     expect(timings['metadata']).toBeGreaterThanOrEqual(0);
   });
 
-  it('matches computePipelineStages output for a given state (uncached reference)', () => {
-    const compute = createPipelineComputer();
-    const memoized = compute(DEFAULT_STATE);
-    const reference = computePipelineStages(DEFAULT_STATE);
-    expect(memoized.stages.map((s) => s.name)).toEqual(reference.stages.map((s) => s.name));
-    for (let i = 0; i < memoized.stages.length; i++) {
-      expect(Array.from(memoized.stages[i].bytes)).toEqual(Array.from(reference.stages[i].bytes));
-    }
+  it('a fresh computer (worker respawn) with the client\'s knownKeys resends nothing the client already holds', () => {
+    const oldComputer = createPipelineComputer();
+    const first = oldComputer(DEFAULT_STATE);
+
+    const respawned = createPipelineComputer(); // empty cache
+    const second = respawned(DEFAULT_STATE, knownKeysOf(first));
+    expect(sentStages(second)).toEqual([]); // recomputed fresh, but keys match — nothing resent
   });
 });
