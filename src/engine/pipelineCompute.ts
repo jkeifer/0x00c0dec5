@@ -658,7 +658,10 @@ export function createPipelineComputer(): (
         delta[s] = { key };
         return;
       }
-      delta[s] = { key, payload };
+      // TS can't prove a generic mapped-type write (delta[s] is the union of
+      // all per-stage entry types from inside the generic); each call site
+      // pairs s with its own StagePayloads[S], so the assertion is sound.
+      (delta as Record<S, { key: string; payload: StagePayloads[S] }>)[s] = { key, payload };
       // Evict-on-send: this payload's buffers are about to be transferred
       // (detached) by postMessage — the cached value would be garbage.
       cache.delete(s);
