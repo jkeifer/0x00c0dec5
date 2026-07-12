@@ -85,4 +85,27 @@ describe('metadata.include migration', () => {
       endianness: true,
     });
   });
+
+  it('pre-cl-8 five-group include (endianness absent) -> backfills endianness: true', () => {
+    const raw = JSON.parse(JSON.stringify(DEFAULT_STATE));
+    raw.metadata.include = {
+      schema: true,
+      layout: false,
+      codecs: true,
+      chunkIndex: false,
+      descriptive: true,
+      // no endianness key — a save from before the cl-8 group existed
+    };
+
+    const result = validateExternalState(raw, 'tabular');
+    expect(result).not.toBeNull();
+    expect(result!.metadata.include).toEqual({
+      schema: true,
+      layout: false,
+      codecs: true,
+      chunkIndex: false,
+      descriptive: true,
+      endianness: true,
+    });
+  });
 });
