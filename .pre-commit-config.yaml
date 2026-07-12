@@ -1,0 +1,18 @@
+# Run with prek (https://github.com/j178/prek): `prek install` once per clone.
+# All hooks are language: system — prek manages no environments behind the
+# scenes; everything runs the repo's own npm/npx toolchain.
+repos:
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint (zero errors; warnings allowed)
+        entry: npm run -s lint
+        language: system
+        types_or: [ts, tsx]
+        pass_filenames: false
+      - id: tsc
+        name: tsc -b (same project-references build the real build runs)
+        entry: npx tsc -b
+        language: system
+        types_or: [ts, tsx]
+        pass_filenames: false
