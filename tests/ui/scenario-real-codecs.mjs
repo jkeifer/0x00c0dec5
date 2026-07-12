@@ -131,15 +131,15 @@ async function main() {
       '0x00c0dec5-state-array': baseState(),
     });
 
-    // The banner is visible in BOTH the loading state ("Loading real
-    // codecs:…") and the error state ("Real codecs unavailable: …") — wait
-    // for the error text specifically rather than just first-visible, which
-    // can catch it mid-load.
+    // The banner is visible in BOTH the loading state ("Loading compression
+    // runtime:…") and the error state ("Compression codecs unavailable:
+    // …") — wait for the error text specifically rather than just
+    // first-visible, which can catch it mid-load.
     const banner = page.locator('[data-testid="runtime-banner"]');
     const dismissBtn = page.locator('[data-testid="runtime-banner-dismiss"]');
     await dismissBtn.waitFor({ state: 'visible', timeout: 60_000 }).catch(() => {});
     const text = (await banner.innerText().catch(() => '')) || '';
-    h.check('CDN failure shows the error banner', text.includes('Real codecs unavailable'), text);
+    h.check('CDN failure shows the error banner', text.includes('Compression codecs unavailable'), text);
 
     await waitForPipelineIdle(page, 60_000);
     const select = page.locator('[data-testid="sidebar-section-codecs"] select').last();

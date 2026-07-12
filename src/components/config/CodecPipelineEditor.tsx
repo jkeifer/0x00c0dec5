@@ -63,10 +63,6 @@ function clampParamValue(raw: string, min: number | undefined, max: number | und
 }
 
 const codecEntries = Object.values(CODEC_REGISTRY);
-const educationalCategories: Array<{ label: string; key: string }> = [
-  { label: 'Reordering', key: 'reordering' },
-  { label: 'Entropy', key: 'entropy' },
-];
 
 export function CodecPipelineEditor({
   steps,
@@ -257,9 +253,9 @@ function AddCodecSelect({
   onAdd: (key: string) => void;
   runtimeStatus: 'loading' | 'ready' | 'error';
 }) {
-  const realCodecs = codecEntries.filter((c) => c.runtime === 'pyodide');
-  const realDisabled = runtimeStatus !== 'ready';
-  const realSuffix = runtimeStatus === 'loading' ? ' (loading…)' : runtimeStatus === 'error' ? ' (unavailable)' : '';
+  const pyodideDisabled = runtimeStatus !== 'ready';
+  const pyodideSuffix =
+    runtimeStatus === 'loading' ? ' (loading…)' : runtimeStatus === 'error' ? ' (unavailable)' : '';
   return (
     <select
       value=""
@@ -269,28 +265,12 @@ function AddCodecSelect({
       style={{ ...inputStyle(), cursor: 'pointer', color: colors.accent }}
     >
       <option value="">+ Add codec</option>
-      {educationalCategories.map((cat) => {
-        const codecs = codecEntries.filter((c) => c.category === cat.key && c.runtime === undefined);
-        if (codecs.length === 0) return null;
-        return (
-          <optgroup key={cat.key} label={cat.label}>
-            {codecs.map((c) => (
-              <option key={c.key} value={c.key}>
-                {c.label}
-              </option>
-            ))}
-          </optgroup>
-        );
-      })}
-      {realCodecs.length > 0 && (
-        <optgroup data-testid="codec-group-real" label="Real codecs — actual numcodecs (Zarr's library), in Python via WebAssembly">
-          {realCodecs.map((c) => (
-            <option key={c.key} value={c.key} disabled={realDisabled}>
-              {c.label}{realSuffix}
-            </option>
-          ))}
-        </optgroup>
-      )}
+      {codecEntries.map((c) => (
+        <option key={c.key} value={c.key} disabled={c.runtime === 'pyodide' && pyodideDisabled}>
+          {c.label}
+          {c.runtime === 'pyodide' ? pyodideSuffix : ''}
+        </option>
+      ))}
     </select>
   );
 }

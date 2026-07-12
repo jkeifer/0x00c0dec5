@@ -3,6 +3,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { CodecPipelineEditor } from '../../../src/components/config/CodecPipelineEditor.tsx';
 
+const REGISTRY_ORDER = ['delta', 'zigzag', 'byte-shuffle', 'bit-shuffle', 'dictionary', 'rle', 'deflate', 'gzip', 'zstd'];
+const PYODIDE_KEYS = ['deflate', 'gzip', 'zstd'];
+
 function renderEditor(runtimeStatus?: 'loading' | 'ready' | 'error') {
   const onChange = vi.fn();
   const utils = render(
@@ -12,28 +15,45 @@ function renderEditor(runtimeStatus?: 'loading' | 'ready' | 'error') {
   return { onChange, select, ...utils };
 }
 
-describe('codec picker real-codec group', () => {
-  it('groups real codecs separately with the numcodecs note', () => {
+describe('codec picker flat list', () => {
+  it('renders a single flat option list with no optgroups, in registry insertion order', () => {
     const { select } = renderEditor('ready');
-    const group = select.querySelector('optgroup[data-testid="codec-group-real"]')!;
-    expect(group).not.toBeNull();
-    expect(group.getAttribute('label')).toContain('Real codecs');
-    const keys = Array.from(group.querySelectorAll('option')).map((o) => o.getAttribute('value'));
-    expect(keys).toEqual(['deflate', 'gzip', 'zstd']);
-    // Educational groups no longer contain the real entries
-    const allOtherKeys = Array.from(select.querySelectorAll('optgroup:not([data-testid="codec-group-real"]) option'))
-      .map((o) => o.getAttribute('value'));
-    expect(allOtherKeys).not.toContain('zstd');
+    expect(select.querySelectorAll('optgroup').length).toBe(0);
+    const values = Array.from(select.querySelectorAll('option')).map((o) => o.getAttribute('value'));
+    // First option is the "+ Add codec" placeholder, then registry order.
+    expect(values).toEqual(['', ...REGISTRY_ORDER]);
   });
 
-  it('disables real codecs while loading, enables when ready', () => {
+  it('disables pyodide-backed codecs while loading, enables when ready', () => {
     const loading = renderEditor('loading');
-    for (const opt of loading.select.querySelectorAll('optgroup[data-testid="codec-group-real"] option')) {
-      expect((opt as HTMLOptionElement).disabled).toBe(true);
+    for (const key of PYODIDE_KEYS) {
+      const opt = loading.select.querySelector(`option[value="${key}"]`) as HTMLOptionElement;
+      expect(opt.disabled).toBe(true);
+      expect(opt.textContent).toContain('(loading…)');
     }
     const ready = renderEditor('ready');
-    for (const opt of ready.select.querySelectorAll('optgroup[data-testid="codec-group-real"] option')) {
-      expect((opt as HTMLOptionElement).disabled).toBe(false);
+    for (const key of PYODIDE_KEYS) {
+      const opt = ready.select.querySelector(`option[value="${key}"]`) as HTMLOptionElement;
+      expect(opt.disabled).toBe(false);
+      expect(opt.textContent).not.toContain('(loading…)');
+      expect(opt.textContent).not.toContain('(unavailable)');
+    }
+    const errored = renderEditor('error');
+    for (const key of PYODIDE_KEYS) {
+      const opt = errored.select.querySelector(`option[value="${key}"]`) as HTMLOptionElement;
+      expect(opt.disabled).toBe(true);
+      expect(opt.textContent).toContain('(unavailable)');
+    }
+  });
+
+  it('local (non-pyodide) codecs are always enabled regardless of runtime status', () => {
+    const localKeys = REGISTRY_ORDER.filter((k) => !PYODIDE_KEYS.includes(k));
+    for (const status of ['loading', 'ready', 'error'] as const) {
+      const { select } = renderEditor(status);
+      for (const key of localKeys) {
+        const opt = select.querySelector(`option[value="${key}"]`) as HTMLOptionElement;
+        expect(opt.disabled).toBe(false);
+      }
     }
   });
 
@@ -43,6 +63,8 @@ describe('codec picker real-codec group', () => {
       <CodecPipelineEditor steps={[]} inputDtype="float32" onChange={onChange} />,
     );
     const select = container.querySelector('select')!;
+    const zstdOpt = select.querySelector('option[value="zstd"]') as HTMLOptionElement;
+    expect(zstdOpt.disabled).toBe(false);
     fireEvent.change(select, { target: { value: 'zstd' } });
     expect(onChange).toHaveBeenCalledWith([
       { codec: 'zstd', params: { level: 3 } },

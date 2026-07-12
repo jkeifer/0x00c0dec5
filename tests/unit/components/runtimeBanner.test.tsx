@@ -17,6 +17,7 @@ describe('RuntimeBanner', () => {
   it('narrates steps while loading (done steps checked, current step marked)', () => {
     render(<RuntimeBanner runtime={loading} />);
     const banner = screen.getByTestId('runtime-banner');
+    expect(banner.textContent).toContain('Loading compression runtime:');
     expect(banner.textContent).toContain('Downloading Python runtime');
     expect(banner.textContent).toContain('Installing numpy');
     expect(screen.getByTestId('runtime-banner-step-download-runtime').textContent).toContain('✓');
@@ -31,9 +32,9 @@ describe('RuntimeBanner', () => {
   it('shows a dismissible error with reassurance', () => {
     render(<RuntimeBanner runtime={{ status: 'error', steps: [], error: 'CDN unreachable' }} />);
     const banner = screen.getByTestId('runtime-banner');
-    expect(banner.textContent).toContain('Real codecs unavailable');
+    expect(banner.textContent).toContain('Compression codecs unavailable');
     expect(banner.textContent).toContain('CDN unreachable');
-    expect(banner.textContent).toContain('Everything else works');
+    expect(banner.textContent).toContain('Everything else works — the other codecs are unaffected.');
     fireEvent.click(screen.getByTestId('runtime-banner-dismiss'));
     expect(screen.queryByTestId('runtime-banner')).toBeNull();
   });
