@@ -243,6 +243,92 @@ function bitTranspose(bytes: Uint8Array, stride: number, op: 'encode' | 'decode'
   return out;
 }
 
+// ─── Dictionary ─────────────────────────────────────────────────────────
+
+const dictionary: CodecDefinition = {
+  key: 'dictionary',
+  label: 'Dictionary',
+  category: 'entropy',
+  description:
+    'Parquet\'s workhorse: distinct values go into a dictionary, the stream '
+    + 'becomes indices into it. Self-contained format — '
+    + '[stride][dictCount][dict bytes][indexWidth][indices] — great for '
+    + 'low-cardinality data.',
+  params: {},
+  applicableTo: () => true,
+  isLossy: () => false,
+  encode(bytes, inputDtype) {
+    if (bytes.length === 0) {
+      return { bytes: new Uint8Array(0), outputDtype: 'uint8' };
+    }
+
+    const stride = getDtype(inputDtype as DtypeKey).size;
+    const count = Math.floor(bytes.length / stride);
+
+    // Byte-level dedup keyed on the tuple's byte string — exact even for
+    // NaN payloads, since it compares raw bytes rather than decoded values.
+    const dict: string[] = [];
+    const index = new Map<string, number>();
+    const indices = new Uint32Array(count);
+    for (let i = 0; i < count; i++) {
+      const key = String.fromCharCode(...bytes.subarray(i * stride, (i + 1) * stride));
+      let id = index.get(key);
+      if (id === undefined) {
+        id = dict.length;
+        index.set(key, id);
+        dict.push(key);
+      }
+      indices[i] = id;
+    }
+
+    const dictCount = dict.length;
+    const indexWidth = dictCount <= 256 ? 1 : dictCount <= 65536 ? 2 : 4;
+
+    const out = new Uint8Array(1 + 4 + dictCount * stride + 1 + count * indexWidth);
+    const view = new DataView(out.buffer);
+    out[0] = stride;
+    view.setUint32(1, dictCount, true);
+    let off = 1 + 4;
+    for (const key of dict) {
+      for (let b = 0; b < stride; b++) out[off++] = key.charCodeAt(b);
+    }
+    out[off++] = indexWidth;
+    for (let i = 0; i < count; i++) {
+      if (indexWidth === 1) out[off] = indices[i];
+      else if (indexWidth === 2) view.setUint16(off, indices[i], true);
+      else view.setUint32(off, indices[i], true);
+      off += indexWidth;
+    }
+
+    return { bytes: out, outputDtype: 'uint8' };
+  },
+  decode(bytes, _encodedDtype) {
+    if (bytes.length === 0) {
+      return { bytes: new Uint8Array(0), outputDtype: 'uint8' };
+    }
+
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const stride = bytes[0];
+    const dictCount = view.getUint32(1, true);
+    const dictStart = 1 + 4;
+    const indexWidthOff = dictStart + dictCount * stride;
+    const indexWidth = bytes[indexWidthOff];
+    const indicesStart = indexWidthOff + 1;
+    const count = Math.floor((bytes.length - indicesStart) / indexWidth);
+
+    const out = new Uint8Array(count * stride);
+    for (let i = 0; i < count; i++) {
+      const off = indicesStart + i * indexWidth;
+      const id = indexWidth === 1 ? bytes[off]
+        : indexWidth === 2 ? view.getUint16(off, true)
+        : view.getUint32(off, true);
+      out.set(bytes.subarray(dictStart + id * stride, dictStart + (id + 1) * stride), i * stride);
+    }
+
+    return { bytes: out, outputDtype: 'uint8' };
+  },
+};
+
 // ─── RLE ────────────────────────────────────────────────────────────────
 
 const rle: CodecDefinition = {
@@ -363,7 +449,7 @@ export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
   'zigzag': zigzagCodec,
   'byte-shuffle': byteShuffle,
   'bit-shuffle': bitShuffleCodec,
-  // Task 2 (codec-curation): 'dictionary' slots in here, before rle.
+  'dictionary': dictionary,
   'rle': rle,
   // Task 3 (codec-curation): 'deflate' slots in here, between rle and gzip.
   gzip: gzipCodec,
