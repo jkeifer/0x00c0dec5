@@ -193,4 +193,15 @@ describe('PipelineWorkerClient runtime status (project 4)', () => {
     w.emitResult(w.posted[0].id);
     expect(onResult).toHaveBeenCalledTimes(1);
   });
+
+  it('resets runtime state on worker crash — a respawned worker re-streams the load sequence', () => {
+    const workers: FakeWorker[] = [];
+    const c = new PipelineWorkerClient({ createWorker: () => { const w = new FakeWorker(); workers.push(w); return w; }, onResult: () => {} });
+    c.compute(DEFAULT_STATE);
+    workers[0].emitRuntimeStatus({ status: 'ready' });
+    expect(c.diagnostics().runtime.status).toBe('ready');
+    workers[0].emitError('boom');
+    expect(c.diagnostics().runtime.status).toBe('loading');
+    expect(c.diagnostics().runtime).toEqual({ status: 'loading', steps: [], error: null });
+  });
 });

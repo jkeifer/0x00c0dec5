@@ -54,7 +54,7 @@ const dividerStyle: React.CSSProperties = {
 // wrapper) removes the last props App.tsx had to thread through it.
 export function Sidebar() {
   const { state, dispatch } = useAppState();
-  const { files, readResult, variableStats } = usePipelineContext();
+  const { files, readResult, variableStats, runtimeStatus } = usePipelineContext();
   // Guide highlight (plan Phase 5): the section matching the guide's active
   // step gets an accent outline and is scrolled into view.
   const { activeSection } = useGuide();
@@ -133,6 +133,7 @@ export function Sidebar() {
             variables={state.variables}
             fieldPipelines={state.fieldPipelines}
             chunkPipeline={state.chunkPipeline}
+            runtimeStatus={runtimeStatus}
             onFieldPipelineChange={(variableId, steps) =>
               dispatch({ type: 'SET_FIELD_PIPELINE', variableId, steps })
             }

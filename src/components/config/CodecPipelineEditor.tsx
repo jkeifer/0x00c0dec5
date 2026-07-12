@@ -12,6 +12,9 @@ interface CodecPipelineEditorProps {
   onChange: (steps: CodecStep[]) => void;
   /** Identifies the pipeline owner for test ids: a variable name in column mode, or 'chunk' in row mode. */
   variableSlot?: string;
+  /** Project 4 task 4: Pyodide runtime status — gates whether real (numcodecs-backed)
+   *  codec entries are selectable. Defaults to 'ready' so existing callers/tests are unchanged. */
+  runtimeStatus?: 'loading' | 'ready' | 'error';
 }
 
 const btnStyle: React.CSSProperties = {
@@ -60,12 +63,18 @@ function clampParamValue(raw: string, min: number | undefined, max: number | und
 }
 
 const codecEntries = Object.values(CODEC_REGISTRY);
-const categories: Array<{ label: string; key: string }> = [
+const educationalCategories: Array<{ label: string; key: string }> = [
   { label: 'Reordering', key: 'reordering' },
   { label: 'Entropy', key: 'entropy' },
 ];
 
-export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot = 'chunk' }: CodecPipelineEditorProps) {
+export function CodecPipelineEditor({
+  steps,
+  inputDtype,
+  onChange,
+  variableSlot = 'chunk',
+  runtimeStatus = 'ready',
+}: CodecPipelineEditorProps) {
   function moveStep(index: number, direction: -1 | 1) {
     const newSteps = [...steps];
     const target = index + direction;
@@ -108,7 +117,7 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
         <div style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
           No codecs applied — data passes through unchanged
         </div>
-        <AddCodecSelect onAdd={addCodec} />
+        <AddCodecSelect onAdd={addCodec} runtimeStatus={runtimeStatus} />
       </div>
     );
   }
@@ -236,12 +245,21 @@ export function CodecPipelineEditor({ steps, inputDtype, onChange, variableSlot 
           </div>
         );
       })}
-      <AddCodecSelect onAdd={addCodec} />
+      <AddCodecSelect onAdd={addCodec} runtimeStatus={runtimeStatus} />
     </div>
   );
 }
 
-function AddCodecSelect({ onAdd }: { onAdd: (key: string) => void }) {
+function AddCodecSelect({
+  onAdd,
+  runtimeStatus,
+}: {
+  onAdd: (key: string) => void;
+  runtimeStatus: 'loading' | 'ready' | 'error';
+}) {
+  const realCodecs = codecEntries.filter((c) => c.runtime === 'pyodide');
+  const realDisabled = runtimeStatus !== 'ready';
+  const realSuffix = runtimeStatus === 'loading' ? ' (loading…)' : runtimeStatus === 'error' ? ' (unavailable)' : '';
   return (
     <select
       value=""
@@ -251,8 +269,8 @@ function AddCodecSelect({ onAdd }: { onAdd: (key: string) => void }) {
       style={{ ...inputStyle(), cursor: 'pointer', color: colors.accent }}
     >
       <option value="">+ Add codec</option>
-      {categories.map((cat) => {
-        const codecs = codecEntries.filter((c) => c.category === cat.key);
+      {educationalCategories.map((cat) => {
+        const codecs = codecEntries.filter((c) => c.category === cat.key && c.runtime === undefined);
         if (codecs.length === 0) return null;
         return (
           <optgroup key={cat.key} label={cat.label}>
@@ -264,6 +282,15 @@ function AddCodecSelect({ onAdd }: { onAdd: (key: string) => void }) {
           </optgroup>
         );
       })}
+      {realCodecs.length > 0 && (
+        <optgroup data-testid="codec-group-real" label="Real codecs — actual numcodecs (Zarr's library), in Python via WebAssembly">
+          {realCodecs.map((c) => (
+            <option key={c.key} value={c.key} disabled={realDisabled}>
+              {c.label}{realSuffix}
+            </option>
+          ))}
+        </optgroup>
+      )}
     </select>
   );
 }

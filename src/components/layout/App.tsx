@@ -6,6 +6,7 @@ import { useWorkerPipeline } from '../../hooks/useWorkerPipeline.ts';
 import { PipelineProvider, usePipelineContext } from '../../state/PipelineContext.tsx';
 import { colors, fonts, fontSizes } from '../../theme.ts';
 import { Header } from './Header.tsx';
+import { RuntimeBanner } from './RuntimeBanner.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { PipelineStrip } from './PipelineStrip.tsx';
 import { StagePane } from '../viewers/StagePane.tsx';
@@ -14,6 +15,7 @@ import { ErrorBoundary } from '../shared/ErrorBoundary.tsx';
 import { GuideProvider } from '../../state/GuideContext.tsx';
 import { GuidePanel } from '../guide/GuidePanel.tsx';
 import type { PipelineResult } from '../../engine/pipelineCompute.ts';
+import type { RuntimeState } from '../../worker/client.ts';
 
 /** Shown while `result` is still null. PERF-1: an ok:false FIRST compute used
  * to leave the "starting…" screen up forever (the stale-view design has no
@@ -54,10 +56,11 @@ export function BootScreen({ error }: { error: string | null }) {
   );
 }
 
-function MainLayout({ result, computing, bootError }: {
+function MainLayout({ result, computing, bootError, runtimeStatus }: {
   result: PipelineResult | null;
   computing: boolean;
   bootError: string | null;
+  runtimeStatus: RuntimeState['status'];
 }) {
   const { state, dispatch } = useAppState();
 
@@ -74,7 +77,7 @@ function MainLayout({ result, computing, bootError }: {
   }
 
   return (
-    <PipelineProvider pipeline={result} showDiff={state.ui.showDiff} computing={computing}>
+    <PipelineProvider pipeline={result} showDiff={state.ui.showDiff} computing={computing} runtimeStatus={runtimeStatus}>
       <Group
         orientation="horizontal"
         defaultLayout={mainPersist.defaultLayout}
@@ -212,6 +215,7 @@ export function App() {
   return (
     <GuideProvider>
       <Header diagnostics={diagnostics} />
+      <RuntimeBanner runtime={diagnostics.runtime} />
       <div style={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <ErrorBoundary>
@@ -219,6 +223,7 @@ export function App() {
               result={result}
               computing={computing}
               bootError={result === null ? diagnostics.lastError : null}
+              runtimeStatus={diagnostics.runtime.status}
             />
           </ErrorBoundary>
         </div>

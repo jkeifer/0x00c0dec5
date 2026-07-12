@@ -2,6 +2,7 @@ import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import type { PipelineResult } from '../engine/pipelineCompute.ts';
 import type { PipelineStage, VirtualFile, ReadFileResult, VariableStats, StageName } from '../types/pipeline.ts';
 import type { ValueSources, ValueArray } from '../engine/layout.ts';
+import type { RuntimeState } from '../worker/client.ts';
 
 /**
  * PipelineContext (remediation-plan.md, Phase 3.9): carries the pipeline's
@@ -49,6 +50,14 @@ export interface PipelineContextValue {
    * memo pattern below.
    */
   computing: boolean;
+  /**
+   * Project 4 task 4: the Pyodide runtime's load status ('loading' | 'ready'
+   * | 'error'), threaded through context so the codec picker (nested several
+   * levels down in Sidebar > CodecSection > CodecPipelineEditor) can disable
+   * real-codec entries without prop-drilling. Composed into the context value
+   * the same way as `computing` below — see that field's comment.
+   */
+  runtimeStatus: RuntimeState['status'];
 }
 
 const PipelineContext = createContext<PipelineContextValue | null>(null);
@@ -57,11 +66,13 @@ export function PipelineProvider({
   pipeline,
   showDiff,
   computing,
+  runtimeStatus = 'ready',
   children,
 }: {
   pipeline: PipelineResult;
   showDiff: boolean;
   computing: boolean;
+  runtimeStatus?: RuntimeState['status'];
   children: ReactNode;
 }) {
   // Split memo: `pipelinePart` changes only when `usePipeline`'s return value
@@ -84,8 +95,8 @@ export function PipelineProvider({
   );
 
   const value = useMemo<PipelineContextValue>(
-    () => ({ ...pipelinePart, showDiff, computing }),
-    [pipelinePart, showDiff, computing],
+    () => ({ ...pipelinePart, showDiff, computing, runtimeStatus }),
+    [pipelinePart, showDiff, computing, runtimeStatus],
   );
 
   return <PipelineContext.Provider value={value}>{children}</PipelineContext.Provider>;

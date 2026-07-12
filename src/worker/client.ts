@@ -197,6 +197,7 @@ export class PipelineWorkerClient {
     this.respawnCount++;
     this.status = 'crashed';
     this.lastError = error;
+    this.runtime = INITIAL_RUNTIME_STATE; // respawned worker re-streams the load sequence from scratch
     this.onStatus?.(this.diagnostics());
     if (repost !== null) this.post(repost);
   }

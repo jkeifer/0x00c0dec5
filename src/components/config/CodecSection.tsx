@@ -10,6 +10,7 @@ interface CodecSectionProps {
   variables: Variable[];
   fieldPipelines: Record<string, CodecStep[]>;
   chunkPipeline: CodecStep[];
+  runtimeStatus?: 'loading' | 'ready' | 'error';
   onFieldPipelineChange: (variableId: string, steps: CodecStep[]) => void;
   onChunkPipelineChange: (steps: CodecStep[]) => void;
 }
@@ -19,6 +20,7 @@ export function CodecSection({
   variables,
   fieldPipelines,
   chunkPipeline,
+  runtimeStatus,
   onFieldPipelineChange,
   onChunkPipelineChange,
 }: CodecSectionProps) {
@@ -64,6 +66,7 @@ export function CodecSection({
               inputDtype={v.typeAssignment.storageDtype}
               onChange={(steps) => onFieldPipelineChange(v.id, steps)}
               variableSlot={v.name}
+              runtimeStatus={runtimeStatus}
             />
           </div>
         ))}
@@ -112,6 +115,7 @@ export function CodecSection({
         inputDtype={inputDtype}
         onChange={onChunkPipelineChange}
         variableSlot="chunk"
+        runtimeStatus={runtimeStatus}
       />
     </div>
   );
