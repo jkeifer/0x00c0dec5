@@ -641,7 +641,7 @@ export function referenceStageTraces(state: AppState): Map<StageName, ByteTrace[
   const totalElements = state.shape.reduce((a, b) => a * b, 1);
   const variableValues = new Map<string, ValueArray>();
   for (const v of state.variables) {
-    variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
+    variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements, undefined, state.shape));
   }
   const valuesTraces = buildLogicalValuesTraces(state.variables, state.shape, variableValues);
 
@@ -681,7 +681,7 @@ export function referenceFileTraces(state: AppState): { name: string; traces: By
   const totalElements = state.shape.reduce((a, b) => a * b, 1);
   const variableValues = new Map<string, ValueArray>();
   for (const v of state.variables) {
-    variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
+    variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements, undefined, state.shape));
   }
   const { typedVariableValues } = buildTypedTraces(state.shape, state.variables, variableValues);
   const lin = referenceLinearize(state.shape, state.chunkShape, state.interleaving, state.variables, typedVariableValues, state.linearization);

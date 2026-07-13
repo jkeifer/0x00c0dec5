@@ -127,7 +127,7 @@ export function computeValuesStage(
       // both Float64Array (fresh buffer) and LogicalValue[] (fresh array).
       variableValues.set(v.name, vals.slice());
     } else {
-      variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
+      variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements, undefined, shape));
     }
   }
 

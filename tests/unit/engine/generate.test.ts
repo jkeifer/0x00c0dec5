@@ -119,6 +119,95 @@ describe('generateValues', () => {
   });
 });
 
+describe('smooth generator: 2D value noise on trailing dims', () => {
+  const smoothType: LogicalTypeConfig = { type: 'continuous', min: 0, max: 1000, significantFigures: 6, generation: 'smooth' };
+
+  // Mean absolute difference between adjacent values along a direction of a
+  // flat row-major [H, W] buffer.
+  function meanAbsRowDiff(values: number[], H: number, W: number): number {
+    let sum = 0, n = 0;
+    for (let y = 0; y < H; y++) {
+      for (let x = 1; x < W; x++) {
+        sum += Math.abs(values[y * W + x] - values[y * W + x - 1]);
+        n++;
+      }
+    }
+    return sum / n;
+  }
+  function meanAbsColDiff(values: number[], H: number, W: number): number {
+    let sum = 0, n = 0;
+    for (let y = 1; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        sum += Math.abs(values[y * W + x] - values[(y - 1) * W + x]);
+        n++;
+      }
+    }
+    return sum / n;
+  }
+
+  it('is deterministic for the same (variableName, globalSeed, shape)', () => {
+    const a = generateValues('field', smoothType, 64 * 64, 1, [64, 64]);
+    const b = generateValues('field', smoothType, 64 * 64, 1, [64, 64]);
+    expect(a).toEqual(b);
+  });
+
+  it('is smooth along both rows and columns for a [64, 64] shape', () => {
+    const values = Array.from(generateValues('field', smoothType, 64 * 64, 1, [64, 64]) as Float64Array);
+    const range = 1000; // logicalType.max - logicalType.min
+    const rowDiff = meanAbsRowDiff(values, 64, 64);
+    const colDiff = meanAbsColDiff(values, 64, 64);
+    expect(rowDiff).toBeLessThan(0.05 * range);
+    expect(colDiff).toBeLessThan(0.05 * range);
+  });
+
+  it('has no row-seam artifact: vertically adjacent values are close (column diff assertion)', () => {
+    const values = Array.from(generateValues('field', smoothType, 64 * 64, 1, [64, 64]) as Float64Array);
+    const range = 1000;
+    // Column-0-only check: values at [y][0] vs [y-1][0].
+    let sum = 0, n = 0;
+    for (let y = 1; y < 64; y++) {
+      sum += Math.abs(values[y * 64] - values[(y - 1) * 64]);
+      n++;
+    }
+    expect(sum / n).toBeLessThan(0.05 * range);
+  });
+
+  it('stays within the existing smooth output bounds', () => {
+    const values = Array.from(generateValues('field', smoothType, 64 * 64, 1, [64, 64]) as Float64Array);
+    for (const v of values) {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1000);
+    }
+  });
+
+  it('for a [3, 32, 32] shape, each slice is internally smooth and slices differ', () => {
+    const H = 32, W = 32, slices = 3;
+    const values = Array.from(generateValues('field', smoothType, slices * H * W, 1, [slices, H, W]) as Float64Array);
+    const range = 1000;
+    for (let s = 0; s < slices; s++) {
+      const slice = values.slice(s * H * W, (s + 1) * H * W);
+      expect(meanAbsColDiff(slice, H, W)).toBeLessThan(0.05 * range);
+      expect(meanAbsRowDiff(slice, H, W)).toBeLessThan(0.05 * range);
+    }
+    const slice0 = values.slice(0, H * W);
+    const slice1 = values.slice(H * W, 2 * H * W);
+    expect(slice0).not.toEqual(slice1);
+  });
+
+  it('1D / shape-absent behavior is unchanged (pinned against pre-change output)', () => {
+    // Pinned from the CURRENT (pre-2D) implementation before any change:
+    // generateValues('pin', { type: 'continuous', min: 0, max: 1000, significantFigures: 6, generation: 'smooth' }, 8)
+    const pinType: LogicalTypeConfig = { type: 'continuous', min: 0, max: 1000, significantFigures: 6, generation: 'smooth' };
+    const expected = [500, 521.089, 531.562, 557.603, 538.501, 555.087, 583.15, 554.102];
+    const values = Array.from(generateValues('pin', pinType, 8) as Float64Array);
+    expect(values).toEqual(expected);
+
+    // Also unchanged when shape is present but has fewer than 2 dims.
+    const values1D = Array.from(generateValues('pin', pinType, 8, undefined, [8]) as Float64Array);
+    expect(values1D).toEqual(expected);
+  });
+});
+
 describe('text generation', () => {
   function textType(wordSet: WordSetKey, generation: LogicalTypeConfig['generation']): LogicalTypeConfig {
     return { type: 'text', min: 0, max: 0, wordSet, generation };

@@ -149,6 +149,7 @@ export function generateValues(
   logicalType: LogicalTypeConfig,
   count: number,
   globalSeed: number = DEFAULT_GLOBAL_SEED,
+  shape?: number[],
 ): ValueArray {
   const seed = hashSeed(variableName + ':' + globalSeed);
   const rng = createPRNG(seed);
@@ -158,7 +159,7 @@ export function generateValues(
     case 'integer': {
       const values = new Float64Array(count);
       const range = logicalType.max - logicalType.min + 1;
-      const uniform01 = generateUniform01(rng, mode, count);
+      const uniform01 = generateUniform01(rng, mode, count, shape);
       for (let i = 0; i < count; i++) {
         values[i] = Math.floor(uniform01[i] * range) + logicalType.min;
       }
@@ -171,7 +172,7 @@ export function generateValues(
       const minScaled = Math.round(logicalType.min * factor);
       const maxScaled = Math.round(logicalType.max * factor);
       const range = maxScaled - minScaled + 1;
-      const uniform01 = generateUniform01(rng, mode, count);
+      const uniform01 = generateUniform01(rng, mode, count, shape);
       for (let i = 0; i < count; i++) {
         const scaled = Math.floor(uniform01[i] * range) + minScaled;
         values[i] = scaled / factor;
@@ -182,7 +183,7 @@ export function generateValues(
       const values = new Float64Array(count);
       const sigFigs = logicalType.significantFigures ?? 6;
       const range = logicalType.max - logicalType.min;
-      const uniform01 = generateUniform01(rng, mode, count);
+      const uniform01 = generateUniform01(rng, mode, count, shape);
       for (let i = 0; i < count; i++) {
         const raw = uniform01[i] * range + logicalType.min;
         values[i] = roundToSigFigs(raw, sigFigs);
@@ -195,7 +196,7 @@ export function generateValues(
       // WORD_SETS comment above). min/max are ignored for text.
       const values: string[] = new Array(count);
       const words = WORD_SETS[logicalType.wordSet ?? 'names'];
-      const uniform01 = generateUniform01(rng, mode, count);
+      const uniform01 = generateUniform01(rng, mode, count, shape);
       for (let i = 0; i < count; i++) {
         values[i] = words[Math.min(words.length - 1, Math.floor(uniform01[i] * words.length))];
       }
@@ -214,9 +215,13 @@ export function generateValues(
  *
  * - 'random': `rng()` directly, unchanged from the pre-D9 behavior (each
  *   value here maps 1:1 to the original `rng() * range + min` computation).
- * - 'smooth': bounded random walk starting at the midpoint (0.5); each step
- *   perturbs by `(rng() - 0.5) / 16` (i.e. +/- range/16 once scaled to
- *   [min, max]), clamped back into [0, 1).
+ * - 'smooth': when `shape` is absent or has fewer than 2 dims, a bounded
+ *   random walk starting at the midpoint (0.5); each step perturbs by
+ *   `(rng() - 0.5) / 16` (i.e. +/- range/16 once scaled to [min, max]),
+ *   clamped back into [0, 1). When `shape.length >= 2`, value noise over the
+ *   trailing two dims instead (see `generateUniform01`'s 'smooth' case) —
+ *   this is what makes array-model [H, W] fields look like organic 2D blobs
+ *   rather than horizontal bands.
  * - 'sorted': `count` uniform-positive draws, prefix-summed, then rescaled
  *   so the sequence spans exactly [0, 1) — monotonic non-decreasing.
  * - 'stepped': `k = max(3, floor(count/8))` segments with PRNG-chosen
@@ -230,18 +235,58 @@ export function generateValues(
 // this ceiling instead of 1.
 const UPPER_BOUND = 1 - Number.EPSILON;
 
-function generateUniform01(rng: () => number, mode: GenerationMode, count: number): number[] {
+function generateUniform01(rng: () => number, mode: GenerationMode, count: number, shape?: number[]): number[] {
   const out: number[] = new Array(count);
 
   switch (mode) {
     case 'smooth': {
-      let v = 0.5;
-      for (let i = 0; i < count; i++) {
-        if (i > 0) {
-          v = Math.min(UPPER_BOUND, Math.max(0, v + (rng() - 0.5) / 16));
+      if (!shape || shape.length < 2) {
+        let v = 0.5;
+        for (let i = 0; i < count; i++) {
+          if (i > 0) {
+            v = Math.min(UPPER_BOUND, Math.max(0, v + (rng() - 0.5) / 16));
+          }
+          out[i] = v;
         }
-        out[i] = v;
+        break;
       }
+      // Value noise over the trailing two dims: a coarse lattice of random
+      // draws per slice, bilinearly interpolated up to the full [H, W]
+      // resolution. Produces organic 2D fields instead of the 1D walk's
+      // horizontal-banding artifact when read row-major.
+      const W = shape[shape.length - 1];
+      const H = shape[shape.length - 2];
+      const sliceSize = H * W;
+      const slices = sliceSize > 0 ? Math.floor(count / sliceSize) : 0;
+      const CELL = 16; // lattice spacing in elements
+      const gridW = Math.max(2, Math.ceil(W / CELL) + 1);
+      const gridH = Math.max(2, Math.ceil(H / CELL) + 1);
+      let base = 0;
+      for (let s = 0; s < slices; s++) {
+        // Fresh lattice per slice: slices are independent, smooth within themselves.
+        const lattice = new Float64Array(gridH * gridW);
+        for (let i = 0; i < lattice.length; i++) lattice[i] = rng();
+        for (let y = 0; y < H; y++) {
+          const gy = Math.min(y / CELL, gridH - 1 - 1e-9);
+          const y0 = Math.floor(gy), ty = gy - y0;
+          for (let x = 0; x < W; x++) {
+            const gx = Math.min(x / CELL, gridW - 1 - 1e-9);
+            const x0 = Math.floor(gx), tx = gx - x0;
+            const v00 = lattice[y0 * gridW + x0];
+            const v01 = lattice[y0 * gridW + x0 + 1];
+            const v10 = lattice[(y0 + 1) * gridW + x0];
+            const v11 = lattice[(y0 + 1) * gridW + x0 + 1];
+            const v = (v00 * (1 - tx) + v01 * tx) * (1 - ty)
+                    + (v10 * (1 - tx) + v11 * tx) * ty;
+            out[base + y * W + x] = Math.min(UPPER_BOUND, v);
+          }
+        }
+        base += sliceSize;
+      }
+      // ponytail: any tail elements beyond slices*sliceSize (count not
+      // divisible by H*W shouldn't happen — count is the shape product) fall
+      // back to plain rng() draws.
+      for (let i = base; i < count; i++) out[i] = rng();
       break;
     }
     case 'sorted': {
