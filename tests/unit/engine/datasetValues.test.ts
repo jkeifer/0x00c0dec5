@@ -15,7 +15,11 @@ describe('computeValuesStage with presetValues', () => {
   it('uses injected values instead of the generator', () => {
     const preset = new Map([['elevation', new Float64Array([1, 2, 3, 4])]]);
     const withPreset = computeValuesStage([4], [VAR], 'little', preset);
-    expect(withPreset.variableValues.get('elevation')).toBe(preset.get('elevation'));
+    // Copied, not aliased (see the fix for the detached-buffer finding): same
+    // values, different backing array, so the preset's own buffer survives a
+    // downstream transfer/detach of the stage's array.
+    expect(withPreset.variableValues.get('elevation')).not.toBe(preset.get('elevation'));
+    expect(withPreset.variableValues.get('elevation')).toEqual(preset.get('elevation'));
     // and the stage bytes reflect the injected values, not generated ones
     const generated = computeValuesStage([4], [VAR], 'little');
     expect(withPreset.stage.bytes).not.toEqual(generated.stage.bytes);
@@ -103,5 +107,61 @@ describe('createPipelineComputer dataset keying', () => {
       dataset: { id: 'etopo-dem', attribution: 'a' },
     };
     expect(() => compute(base, {})).toThrow(/dataset.*not loaded/i);
+  });
+
+  // Reproduces the reviewer-found detached-buffer bug: the worker's
+  // datasetValuesCache holds a long-lived presetValues map and passes it into
+  // every compute for that dataset. If computeValuesStage aliased the preset
+  // array (instead of copying it) into the values payload, the worker's real
+  // postMessage transfer (collectTransferables -> transfer list) would detach
+  // the SAME array the cache is still holding, and the next compute for the
+  // same dataset would see a length-0 array and throw the
+  // "re-select the dataset" error even though nothing about the dataset
+  // changed.
+  it('survives a real postMessage transfer of the values payload without corrupting the held presetValues map (detached-buffer regression)', () => {
+    const compute = createPipelineComputer();
+    // Module-level-shaped: the caller (worker) holds this across many computes,
+    // exactly like datasetValuesCache does.
+    const presetValues = new Map([['elevation', new Float64Array(16).fill(5)]]);
+    const base: AppState = {
+      ...structuredClone(DEFAULT_STATE),
+      dataModel: 'array', shape: [4, 4], chunkShape: [4, 4],
+      variables: [VAR], fieldPipelines: { v1: [] },
+      dataset: { id: 'etopo-dem', attribution: 'a' },
+    };
+
+    // Compute #1: values payload is present (first time this dataset's key
+    // is seen) and carries the (possibly-aliased) preset array.
+    const d1 = compute(base, {}, undefined, presetValues);
+    expect(d1.values.payload).toBeDefined();
+
+    // Simulate the worker's real postMessage transfer: structuredClone with a
+    // transfer list detaches the source buffers in place, exactly like
+    // postMessage does (mirrors deltaTransfer.test.ts's computeAndPost).
+    const logicalValues = d1.values.payload!.logicalValues;
+    for (const arr of logicalValues.values()) {
+      if (arr instanceof Float64Array) {
+        structuredClone(arr.buffer, { transfer: [arr.buffer] });
+      }
+    }
+
+    // The invariant that matters: the caller's held presetValues map must
+    // still be intact after the transfer — its buffer must NOT have been the
+    // one that got detached.
+    expect(presetValues.get('elevation')!.length).toBe(16);
+    expect(Array.from(presetValues.get('elevation')!)).toEqual([5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]);
+
+    // Compute #2: same dataset, unchanged values key (knownKeys carries it),
+    // but a downstream-only field changes so *some* delta is produced. The
+    // values stage was evicted on send (PERF-1 evict-on-send), so it
+    // recomputes against the same presetValues map — this must not throw,
+    // and if it resends a values payload the array must have the right length.
+    const known = Object.fromEntries(Object.entries(d1).map(([s, e]) => [s, e.key]));
+    const changed: AppState = { ...base, write: { ...base.write, magicNumber: '0xCAFEBABE' } };
+    expect(() => compute(changed, known, undefined, presetValues)).not.toThrow();
+    const d2 = compute(changed, known, undefined, presetValues);
+    if (d2.values.payload) {
+      expect(d2.values.payload.logicalValues.get('elevation')!.length).toBe(16);
+    }
   });
 });

@@ -118,7 +118,14 @@ export function computeValuesStage(
       if (vals.length !== totalElements) {
         throw new Error(`dataset values: variable "${v.name}" expected ${totalElements} values, got ${vals.length} — re-select the dataset`);
       }
-      variableValues.set(v.name, vals);
+      // Copy, don't alias: this array flows into the values payload's
+      // logicalValues, whose .buffer collectTransferables() puts on
+      // postMessage's transfer list — that DETACHES it on send. presetValues
+      // comes from the worker's long-lived datasetValuesCache (PERF-1
+      // evict-on-send), so aliasing it here would detach the cache's own
+      // buffer, leaving it length-0 for the next compute. .slice() copies
+      // both Float64Array (fresh buffer) and LogicalValue[] (fresh array).
+      variableValues.set(v.name, vals.slice());
     } else {
       variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
     }
