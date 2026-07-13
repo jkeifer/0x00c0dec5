@@ -1,4 +1,6 @@
+import { useRef, useState } from 'react';
 import { Panel, Group, Separator, useDefaultLayout } from 'react-resizable-panels';
+import type { PanelImperativeHandle } from 'react-resizable-panels';
 import type { Variable } from '../../types/state.ts';
 import type { CodecStep } from '../../types/codecs.ts';
 import { useAppState } from '../../state/useAppState.ts';
@@ -67,6 +69,22 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
   const mainPersist = useDefaultLayout({ id: 'main-layout' });
   const panesPersist = useDefaultLayout({ id: 'panes-layout' });
 
+  // Task 2 (ri plan): collapsible sidebar + comparison panes, built on
+  // react-resizable-panels v4's Panel collapsible/collapsedSize + imperative
+  // panelRef (collapse()/expand()/isCollapsed()). There is no onCollapse/
+  // onExpand callback in this version's API (checked
+  // node_modules/react-resizable-panels/dist/react-resizable-panels.d.ts) —
+  // only onResize(panelSize, id, prevPanelSize), so collapsed state is
+  // derived there by asking the panelRef whether it's collapsed after the
+  // resize settles. Persistence of sizes (including collapsed) is already
+  // covered by useDefaultLayout above — no parallel persistence added here.
+  const sidebarRef = useRef<PanelImperativeHandle | null>(null);
+  const leftPaneRef = useRef<PanelImperativeHandle | null>(null);
+  const rightPaneRef = useRef<PanelImperativeHandle | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+
   // Task 13 (perf plan): before the worker's first result ever arrives there
   // is nothing to render — PipelineProvider and every consumer below it
   // assume a non-null PipelineResult. Once `result` exists this branch never
@@ -74,6 +92,34 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
   // later `computing` pass runs in the background).
   if (result === null) {
     return <BootScreen error={bootError} />;
+  }
+
+  function toggleSidebar() {
+    if (sidebarRef.current?.isCollapsed()) {
+      sidebarRef.current.expand();
+    } else {
+      sidebarRef.current?.collapse();
+    }
+  }
+
+  // Guard: the two comparison panes must never both be collapsed. Expand the
+  // other one first when collapsing one while the other is already collapsed.
+  function toggleLeftPane() {
+    if (leftPaneRef.current?.isCollapsed()) {
+      leftPaneRef.current.expand();
+    } else {
+      if (rightPaneRef.current?.isCollapsed()) rightPaneRef.current.expand();
+      leftPaneRef.current?.collapse();
+    }
+  }
+
+  function toggleRightPane() {
+    if (rightPaneRef.current?.isCollapsed()) {
+      rightPaneRef.current.expand();
+    } else {
+      if (leftPaneRef.current?.isCollapsed()) leftPaneRef.current.expand();
+      rightPaneRef.current?.collapse();
+    }
   }
 
   return (
@@ -90,8 +136,17 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
             node_modules/react-resizable-panels/dist/react-resizable-panels.d.ts,
             PanelProps.minSize: number | string, "Pixels may also be
             specified as strings ending with the unit 'px'"). */}
-        <Panel id="sidebar" defaultSize="25%" minSize="200px" maxSize="35%">
-          <Sidebar />
+        <Panel
+          id="sidebar"
+          defaultSize="25%"
+          minSize="200px"
+          maxSize="35%"
+          collapsible
+          collapsedSize="36px"
+          panelRef={sidebarRef}
+          onResize={() => setSidebarCollapsed(!!sidebarRef.current?.isCollapsed())}
+        >
+          <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar} />
         </Panel>
         <Separator className="resize-handle" />
         <Panel id="main" minSize="30%">
@@ -116,7 +171,15 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
               onLayoutChanged={panesPersist.onLayoutChanged}
               style={{ flex: 1 }}
             >
-              <Panel id="left-pane" defaultSize="50%" minSize="5%">
+              <Panel
+                id="left-pane"
+                defaultSize="50%"
+                minSize="5%"
+                collapsible
+                collapsedSize="36px"
+                panelRef={leftPaneRef}
+                onResize={() => setLeftCollapsed(!!leftPaneRef.current?.isCollapsed())}
+              >
                 <StagePane
                   paneId="left"
                   selectedStage={state.ui.leftPaneStage}
@@ -132,10 +195,20 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
                   shape={state.shape}
                   chunkShape={state.chunkShape}
                   interleaving={state.interleaving}
+                  collapsed={leftCollapsed}
+                  onToggleCollapse={toggleLeftPane}
                 />
               </Panel>
               <Separator className="resize-handle" />
-              <Panel id="right-pane" defaultSize="50%" minSize="5%">
+              <Panel
+                id="right-pane"
+                defaultSize="50%"
+                minSize="5%"
+                collapsible
+                collapsedSize="36px"
+                panelRef={rightPaneRef}
+                onResize={() => setRightCollapsed(!!rightPaneRef.current?.isCollapsed())}
+              >
                 <StagePane
                   paneId="right"
                   selectedStage={state.ui.rightPaneStage}
@@ -151,6 +224,8 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
                   shape={state.shape}
                   chunkShape={state.chunkShape}
                   interleaving={state.interleaving}
+                  collapsed={rightCollapsed}
+                  onToggleCollapse={toggleRightPane}
                 />
               </Panel>
             </Group>

@@ -71,7 +71,24 @@ interface StagePaneProps {
   shape: number[];
   chunkShape: number[];
   interleaving: 'row' | 'column';
+  collapsed: boolean;
+  onToggleCollapse: () => void;
 }
+
+// Icon-button style shared by the collapse/expand toggle, matching
+// GuidePanel.tsx's iconButtonStyle precedent.
+const collapseButtonStyle: React.CSSProperties = {
+  background: 'transparent',
+  color: colors.textSecondary,
+  border: `1px solid ${colors.border}`,
+  borderRadius: 3,
+  padding: `1px ${spacing.xs}px`,
+  fontSize: fontSizes.sm,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+  lineHeight: 1.4,
+  flexShrink: 0,
+};
 
 export function StagePane({
   paneId,
@@ -84,6 +101,8 @@ export function StagePane({
   shape,
   chunkShape,
   interleaving,
+  collapsed,
+  onToggleCollapse,
 }: StagePaneProps) {
   // Task 3.9 (remediation-plan.md, Phase 3): everything pipeline-derived
   // comes from PipelineContext now — paneId/selectedStage/viewMode/
@@ -215,6 +234,35 @@ export function StagePane({
     }
   }
 
+  if (collapsed) {
+    // Collapsed rail (GuidePanel.tsx precedent): just the expand button.
+    // Left pane collapses toward the left (▶ points into it, expand pulls
+    // right); right pane collapses toward the right (mirrored).
+    return (
+      <div
+        data-testid={`pane-${paneId}`}
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          height: '100%',
+          borderTop: `2px solid ${accentColor}`,
+          padding: `${spacing.sm}px 0`,
+        }}
+      >
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          data-testid={`pane-collapse-${paneId}`}
+          aria-label={`Expand ${paneId} pane`}
+          style={collapseButtonStyle}
+        >
+          {paneId === 'left' ? '▶' : '◀'}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       data-testid={`pane-${paneId}`}
@@ -278,6 +326,15 @@ export function StagePane({
         >
           {paneId}
         </span>
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          data-testid={`pane-collapse-${paneId}`}
+          aria-label={`Collapse ${paneId} pane`}
+          style={collapseButtonStyle}
+        >
+          {paneId === 'left' ? '◀' : '▶'}
+        </button>
       </div>
 
       {/* Content area */}

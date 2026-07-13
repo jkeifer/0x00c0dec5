@@ -175,6 +175,8 @@ in `tests/ui/` for reference; prefer the `scenario-*.mjs` files and
 - `pane-dropdown-left`, `pane-dropdown-right` — stage selector dropdowns (rendered as `pane-dropdown-{paneId}`)
 - `view-mode-{mode}` — view mode radio buttons
 - `sidebar-section-{name}` — sidebar config sections
+- `sidebar-collapse-toggle` — collapses/expands the Sidebar panel (`react-resizable-panels` v4 `collapsible`/`collapsedSize`); same testid on both the expanded chrome's collapse button and the collapsed rail's expand button (GuidePanel.tsx's rail precedent — a ~36px vertical strip with just the expand chevron)
+- `pane-collapse-left`, `pane-collapse-right` — collapse/expand toggle for each comparison pane (StagePane's controls bar when expanded, the collapsed rail's expand button when collapsed — same testid both times). The two panes can never both be collapsed: collapsing one while the other is already collapsed expands the other first. Dragging a collapsed pane's separator outward expands it (library default `collapsible` behavior, unmodified).
 - `codec-step-{variable}-{index}` — individual codec pipeline steps
 - `codec-warning-{variable}-{index}` — codec applicability warning icons
 - `runtime-banner` — the Pyodide load-progress strip rendered under the Header; narrates loading (`runtime-banner-step-{id}` per step, ids from `RUNTIME_STEP_ORDER` in `src/engine/pyodideRuntime.ts`, prefix text "Loading compression runtime:") and, on failure, becomes a dismissible error (`runtime-banner-dismiss`) with text prefixed `Compression codecs unavailable:`. Unmounts entirely (not just hidden) once the runtime is ready or the error is dismissed.

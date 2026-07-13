@@ -49,11 +49,30 @@ const dividerStyle: React.CSSProperties = {
   flexShrink: 0,
 };
 
+// Icon-button style shared by the collapse/expand toggle, matching
+// GuidePanel.tsx's iconButtonStyle precedent.
+const collapseButtonStyle: React.CSSProperties = {
+  background: 'transparent',
+  color: colors.textSecondary,
+  border: `1px solid ${colors.border}`,
+  borderRadius: radii.sm,
+  padding: `1px ${spacing.xs}px`,
+  fontSize: fontSizes.sm,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+  lineHeight: 1.4,
+  flexShrink: 0,
+};
+
 // Task 3.9 (remediation-plan.md, Phase 3): files/readResult/variableStats
 // come from PipelineContext now — Sidebar took no other pipeline-derived
 // props, so consuming context directly (rather than adding a prop-drilling
 // wrapper) removes the last props App.tsx had to thread through it.
-export function Sidebar() {
+//
+// Task 2 (ri plan): collapsed/onToggleCollapse follow the GuidePanel rail
+// precedent — MainLayout owns collapsed state (driven by the Panel's
+// panelRef/onResize), Sidebar just renders the rail when collapsed.
+export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; onToggleCollapse: () => void }) {
   const { state, dispatch, applyDataset, selectCustomDataset } = useAppState();
   const { files, readResult, variableStats, runtimeStatus } = usePipelineContext();
   // Guide highlight (plan Phase 5): the section matching the guide's active
@@ -239,6 +258,33 @@ export function Sidebar() {
     }
   }
 
+  if (collapsed) {
+    // Collapsed rail (GuidePanel.tsx precedent): just the expand button.
+    return (
+      <aside
+        aria-label="Pipeline configuration"
+        style={{
+          background: colors.surface,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          padding: `${spacing.sm}px 0`,
+          height: '100%',
+        }}
+      >
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          data-testid="sidebar-collapse-toggle"
+          aria-label="Expand sidebar"
+          style={collapseButtonStyle}
+        >
+          ▶
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside
       aria-label="Pipeline configuration"
@@ -252,6 +298,15 @@ export function Sidebar() {
         height: '100%',
       }}
     >
+      <button
+        type="button"
+        onClick={onToggleCollapse}
+        data-testid="sidebar-collapse-toggle"
+        aria-label="Collapse sidebar"
+        style={{ ...collapseButtonStyle, alignSelf: 'flex-end' }}
+      >
+        ◀
+      </button>
       {SECTIONS.map((section, i) => {
         const slug = SECTION_TESTIDS[section];
         const isGuideActive = slug === activeSection;
