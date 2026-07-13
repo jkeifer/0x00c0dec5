@@ -1,7 +1,7 @@
 # Dataset Presets (Real Data) — Design
 
 Date: 2026-07-12
-Status: draft for review
+Status: implemented (DP-1..DP-8 complete; see tests/ui/scenario-dataset-presets.mjs)
 Roadmap: `notes/improvement-ideas.md` §2 "Dataset presets (real data)"
 
 ## Overview

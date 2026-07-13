@@ -135,6 +135,7 @@ node tests/ui/scenario-read-process.mjs
 node tests/ui/scenario-perf1-large-boot.mjs
 node tests/ui/scenario-real-codecs.mjs
 node tests/ui/scenario-linearization-endianness.mjs
+node tests/ui/scenario-dataset-presets.mjs
 kill %1                                          # stop the dev server when done
 ```
 
@@ -196,6 +197,7 @@ in `tests/ui/` for reference; prefer the `scenario-*.mjs` files and
 - `grid-canvas` — GridView's canvas render, used above `MAX_CELLS` (10,000 cells) in place of the DOM grid; `grid-canvas-status` — its hover status line (`variable[row,col] = value`)
 - `hex-overview` — HexView's FileMapStrip, shown for windowed sections above `WINDOWED_SECTION_ROWS` (262,144 rows); click-to-jump. `hex-offset-input` — the paired offset-jump text input (accepts hex like `0x100000`, Enter to jump)
 - `element-cap-warning` — the Schema section's advisory banner when total values (shape product × variable count) exceed `SOFT_ELEMENT_CAP` (8,000,000); does not block anything
+- `dataset-select` — the Schema section's dataset preset picker (real-data samples per model + "Custom (generated)" last); `dataset-attribution` — provenance line shown while a dataset is active; `dataset-loading` / `dataset-error` — manifest fetch states. While a dataset is active the schema is locked (shape/add/remove/rename/logicalType disabled); everything downstream (typeAssignment, codecs, chunking, metadata, write) stays editable. Dataset values are fetched by the worker from the orphan `data` branch (dev: vite `data-dev` middleware serving `data-branch-work/` then `tests/fixtures/`).
 
 New UI work should keep adding testids per these conventions rather than relying on text/structure selectors.
 
