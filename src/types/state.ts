@@ -2,6 +2,7 @@ import type { DtypeKey } from './dtypes.ts';
 import type { CodecStep } from './codecs.ts';
 import type { StageName } from './pipeline.ts';
 import type { LinearizationOrder } from '../engine/order.ts';
+import type { DatasetId } from '../datasets/types.ts';
 
 export type LogicalType = 'integer' | 'decimal' | 'continuous' | 'text';
 
@@ -42,12 +43,25 @@ export interface TypeAssignment {
   keepBits?: number; // for float precision reduction
 }
 
+/** A variable's link to a curated dataset variable (registry.ts's
+ * CURATED_VARIABLES). Absent means custom/generated — the default. Type-only
+ * import of DatasetId from src/datasets/types.ts (which itself imports
+ * LogicalTypeConfig from here) is a type-level cycle only — erased at
+ * compile, no runtime import cycle. */
+export interface VariableSource {
+  datasetId: DatasetId;
+  variableName: string;
+}
+
 export interface Variable {
   id: string;
   name: string;
   logicalType: LogicalTypeConfig;
   typeAssignment: TypeAssignment;
   color: string;
+  /** Set by Task 3+: which curated dataset variable this row is bound to, if
+   * any. Additive-only for now (Task 2) — nothing reads or writes it yet. */
+  source?: VariableSource;
 }
 
 /**
