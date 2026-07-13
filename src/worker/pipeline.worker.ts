@@ -8,11 +8,34 @@ import { collectTransferables } from './protocol.ts';
 import type { WorkerRequest, WorkerResponse, StageTimings } from './protocol.ts';
 import { initPyodideRuntime } from '../engine/pyodideRuntime.ts';
 import { stateUsesPyodideCodec } from '../engine/codecs.ts';
+import { loadManifest, datasetUrl, datasetById } from '../datasets/registry.ts';
+import { fetchDatasetValues } from '../datasets/assets.ts';
+import type { ValueArray } from '../engine/layout.ts';
+import type { DatasetId } from '../datasets/types.ts';
 
 // One memoizing computer for the worker's lifetime (Task 13 Step 2b): caches
 // each stage's output keyed by the state slices it reads, so a metadata
 // keystroke does not re-run generation/typing/chunking/encoding.
 const computeDelta = createPipelineComputer();
+
+// Dataset presets: values fetched+decoded once per dataset id and cached in
+// worker memory for its lifetime. Promise-cached so concurrent computes share
+// one fetch; failures evict for retry.
+const datasetValuesCache = new Map<string, Promise<Map<string, ValueArray>>>();
+
+function ensureDatasetValues(id: string): Promise<Map<string, ValueArray>> {
+  let p = datasetValuesCache.get(id);
+  if (!p) {
+    p = (async () => {
+      if (!datasetById(id)) throw new Error(`unknown dataset "${id}"`);
+      const manifest = await loadManifest(id as DatasetId);
+      return fetchDatasetValues(manifest, (file) => datasetUrl(id as DatasetId, file));
+    })();
+    p.catch(() => datasetValuesCache.delete(id));
+    datasetValuesCache.set(id, p);
+  }
+  return p;
+}
 
 const post = (msg: WorkerResponse) => (self as unknown as Worker).postMessage(msg);
 
@@ -53,10 +76,11 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const t0 = performance.now();
   try {
     if (stateUsesPyodideCodec(msg.state)) await runtimeReady;
+    const presetValues = msg.state.dataset ? await ensureDatasetValues(msg.state.dataset.id) : undefined;
     const delta = computeDelta(msg.state, msg.knownKeys, (stage, ms) => {
       timings[stage] = ms;
       post({ kind: 'progress', id: msg.id, stage } satisfies WorkerResponse);
-    });
+    }, presetValues);
     (self as unknown as Worker).postMessage(
       { kind: 'result', id: msg.id, ok: true, delta, timings, totalMs: performance.now() - t0 } satisfies WorkerResponse,
       collectTransferables(delta),

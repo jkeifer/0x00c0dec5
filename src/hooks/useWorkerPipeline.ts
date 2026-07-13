@@ -67,12 +67,17 @@ export function useWorkerPipeline(
   // every stage. They were originally missing from this list, which made the
   // Chunk section's Order/Byte order controls silently show stale results —
   // any new AppState field that reaches pipelineCompute must be added here.
-  const { dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write } = state;
+  //
+  // `dataset` (dataset-presets project) selects which real values the worker
+  // fetches and injects into the Values stage — a change must trigger a
+  // recompute, and it keys the values memo (state.dataset?.id), so it belongs
+  // here for the same CL-10 reason as the fields above.
+  const { dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write, dataset } = state;
   useEffect(() => {
     setComputing(true);
     clientRef.current!.compute(state);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: `state` is posted whole, but only pipeline slices trigger
-  }, [dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write]);
+  }, [dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write, dataset]);
 
   useEffect(() => () => clientRef.current!.dispose(), []);
 

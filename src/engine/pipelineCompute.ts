@@ -102,12 +102,26 @@ export function computeValuesStage(
   shape: number[],
   variables: Variable[],
   byteOrder: 'little' | 'big' = 'little',
+  presetValues?: Map<string, ValueArray>,
 ): ValuesStageResult {
   const totalElements = shape.reduce((a, b) => a * b, 1);
 
   const variableValues = new Map<string, ValueArray>();
   for (const v of variables) {
-    variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
+    if (presetValues) {
+      // Dataset preset: all-or-nothing. A missing name or wrong length means
+      // the persisted schema and the fetched assets disagree — fail loudly
+      // (surfaces via the worker's ResultErr path) rather than silently mixing
+      // real and generated values.
+      const vals = presetValues.get(v.name);
+      if (!vals) throw new Error(`dataset values: variable "${v.name}" not present in the loaded dataset`);
+      if (vals.length !== totalElements) {
+        throw new Error(`dataset values: variable "${v.name}" expected ${totalElements} values, got ${vals.length} — re-select the dataset`);
+      }
+      variableValues.set(v.name, vals);
+    } else {
+      variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements));
+    }
   }
 
   const { bytes } = buildLogicalValuesStage(variables, variableValues, byteOrder);
@@ -427,6 +441,7 @@ function buildStageSources(
 export function computePipelineStages(
   state: AppState,
   onStage?: (stage: StageName, ms: number) => void,
+  presetValues?: Map<string, ValueArray>,
 ): PipelineResult {
   const timed = <T,>(stage: StageName, fn: () => T): T => {
     if (!onStage) return fn();
@@ -436,7 +451,7 @@ export function computePipelineStages(
     return out;
   };
 
-  const values = timed('values', () => computeValuesStage(state.shape, state.variables, state.byteOrder));
+  const values = timed('values', () => computeValuesStage(state.shape, state.variables, state.byteOrder, presetValues));
   const typed = timed('typed', () => computeTypedStage(state.shape, state.variables, values.variableValues, state.byteOrder));
   const linearized = timed('linearized', () => computeLinearizedStage(
     state.shape,
@@ -556,6 +571,7 @@ export function createPipelineComputer(): (
   state: AppState,
   knownKeys?: StageKnownKeys,
   onStage?: (stage: StageName, ms: number) => void,
+  presetValues?: Map<string, ValueArray>,
 ) => PipelineDelta {
   const cache = new Map<StageName, { key: string; value: unknown }>();
 
@@ -568,7 +584,12 @@ export function createPipelineComputer(): (
     return { value, key, hit: false };
   };
 
-  return (state, knownKeys = {}, onStage) => {
+  return (state, knownKeys = {}, onStage, presetValues) => {
+    if (state.dataset && !presetValues) {
+      // The worker resolves values before calling compute; hitting this means
+      // a caller skipped that step.
+      throw new Error(`dataset "${state.dataset.id}" values not loaded before compute`);
+    }
     // memo() has already run (and decided hit vs. miss) by the time `report`
     // sees it, so per the brief: report 0ms for a hit, and the wall-clock
     // time actually spent for a miss (measured by the caller wrapping the
@@ -584,8 +605,8 @@ export function createPipelineComputer(): (
       'values',
       // buildLogicalValuesStage writes the Values-stage display bytes with
       // state.byteOrder, so the Values stage's OUTPUT bytes depend on it.
-      { shape: state.shape, variables: state.variables, byteOrder: state.byteOrder },
-      () => computeValuesStage(state.shape, state.variables, state.byteOrder),
+      { shape: state.shape, variables: state.variables, byteOrder: state.byteOrder, datasetId: state.dataset?.id ?? null },
+      () => computeValuesStage(state.shape, state.variables, state.byteOrder, presetValues),
     );
     const values = report('values', t0, valuesM);
 
