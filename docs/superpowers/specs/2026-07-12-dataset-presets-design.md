@@ -123,6 +123,12 @@ revision degrades to defaults rather than breaking apply.
   `dataset`, `shape`, `variables` (minting ids, mapping manifest logicalTypes,
   assigning palette colors), and the curated defaults. Like format-preset
   loading, the pre-apply state is snapshotted to the model's custom slot.
+  It also **seeds `metadata.customEntries`** from the manifest's attribution
+  block (`source`, `source_url`, `retrieved`, `license`), replacing any prior
+  entries — real provenance metadata flowing into the written file via the
+  existing `descriptive` group. The seeded entries are ordinary custom
+  entries: editable, deletable, not locked. `SET_DATASET_CUSTOM` leaves them
+  in place (like the rest of the schema starting point).
 - `SET_DATASET_CUSTOM`: clears `dataset`, keeps the schema as an editable
   starting point (values regenerate deterministically as today).
 - `validateExternalState`: unknown/malformed `dataset.id` → dropped to
