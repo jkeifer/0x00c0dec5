@@ -93,6 +93,13 @@ export interface AppState {
    * `metadata.include.endianness`). See the endianness mini-lesson in spec §3b.
    */
   byteOrder: 'little' | 'big';
+  /**
+   * Dataset preset (real data) selection. `null` = generated values (Custom).
+   * `attribution` is copied from the manifest at apply time so the UI renders
+   * it after a reload without a main-thread manifest refetch. Values are
+   * NEVER persisted — the worker fetches+caches them by id.
+   */
+  dataset: { id: string; attribution: string } | null;
   variables: Variable[];
   /**
    * D5 (remediation-plan.md, Phase 3.1): keyed by Variable.id, not name — names
@@ -170,6 +177,7 @@ export const DEFAULT_STATE: AppState = {
   interleaving: 'column',
   linearization: 'c',
   byteOrder: 'little',
+  dataset: null,
   variables: DEFAULT_VARIABLES,
   // Keyed by Variable.id (see AppState.fieldPipelines doc comment above). The
   // starter variables' ids happen to equal their names today, but that is

@@ -15,6 +15,8 @@ import type { CodecStep } from '../types/codecs.ts';
 import { loadState, saveState, loadActiveModel, saveActiveModel } from './persistence.ts';
 import { type PresetKey, resolvePreset, saveCustomPreset, loadCustomPreset } from './presets.ts';
 import { consumeShareHash, loadCheckpoint } from './share.ts';
+import { datasetById, loadManifest } from '../datasets/registry.ts';
+import { buildDatasetApplication, type DatasetApplication } from '../datasets/apply.ts';
 
 export type AppAction =
   // SET_DATA_MODEL only sets `state.dataModel` — it is intentionally pure
@@ -55,7 +57,12 @@ export type AppAction =
   // Write — one patch action replaces the six SET_WRITE_* setters
   | { type: 'UPDATE_WRITE'; changes: Partial<AppState['write']> }
   // UI — one patch action replaces the pane stage/view setters and SET_SHOW_DIFF
-  | { type: 'UPDATE_UI'; changes: Partial<AppState['ui']> };
+  | { type: 'UPDATE_UI'; changes: Partial<AppState['ui']> }
+  // Dataset presets (real data): apply a prebuilt application (manifest was
+  // fetched in the applyDataset wrapper; reducer stays pure), or return to
+  // generated values keeping the schema as a starting point.
+  | { type: 'APPLY_DATASET'; application: DatasetApplication }
+  | { type: 'SET_DATASET_CUSTOM' };
 
 export function reducer(state: AppState, action: AppAction): AppState {
   switch (action.type) {
@@ -79,6 +86,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
     // ─── Schema ──────────────────────────────────────────────────────
     case 'SET_SHAPE': {
+      if (state.dataset) return state;
       const newShape = action.shape;
       if (newShape.length === 0 || newShape.some(d => d <= 0)) {
         return state;
@@ -102,12 +110,14 @@ export function reducer(state: AppState, action: AppAction): AppState {
     }
 
     case 'ADD_VARIABLE':
+      if (state.dataset) return state;
       return produce(state, (draft) => {
         draft.variables.push(action.variable);
         draft.fieldPipelines[action.variable.id] = [];
       });
 
     case 'REMOVE_VARIABLE':
+      if (state.dataset) return state;
       return produce(state, (draft) => {
         const idx = draft.variables.findIndex((v) => v.id === action.id);
         if (idx === -1) return;
@@ -119,8 +129,11 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return produce(state, (draft) => {
         const v = draft.variables.find((v) => v.id === action.id);
         if (!v) return;
-        if (action.changes.name !== undefined) v.name = action.changes.name;
-        if (action.changes.logicalType !== undefined) v.logicalType = action.changes.logicalType;
+        // Schema locks while a dataset is active: name/logicalType come from
+        // the manifest and stay fixed; typeAssignment (storage/precision) is
+        // still a free knob for exploring the pipeline.
+        if (action.changes.name !== undefined && !draft.dataset) v.name = action.changes.name;
+        if (action.changes.logicalType !== undefined && !draft.dataset) v.logicalType = action.changes.logicalType;
         if (action.changes.typeAssignment !== undefined) v.typeAssignment = action.changes.typeAssignment;
         // fieldPipelines is keyed by Variable.id (D5), which never changes here —
         // no re-keying needed on rename. (Fixes SW-1.)
@@ -198,6 +211,28 @@ export function reducer(state: AppState, action: AppAction): AppState {
         Object.assign(draft.write, action.changes);
       });
 
+    // ─── Dataset presets ────────────────────────────────────────────
+    case 'APPLY_DATASET': {
+      const a = action.application;
+      return produce(state, (draft) => {
+        draft.dataset = a.dataset;
+        draft.shape = a.shape;
+        draft.chunkShape = a.chunkShape;
+        if (a.interleaving !== undefined) draft.interleaving = a.interleaving;
+        if (a.linearization !== undefined) draft.linearization = a.linearization;
+        draft.variables = a.variables;
+        draft.fieldPipelines = a.fieldPipelines;
+        draft.chunkPipeline = a.chunkPipeline;
+        draft.metadata.customEntries = a.customEntries;
+      });
+    }
+
+    case 'SET_DATASET_CUSTOM':
+      if (state.dataset === null) return state;
+      return produce(state, (draft) => {
+        draft.dataset = null;
+      });
+
     default:
       return state;
   }
@@ -255,6 +290,22 @@ interface AppStateContextValue {
    * the checkpoint, and the custom-preset slots are untouched.
    */
   clearConfig: () => void;
+  /**
+   * Fetch a dataset preset's manifest and apply it as the active schema.
+   * Mirrors `loadPreset`'s snapshot step: the current state is saved to the
+   * active model's custom slot FIRST (so 'Custom (restore)' can get back to
+   * "what I had right before I applied a dataset"), then a single
+   * `APPLY_DATASET` is dispatched with the prebuilt `DatasetApplication` (the
+   * reducer itself stays pure — the fetch happens here). Returns `false`
+   * without dispatching if the id is unknown, its data model doesn't match
+   * the active model, or the manifest fetch fails.
+   */
+  applyDataset: (id: string) => Promise<boolean>;
+  /**
+   * Return to generated values (Custom), keeping the current schema/pipelines
+   * as a starting point rather than restoring anything — see `SET_DATASET_CUSTOM`.
+   */
+  selectCustomDataset: () => void;
 }
 
 const AppStateContext = createContext<AppStateContextValue | null>(null);
@@ -412,10 +463,29 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'REPLACE_STATE', state: empty });
   }, []);
 
+  const applyDataset = useCallback(async (id: string): Promise<boolean> => {
+    const entry = datasetById(id);
+    if (!entry || entry.dataModel !== stateRef.current.dataModel) return false;
+    try {
+      const manifest = await loadManifest(entry.id);
+      // Same snapshot contract as loadPreset: the pre-apply state is
+      // recoverable via 'Custom (restore)'.
+      saveCustomPreset(stateRef.current);
+      dispatch({ type: 'APPLY_DATASET', application: buildDatasetApplication(entry, manifest) });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const selectCustomDataset = useCallback(() => {
+    dispatch({ type: 'SET_DATASET_CUSTOM' });
+  }, []);
+
   return createElement(
     AppStateContext.Provider,
     // eslint-disable-next-line react-hooks/refs -- conservative compiler heuristic: the callbacks close over stateRef (useEvent-style stable identity) but only ever read it in event handlers, never during render
-    { value: { state, dispatch, switchDataModel, loadPreset, restoreCheckpoint, clearConfig } },
+    { value: { state, dispatch, switchDataModel, loadPreset, restoreCheckpoint, clearConfig, applyDataset, selectCustomDataset } },
     children,
   );
 }

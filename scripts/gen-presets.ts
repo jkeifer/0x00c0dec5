@@ -86,6 +86,7 @@ const basicallyParquet: AppState = {
   interleaving: 'column',
   linearization: 'c',
   byteOrder: 'little',
+  dataset: null,
   variables: parquetVariables,
   fieldPipelines: {
     temperature: [],
@@ -148,6 +149,7 @@ const basicallyGeotiff: AppState = {
   interleaving: 'column',
   linearization: 'c',
   byteOrder: 'little',
+  dataset: null,
   variables: geotiffVariables,
   fieldPipelines: {
     elevation: [],
@@ -211,6 +213,7 @@ const basicallyZarr: AppState = {
   interleaving: 'column',
   linearization: 'c',
   byteOrder: 'little',
+  dataset: null,
   variables: zarrVariables,
   fieldPipelines: {
     temperature: [],

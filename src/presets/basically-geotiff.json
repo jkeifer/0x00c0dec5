@@ -11,6 +11,7 @@
   "interleaving": "column",
   "linearization": "c",
   "byteOrder": "little",
+  "dataset": null,
   "variables": [
     {
       "id": "elevation",

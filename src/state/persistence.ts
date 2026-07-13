@@ -5,6 +5,7 @@ import { getDtype, DTYPE_KEYS, isCharDtype } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import type { StageName } from '../types/pipeline.ts';
 import { STAGE_ORDER } from '../types/pipeline.ts';
+import { datasetById } from '../datasets/registry.ts';
 
 const STORAGE_KEYS: Record<AppState['dataModel'], string> = {
   tabular: '0x00c0dec5-state-tabular',
@@ -308,6 +309,20 @@ function validateState(state: AppState): AppState {
   // chunkPipeline: array
   if (!Array.isArray(state.chunkPipeline)) {
     state.chunkPipeline = [];
+  }
+
+  // Dataset presets: a persisted dataset ref must name a known dataset whose
+  // model matches this state, else it degrades to generated (null) — same
+  // graceful-degrade as every other field. (Values are never persisted; the
+  // worker refetches by id.)
+  const ds = state.dataset as unknown;
+  if (
+    !isPlainObject(ds) ||
+    typeof ds.id !== 'string' ||
+    typeof ds.attribution !== 'string' ||
+    datasetById(ds.id)?.dataModel !== state.dataModel
+  ) {
+    state.dataset = null;
   }
 
   return state;
