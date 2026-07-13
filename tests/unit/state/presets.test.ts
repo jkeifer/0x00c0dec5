@@ -123,23 +123,39 @@ describe('preset — dataset ref + seeded provenance mirrored in customEntries',
 // ─── Preset contents sanity per the format-fidelity brief ─────────────────
 
 describe('preset contents — format fidelity', () => {
-  it('geotiffesque: array, [1024,1024], tiles [256,256], header/JSON, magic II*\\0, elevation int16 + delta+deflate', () => {
+  it('geotiffesque: array, [1024,1024], tiles [256,256], header/BINARY, magic II*\\0, pixel-interleaved, elevation + 2 generated bands, chunk-level deflate', () => {
     const s = geotiffesqueRaw as unknown as AppState;
     expect(s.dataModel).toBe('array');
     expect(s.shape).toEqual([1024, 1024]);
     expect(s.chunkShape).toEqual([256, 256]);
+    expect(s.interleaving).toBe('row');
     expect(s.linearization).toBe('c');
     expect(s.byteOrder).toBe('little');
     expect(s.write.partitioning).toBe('single');
     expect(s.write.metadataPlacement).toBe('header');
-    expect(s.metadata.serialization).toBe('json');
+    expect(s.metadata.serialization).toBe('binary');
     expect(s.write.magicNumber).toBe('49492A00');
+
+    expect(s.variables.map((v) => v.name).sort()).toEqual(['elevation', 'hillshade', 'slope']);
     const elev = s.variables.find((v) => v.name === 'elevation')!;
+    expect(elev.id).toBe('etopo-dem-elevation');
     expect(elev.typeAssignment.storageDtype).toBe('int16');
-    expect(s.fieldPipelines[elev.id]).toEqual([
-      { codec: 'delta', params: { order: 1 } },
-      { codec: 'deflate', params: {} },
-    ]);
+
+    // The two generated bands must NOT carry the dataset-id prefix (so they
+    // generate rather than bind to etopo-dem — Task 5's composition contract).
+    const slope = s.variables.find((v) => v.name === 'slope')!;
+    const hillshade = s.variables.find((v) => v.name === 'hillshade')!;
+    expect(slope.id.startsWith('etopo-dem-')).toBe(false);
+    expect(hillshade.id.startsWith('etopo-dem-')).toBe(false);
+    expect(slope.logicalType.generation).toBe('smooth');
+    expect(hillshade.logicalType.generation).toBe('smooth');
+    expect(slope.color).not.toBe(elev.color);
+    expect(hillshade.color).not.toBe(elev.color);
+    expect(hillshade.color).not.toBe(slope.color);
+
+    // Row mode: per-field pipelines inactive, chunk-level deflate carries it.
+    for (const v of s.variables) expect(s.fieldPipelines[v.id]).toEqual([]);
+    expect(s.chunkPipeline).toEqual([{ codec: 'deflate', params: {} }]);
   });
 
   it('zarrish: array, per-chunk partitioning, sidecar, EMPTY magic, sst float32 + byte-shuffle(4)+zstd, column interleaving', () => {

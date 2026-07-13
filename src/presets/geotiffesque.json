@@ -8,7 +8,7 @@
     256,
     256
   ],
-  "interleaving": "column",
+  "interleaving": "row",
   "linearization": "c",
   "byteOrder": "little",
   "dataset": {
@@ -47,23 +47,49 @@
       "typeAssignment": {
         "storageDtype": "int16"
       }
+    },
+    {
+      "id": "gen-slope",
+      "name": "slope",
+      "color": "#61afef",
+      "logicalType": {
+        "type": "continuous",
+        "min": 0,
+        "max": 45,
+        "significantFigures": 4,
+        "generation": "smooth"
+      },
+      "typeAssignment": {
+        "storageDtype": "float32"
+      }
+    },
+    {
+      "id": "gen-hillshade",
+      "name": "hillshade",
+      "color": "#98c379",
+      "logicalType": {
+        "type": "continuous",
+        "min": 0,
+        "max": 255,
+        "significantFigures": 5,
+        "generation": "smooth"
+      },
+      "typeAssignment": {
+        "storageDtype": "float32"
+      }
     }
   ],
   "fieldPipelines": {
-    "etopo-dem-elevation": [
-      {
-        "codec": "delta",
-        "params": {
-          "order": 1
-        }
-      },
-      {
-        "codec": "deflate",
-        "params": {}
-      }
-    ]
+    "etopo-dem-elevation": [],
+    "gen-slope": [],
+    "gen-hillshade": []
   },
-  "chunkPipeline": [],
+  "chunkPipeline": [
+    {
+      "codec": "deflate",
+      "params": {}
+    }
+  ],
   "metadata": {
     "customEntries": [
       {
@@ -83,7 +109,7 @@
         "value": "U.S. Government work — public domain"
       }
     ],
-    "serialization": "json",
+    "serialization": "binary",
     "include": {
       "schema": true,
       "layout": true,

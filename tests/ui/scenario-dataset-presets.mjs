@@ -160,8 +160,9 @@ async function main() {
   // ─── (2) Compression sanity via the GeoTIFFesque FORMAT preset ────────────
   // Datasets no longer apply codecs, so the ghcn dataset above has Encoded ==
   // Typed. The codec story now lives in the format presets: load GeoTIFFesque
-  // (array, etopo-dem + delta/deflate) on the array model and assert Encoded <
-  // Typed there. deflate is Pyodide-backed — wait for the runtime first.
+  // (array, etopo-dem elevation + 2 generated bands, pixel/row interleaved,
+  // chunk-level deflate) on the array model and assert Encoded < Typed there.
+  // deflate is Pyodide-backed — wait for the runtime first.
   await page.locator('[data-testid="model-toggle-array"]').click();
   await page.waitForTimeout(500);
   await waitForPipelineIdle(page, 30_000);
@@ -179,12 +180,37 @@ async function main() {
   await page.waitForSelector('[data-testid="dataset-loading"]', { state: 'detached', timeout: 60_000 }).catch(() => {});
   await waitForPipelineIdle(page, 90_000);
 
+  // Task 6: 3 bands total — dataset-backed elevation plus two generated
+  // (non-dataset-prefixed) bands composed alongside it.
+  const geotiffVarNames = await page.locator('[data-testid^="variable-name-"]').evaluateAll(
+    (els) => els.map((el) => el.value ?? el.textContent ?? ''),
+  );
+  h.check(
+    '(2) GeoTIFFesque: 3 variables present (elevation + 2 generated bands)',
+    geotiffVarNames.length === 3 &&
+      geotiffVarNames.includes('elevation') &&
+      geotiffVarNames.includes('slope') &&
+      geotiffVarNames.includes('hillshade'),
+    geotiffVarNames.join(', '),
+  );
+
   const typedBytes = await stageByteCount(page, 1);
   const encodedBytes = await stageByteCount(page, 3);
   h.check(
     '(2) GeoTIFFesque preset codecs shrink Encoded stage below Typed stage',
     typedBytes !== null && encodedBytes !== null && encodedBytes < typedBytes,
     `typed=${typedBytes} encoded=${encodedBytes}`,
+  );
+
+  // Binary metadata serialization (D1's generic length-prefixed format, not
+  // JSON) — the round-trip succeeding (checked further below via read-status)
+  // is the load-bearing proof deserializeMetadata's auto-detect handled it;
+  // this just pins that the preset is actually configured for it.
+  const readStatusGeotiff = await readStatusText(page);
+  h.check(
+    '(2) GeoTIFFesque: read round-trip succeeds with binary metadata + row interleaving',
+    /File parsed successfully/.test(readStatusGeotiff) && !/Read failed/.test(readStatusGeotiff),
+    readStatusGeotiff.slice(0, 120).replace(/\n/g, ' '),
   );
   await shot(page, 'dataset-presets-2-geotiffesque');
 

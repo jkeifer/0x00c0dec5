@@ -102,12 +102,20 @@ const GHCN_DATASET: NonNullable<AppState['dataset']> = {
 
 const DEFAULT_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
 
-// ─── GeoTIFFesque (array, etopo-dem) ─────────────────────────────────────────
+// ─── GeoTIFFesque (array, etopo-dem + two generated derived bands) ──────────
 //
-// COG: single file, TIFF header/IFD at the front (header placement, JSON),
-// magic II*\0, 256×256 tiles, C order, little-endian, elevation stored int16,
-// horizontal predictor (delta order 1) + DEFLATE. TIFF predictor output is
-// two's-complement (NOT zigzag), so we drop zigzag from the old curated config.
+// COG: single file, TIFF header/IFD at the front (header placement, BINARY —
+// TIFF's IFD is binary, not JSON), magic II*\0, 256×256 tiles, C order,
+// little-endian, PIXEL interleaving (TIFF PlanarConfiguration=1, the TIFF
+// default — band-interleaved 'column' is the toggle users can flip to see the
+// difference). elevation is the real etopo-dem band (int16, horizontal
+// predictor + DEFLATE); slope and hillshade are generated derived bands
+// (organic 2D 'smooth' noise, ids outside the dataset-id prefix so they
+// generate instead of binding) with float32 storage, standing in for the
+// terrain products a real COG commonly carries alongside elevation. Row
+// interleaving means per-field pipelines are inactive (mixed dtypes across
+// the three bands force uint8 chunk input anyway) — DEFLATE moves to the
+// shared chunk pipeline, mirroring avroesque's row-mode pattern.
 
 const geotiffVariables: Variable[] = [
   {
@@ -115,27 +123,37 @@ const geotiffVariables: Variable[] = [
     logicalType: { type: 'integer', min: -1485, max: 8271, generation: 'smooth' },
     typeAssignment: { storageDtype: 'int16' },
   },
+  {
+    id: 'gen-slope', name: 'slope', color: colors.palette[1],
+    logicalType: { type: 'continuous', min: 0, max: 45, significantFigures: 4, generation: 'smooth' },
+    typeAssignment: { storageDtype: 'float32' },
+  },
+  {
+    id: 'gen-hillshade', name: 'hillshade', color: colors.palette[2],
+    logicalType: { type: 'continuous', min: 0, max: 255, significantFigures: 5, generation: 'smooth' },
+    typeAssignment: { storageDtype: 'float32' },
+  },
 ];
 
 const geotiffesque: AppState = {
   dataModel: 'array',
   shape: [1024, 1024],
   chunkShape: [256, 256],
-  interleaving: 'column',
+  interleaving: 'row',
   linearization: 'c',
   byteOrder: 'little',
   dataset: ETOPO_DATASET,
   variables: geotiffVariables,
+  // Row mode: per-field pipelines are inactive; the shared chunk pipeline runs.
   fieldPipelines: {
-    'etopo-dem-elevation': [
-      { codec: 'delta', params: { order: 1 } },
-      { codec: 'deflate', params: {} },
-    ],
+    'etopo-dem-elevation': [],
+    'gen-slope': [],
+    'gen-hillshade': [],
   },
-  chunkPipeline: [],
+  chunkPipeline: [{ codec: 'deflate', params: {} }],
   metadata: {
     customEntries: [...ETOPO_DATASET.seededEntries],
-    serialization: 'json',
+    serialization: 'binary',
     include: DEFAULT_INCLUDE,
   },
   write: {
