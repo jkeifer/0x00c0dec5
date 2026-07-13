@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import type { Variable, LogicalTypeConfig, LogicalType, WordSetKey } from '../../types/state.ts';
 import { wordSetMaxLength } from '../../engine/generate.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
@@ -10,7 +11,7 @@ interface SchemaEditorProps {
   dataModel: 'tabular' | 'array';
   onAddVariable: () => void;
   onRemoveVariable: (id: string) => void;
-  onUpdateVariable: (id: string, changes: Partial<Pick<Variable, 'name' | 'logicalType' | 'typeAssignment'>>) => void;
+  onUpdateVariable: (id: string, changes: Partial<Pick<Variable, 'name' | 'logicalType' | 'typeAssignment' | 'color'>>) => void;
   onShapeChange: (shape: number[]) => void;
   dataset: { id: string; attribution: string } | null;
   datasetOptions: { id: string; label: string }[];
@@ -253,14 +254,10 @@ export function SchemaEditor({
               >
                 {/* Name + delete row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
-                  <div
-                    style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: '50%',
-                      background: v.color,
-                      flexShrink: 0,
-                    }}
+                  <VariableColorPicker
+                    color={v.color}
+                    varIdx={varIdx}
+                    onCommit={(color) => onUpdateVariable(v.id, { color })}
                   />
                   <input
                     type="text"
@@ -455,6 +452,149 @@ export function SchemaEditor({
       >
         + Variable
       </button>
+    </div>
+  );
+}
+
+/**
+ * The per-variable color dot. Clicking it opens a popover of the 10 palette
+ * swatches (the default experience); "Custom…" falls through to the native
+ * OS color dialog. Every commit dispatches UPDATE_VARIABLE → a full worker
+ * recompute, so commits must be discrete: swatch clicks commit once, and the
+ * native input commits ONLY via the DOM `change` event (fires once, on dialog
+ * close) — never React's onChange, which maps to `input` and fires
+ * continuously while dragging in the dialog.
+ */
+export function VariableColorPicker({
+  color,
+  varIdx,
+  onCommit,
+}: {
+  color: string;
+  varIdx: number;
+  onCommit: (color: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  // Native `change` (not React onChange = `input`): exactly one commit, when
+  // the OS dialog is confirmed/dismissed. Cancel fires nothing — by design.
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    const onChange = () => {
+      onCommit(input.value);
+      setOpen(false);
+    };
+    input.addEventListener('change', onChange);
+    return () => input.removeEventListener('change', onChange);
+  }, [onCommit]);
+
+  function commit(c: string) {
+    onCommit(c);
+    setOpen(false);
+  }
+
+  return (
+    <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'flex' }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title="Change color"
+        aria-label="Change color"
+        data-testid={`variable-color-${varIdx}`}
+        style={{
+          width: 12,
+          height: 12,
+          padding: 0,
+          border: 'none',
+          borderRadius: '50%',
+          background: color,
+          cursor: 'pointer',
+        }}
+      />
+      {/* Hidden but always mounted so its `change` event is still delivered
+          if the popover closes while the OS dialog is up. */}
+      <input
+        ref={inputRef}
+        type="color"
+        defaultValue={color}
+        tabIndex={-1}
+        aria-hidden="true"
+        style={{ position: 'absolute', width: 0, height: 0, opacity: 0, pointerEvents: 'none', border: 'none', padding: 0 }}
+      />
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: 0,
+            zIndex: 10,
+            background: colors.surface,
+            border: `1px solid ${colors.border}`,
+            borderRadius: radii.md,
+            padding: spacing.xs,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: spacing.xs,
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.35)',
+          }}
+        >
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 14px)', gap: spacing.xs }}>
+            {colors.palette.map((hex, i) => (
+              <button
+                key={hex}
+                onClick={() => commit(hex)}
+                title={hex}
+                aria-label={`Set color ${hex}`}
+                data-testid={`variable-color-swatch-${i}`}
+                style={{
+                  width: 14,
+                  height: 14,
+                  padding: 0,
+                  borderRadius: '50%',
+                  background: hex,
+                  border: hex === color ? `1px solid ${colors.textPrimary}` : `1px solid ${colors.border}`,
+                  cursor: 'pointer',
+                }}
+              />
+            ))}
+          </div>
+          <button
+            onClick={() => {
+              const input = inputRef.current;
+              if (!input) return;
+              input.value = color; // start the dialog at the current color
+              input.click();
+            }}
+            data-testid="variable-color-custom"
+            style={{
+              ...inputStyle(fontSizes.xs),
+              cursor: 'pointer',
+              color: colors.accent,
+              background: 'transparent',
+            }}
+          >
+            Custom…
+          </button>
+        </div>
+      )}
     </div>
   );
 }
