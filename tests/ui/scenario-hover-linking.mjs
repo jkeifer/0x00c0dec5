@@ -14,7 +14,7 @@
 //
 // Run: node tests/ui/scenario-hover-linking.mjs   (dev server must be running)
 
-import { launch, shot, createHarness } from './scenario-helpers.mjs';
+import { launch, shot, createHarness, seedStateAndReload, waitForPipelineIdle } from './scenario-helpers.mjs';
 
 const h = createHarness('scenario-hover-linking');
 
@@ -48,6 +48,42 @@ async function setPaneViewMode(page, paneId, label) {
     .locator(`[data-testid="pane-${paneId}"] [data-testid^="view-mode-"]`, { hasText: new RegExp(`^${label}$`) })
     .click();
   await page.waitForTimeout(300);
+}
+
+// Array-model state large enough (200x200 = 40,000 cells) to trigger
+// GridCanvas mode (MAX_CELLS = 10,000, GridView.tsx).
+function gridCanvasState() {
+  return {
+    dataModel: 'array',
+    shape: [200, 200],
+    chunkShape: [50, 50],
+    interleaving: 'column',
+    variables: [
+      {
+        id: 'temp', name: 'temp', color: '#e06c75',
+        logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'smooth' },
+        typeAssignment: { storageDtype: 'float32' },
+      },
+    ],
+    fieldPipelines: { temp: [] },
+    chunkPipeline: [],
+    metadata: { customEntries: [], serialization: 'json', include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true } },
+    write: {
+      includeMetadata: false,
+      magicNumber: '00C0DEC5',
+      partitioning: 'single',
+      metadataPlacement: 'header',
+      chunkOrder: 'row-major',
+      footerLocator: 'trailer',
+    },
+    ui: {
+      leftPaneStage: 'values',
+      rightPaneStage: 'values',
+      leftPaneView: 'grid',
+      rightPaneView: 'grid',
+      showDiff: false,
+    },
+  };
 }
 
 async function main() {
@@ -168,6 +204,68 @@ async function main() {
   );
 
   await browser.close();
+
+  // ── GridCanvas overlay alignment + hover symbology (Task 1) ─────────────
+  // 200x200 = 40,000 cells, over MAX_CELLS (10,000), so GridView renders the
+  // canvas path. Seed both panes into grid view and hover a cell far from
+  // the canvas origin (row 150, col 150) so any padding-based scale drift
+  // in the overlay math is large enough to detect reliably.
+  const { browser: browser2, page: page2 } = await launch();
+  await seedStateAndReload(page2, {
+    '0x00c0dec5-state-array': gridCanvasState(),
+    '0x00c0dec5-active-model': 'array',
+  });
+  await waitForPipelineIdle(page2, 90_000);
+  await page2.waitForTimeout(500);
+
+  const canvas = page2.locator('[data-testid="pane-left"] [data-testid="grid-canvas"]');
+  const canvasBox = await canvas.boundingBox();
+  h.check('grid-canvas has a bounding box', !!canvasBox, JSON.stringify(canvasBox));
+
+  if (canvasBox) {
+    const cellPx = canvasBox.width / 200; // cols = 200
+    const targetX = canvasBox.x + 150.5 * cellPx; // center of col 150
+    const targetY = canvasBox.y + 150.5 * cellPx; // center of row 150
+    await page2.mouse.move(targetX, targetY);
+    await page2.waitForTimeout(400);
+    await shot(page2, 'grid-canvas-hover-dark-region');
+
+    const hoverCell = page2.locator('[data-testid="pane-left"] [data-testid="grid-hover-cell"]');
+    const hoverCellBox = await hoverCell.boundingBox();
+    let centerOffset = null;
+    if (hoverCellBox) {
+      const cx = hoverCellBox.x + hoverCellBox.width / 2;
+      const cy = hoverCellBox.y + hoverCellBox.height / 2;
+      centerOffset = Math.hypot(cx - targetX, cy - targetY);
+    }
+    h.check(
+      'grid-hover-cell overlay is centered within 1 cell-width of the mouse position',
+      hoverCellBox !== null && centerOffset !== null && centerOffset < cellPx,
+      `centerOffset=${centerOffset === null ? 'n/a' : centerOffset.toFixed(2)}, cellPx=${cellPx.toFixed(2)}`,
+    );
+
+    const hoverCellBg = hoverCellBox ? await hoverCell.evaluate((el) => getComputedStyle(el).backgroundColor) : null;
+    h.check(
+      'grid-hover-cell overlay has a non-transparent background-color (filled, not outline-only)',
+      hoverCellBg !== null && hoverCellBg !== 'rgba(0, 0, 0, 0)' && hoverCellBg !== 'transparent',
+      `backgroundColor=${hoverCellBg}`,
+    );
+
+    const hoverChunk = page2.locator('[data-testid="pane-left"] [data-testid="grid-hover-chunk"]');
+    const hoverChunkCount = await hoverChunk.count();
+    h.check('grid-hover-chunk overlay exists while hovering', hoverChunkCount === 1, `count=${hoverChunkCount}`);
+    if (hoverChunkCount === 1) {
+      const hoverChunkBg = await hoverChunk.evaluate((el) => getComputedStyle(el).backgroundColor);
+      h.check(
+        'grid-hover-chunk overlay has a non-transparent background-color (filled, not outline-only)',
+        hoverChunkBg !== 'rgba(0, 0, 0, 0)' && hoverChunkBg !== 'transparent',
+        `backgroundColor=${hoverChunkBg}`,
+      );
+    }
+  }
+
+  await browser2.close();
+
   h.finish();
   process.exit(process.exitCode ?? 0);
 }

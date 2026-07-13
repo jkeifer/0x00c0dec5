@@ -358,6 +358,8 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
               ? `Original: ${formatLogicalValue(origVal!)}, Reconstructed: ${formatLogicalValue(val)}, Δ = ${(diff >= 0 ? '+' : '') + diff.toPrecision(4)}`
               : `${selectedVar.name}[${is1D ? i : `${row},${col}`}] = ${formatLogicalValue(val)}`;
 
+            const highlightFill = isValueHovered ? 'var(--hover-strong)' : isChunkHovered ? 'var(--hover-weak)' : null;
+
             return (
               <div
                 key={i}
@@ -368,8 +370,7 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
                   width: CELL_SIZE,
                   height: CELL_SIZE,
                   backgroundColor: cellColor,
-                  outline: isValueHovered ? `2px solid ${colors.textPrimary}` : isChunkHovered ? '1px solid var(--chunk-outline)' : undefined,
-                  outlineOffset: -1,
+                  backgroundImage: highlightFill ? `linear-gradient(${highlightFill}, ${highlightFill})` : undefined,
                   cursor: 'default',
                   transition: 'background-color 0.1s ease',
                 }}

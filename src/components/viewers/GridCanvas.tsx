@@ -47,7 +47,7 @@ export function GridCanvas({
   const [scale, setScale] = useState(1);
 
   useEffect(() => {
-    const el = containerRef.current;
+    const el = canvasRef.current;
     if (!el || cols <= 0) return;
     const update = () => setScale(el.clientWidth / cols);
     update();
@@ -123,39 +123,46 @@ export function GridCanvas({
   }, [hoveredTraceId, hoverSource, paneId, variable.name, shape, cols, scale]);
 
   // Local hover element (this pane's own mouse position) plus the
-  // cross-pane hover (when it's this pane that must show the overlay).
+  // cross-pane hover (when it's this pane that must show the overlay). The
+  // hovered value and its containing chunk are independent overlays drawn
+  // together (not a single either/or state) — mirrors the DOM-mode grid and
+  // every other viewer, where the hovered cell gets the strong highlight and
+  // every other cell sharing its chunk gets the weak wash simultaneously.
   const overlay = useMemo(() => {
-    // Prefer the locally-hovered element (this pane owns the mouse).
+    let value: { row: number; col: number } | null = null;
+    let chunkCoords: number[] | null = null;
+
+    // Prefer the locally-hovered element (this pane owns the mouse) for the
+    // value rect.
     if (hoverSource === paneId && localHoverIdx !== null) {
-      const row = Math.floor(localHoverIdx / cols);
-      const col = localHoverIdx % cols;
-      return { kind: 'value' as const, row, col };
-    }
-    if (!hoveredTraceId && !hoveredChunkId) return null;
-    if (hoveredTraceId) {
+      value = { row: Math.floor(localHoverIdx / cols), col: localHoverIdx % cols };
+    } else if (hoveredTraceId) {
       const parsed = parseTraceId(hoveredTraceId);
       if (parsed.kind === 'value' && parsed.variableName === variable.name && parsed.coords.length > 0) {
         const coords = parsed.coords;
         if (!coords.some((n) => Number.isNaN(n))) {
           let idx = 0;
           for (let d = 0; d < coords.length; d++) idx = idx * (shape[d] ?? 1) + coords[d];
-          return { kind: 'value' as const, row: Math.floor(idx / cols), col: idx % cols };
+          value = { row: Math.floor(idx / cols), col: idx % cols };
         }
       }
     }
+
     if (hoveredChunkId) {
-      const chunkCoords = parseChunkCoords(hoveredChunkId);
-      if (chunkCoords && chunkCoords.length > 0) {
+      const coords = parseChunkCoords(hoveredChunkId);
+      if (coords && coords.length > 0) {
         // Only draw the chunk-bounds rect when the chunk membership check
         // agrees this variable/coords combo actually falls in that chunk —
         // reuse elementInChunk on the chunk's own origin element.
-        const origin = chunkCoords.map((cc, d) => cc * (chunkShape[d] ?? 1));
+        const origin = coords.map((cc, d) => cc * (chunkShape[d] ?? 1));
         if (origin.length >= 1 && elementInChunk(hoveredChunkId, variable.name, origin, chunkShape)) {
-          return { kind: 'chunk' as const, chunkCoords };
+          chunkCoords = coords;
         }
       }
     }
-    return null;
+
+    if (!value && !chunkCoords) return null;
+    return { value, chunkCoords };
   }, [hoverSource, paneId, localHoverIdx, hoveredTraceId, hoveredChunkId, variable.name, shape, cols, chunkShape]);
 
   // Pixel bounds (in source-element units, pre-scale) of a chunk's
@@ -219,30 +226,18 @@ export function GridCanvas({
               cursor: 'default',
             }}
           />
-          {overlay && overlay.kind === 'value' && (
-            <div
-              style={{
-                position: 'absolute',
-                left: overlay.col * scale,
-                top: overlay.row * scale,
-                width: scale,
-                height: scale,
-                outline: `2px solid ${colors.textPrimary}`,
-                outlineOffset: -1,
-                pointerEvents: 'none',
-              }}
-            />
-          )}
-          {overlay && overlay.kind === 'chunk' && (() => {
+          {overlay && overlay.chunkCoords && (() => {
             const b = chunkPixelBounds(overlay.chunkCoords);
             return (
               <div
+                data-testid="grid-hover-chunk"
                 style={{
                   position: 'absolute',
                   left: b.left * scale,
                   top: b.top * scale,
                   width: b.width * scale,
                   height: b.height * scale,
+                  background: 'var(--hover-weak)',
                   outline: '1px solid var(--chunk-outline)',
                   outlineOffset: -1,
                   pointerEvents: 'none',
@@ -250,6 +245,20 @@ export function GridCanvas({
               />
             );
           })()}
+          {overlay && overlay.value && (
+            <div
+              data-testid="grid-hover-cell"
+              style={{
+                position: 'absolute',
+                left: overlay.value.col * scale,
+                top: overlay.value.row * scale,
+                width: scale,
+                height: scale,
+                background: 'var(--hover-strong)',
+                pointerEvents: 'none',
+              }}
+            />
+          )}
         </div>
       </div>
       <div
