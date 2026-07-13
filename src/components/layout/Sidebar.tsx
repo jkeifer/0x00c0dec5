@@ -69,6 +69,10 @@ export function Sidebar() {
       ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [activeSection]);
 
+  // No stale-response guard here: concurrent calls are impossible today only
+  // because dataset-select is disabled while datasetStatus.loading — any new
+  // caller that bypasses that disabled control must add a request-id/abort
+  // check or two in-flight applyDataset results can clobber each other.
   async function handleSelectDataset(id: string | 'custom') {
     if (id === 'custom') {
       setDatasetStatus({ loading: false, error: null });
