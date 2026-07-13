@@ -146,37 +146,27 @@ function buildMortonPermutation(dims: number[]): Permutation {
   return { perm, inv };
 }
 
-function buildFortranPermutation(dims: number[]): Permutation {
-  const n = dims.reduce((a, b) => a * b, 1);
-  const perm = new Uint32Array(n);
-  const inv = new Uint32Array(n);
-  for (let linearIndex = 0; linearIndex < n; linearIndex++) {
-    const coords = fortranCoordsOf(linearIndex, dims);
-    const cFlat = cIndexOf(coords, dims);
-    perm[linearIndex] = cFlat;
-    inv[cFlat] = linearIndex;
-  }
-  return { perm, inv };
-}
-
 /**
- * Memoized permutation pair for one dims/order combination:
+ * Memoized permutation pair for one dims/morton combination:
  * perm[linearIndex] = cOrderFlatIndex, inv[cOrderFlatIndex] = linearIndex.
- * Cache keyed by `${order}:${dims.join(',')}`, capped at 32 entries (chunk
- * dims repeat across chunks; edge-clipped variants add a few). Returns null
- * for 'c' (identity — callers use closed-form math and skip the arrays).
+ * Cache keyed by `dims.join(',')`, capped at 32 entries (chunk dims repeat
+ * across chunks; edge-clipped variants add a few). Returns null for 'c' and
+ * 'fortran' — both have closed-form index/coord math (`cIndexOf`/
+ * `cCoordsOf`, `fortranIndexOf`/`fortranCoordsOf`) and never need a
+ * materialized permutation; only 'morton' does, since its index depends on a
+ * sort over interleaved bit keys with no closed form.
  */
 export function orderPermutation(
   dims: number[],
   order: LinearizationOrder,
 ): Permutation | null {
-  if (order === 'c') return null;
+  if (order !== 'morton') return null;
 
-  const key = `${order}:${dims.join(',')}`;
+  const key = dims.join(',');
   const cached = permutationCache.get(key);
   if (cached) return cached;
 
-  const result = order === 'morton' ? buildMortonPermutation(dims) : buildFortranPermutation(dims);
+  const result = buildMortonPermutation(dims);
   setCached(key, result);
   return result;
 }

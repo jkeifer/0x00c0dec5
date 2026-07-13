@@ -209,36 +209,54 @@ describe('orderPermutation', () => {
     expect(orderPermutation([4, 4], 'c')).toBeNull();
   });
 
-  const nonC: LinearizationOrder[] = ['fortran', 'morton'];
+  it('returns null for fortran order — closed-form math, no materialized permutation', () => {
+    expect(orderPermutation([4, 4], 'fortran')).toBeNull();
+    expect(orderPermutation([3, 5], 'fortran')).toBeNull();
+  });
 
-  for (const order of nonC) {
-    it(`${order}: perm/inv agree with scalar functions and are true inverses`, () => {
-      const dims = [3, 5];
-      const result = orderPermutation(dims, order);
-      expect(result).not.toBeNull();
-      const { perm, inv } = result!;
-      const n = dims[0] * dims[1];
-      expect(perm.length).toBe(n);
-      expect(inv.length).toBe(n);
+  it('fortran: orderIndexOf/orderCoordsOf agree with coordsToFlatIndex and are true inverses (closed-form coverage)', () => {
+    const dims = [3, 5];
+    const n = dims[0] * dims[1];
+    const coordsList = enumerateCoords(dims);
+    const seenIndices = new Set<number>();
+    for (const coords of coordsList) {
+      const linearIndex = orderIndexOf(coords, dims, 'fortran');
+      expect(linearIndex).toBeGreaterThanOrEqual(0);
+      expect(linearIndex).toBeLessThan(n);
+      expect(seenIndices.has(linearIndex)).toBe(false);
+      seenIndices.add(linearIndex);
+      expect(orderCoordsOf(linearIndex, dims, 'fortran')).toEqual(coords);
+    }
+    expect(seenIndices.size).toBe(n);
+  });
 
-      const coordsList = enumerateCoords(dims);
-      for (let linearIndex = 0; linearIndex < n; linearIndex++) {
-        const coords = orderCoordsOf(linearIndex, dims, order);
-        const cFlat = coordsToFlatIndex(coords, dims);
-        expect(perm[linearIndex]).toBe(cFlat);
-      }
-      for (const coords of coordsList) {
-        const cFlat = coordsToFlatIndex(coords, dims);
-        const linearIndex = orderIndexOf(coords, dims, order);
-        expect(inv[cFlat]).toBe(linearIndex);
-      }
-      // true inverse relationship
-      for (let i = 0; i < n; i++) {
-        expect(inv[perm[i]]).toBe(i);
-        expect(perm[inv[i]]).toBe(i);
-      }
-    });
-  }
+  it('morton: perm/inv agree with scalar functions and are true inverses', () => {
+    const order: LinearizationOrder = 'morton';
+    const dims = [3, 5];
+    const result = orderPermutation(dims, order);
+    expect(result).not.toBeNull();
+    const { perm, inv } = result!;
+    const n = dims[0] * dims[1];
+    expect(perm.length).toBe(n);
+    expect(inv.length).toBe(n);
+
+    const coordsList = enumerateCoords(dims);
+    for (let linearIndex = 0; linearIndex < n; linearIndex++) {
+      const coords = orderCoordsOf(linearIndex, dims, order);
+      const cFlat = coordsToFlatIndex(coords, dims);
+      expect(perm[linearIndex]).toBe(cFlat);
+    }
+    for (const coords of coordsList) {
+      const cFlat = coordsToFlatIndex(coords, dims);
+      const linearIndex = orderIndexOf(coords, dims, order);
+      expect(inv[cFlat]).toBe(linearIndex);
+    }
+    // true inverse relationship
+    for (let i = 0; i < n; i++) {
+      expect(inv[perm[i]]).toBe(i);
+      expect(perm[inv[i]]).toBe(i);
+    }
+  });
 
   it('cache returns the same object for repeat calls with identical dims/order', () => {
     const a = orderPermutation([4, 4], 'morton');
@@ -246,21 +264,19 @@ describe('orderPermutation', () => {
     expect(a).toBe(b);
   });
 
-  it('cache distinguishes different dims and different orders', () => {
+  it('cache distinguishes different dims', () => {
     const a = orderPermutation([4, 4], 'morton');
     const b = orderPermutation([4, 5], 'morton');
-    const c = orderPermutation([4, 4], 'fortran');
     expect(a).not.toBe(b);
-    expect(a).not.toBe(c);
   });
 
   it('cache is capped at 32 entries (oldest evicted)', () => {
     // fill beyond cap with distinct dims
-    const first = orderPermutation([2, 2], 'fortran');
+    const first = orderPermutation([2, 2], 'morton');
     for (let i = 3; i < 3 + 40; i++) {
-      orderPermutation([2, i], 'fortran');
+      orderPermutation([2, i], 'morton');
     }
-    const again = orderPermutation([2, 2], 'fortran');
+    const again = orderPermutation([2, 2], 'morton');
     // original entry should have been evicted — new call returns a new object
     expect(again).not.toBe(first);
   });

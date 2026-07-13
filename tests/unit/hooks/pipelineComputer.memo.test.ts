@@ -160,4 +160,19 @@ describe('createPipelineComputer delta protocol', () => {
     const second = respawned(DEFAULT_STATE, knownKeysOf(first));
     expect(sentStages(second)).toEqual([]); // recomputed fresh, but keys match — nothing resent
   });
+
+  it('a state.ui-only change is a memo hit on every stage, including metadata/write/read', () => {
+    const compute = createPipelineComputer();
+    const first = compute(DEFAULT_STATE); // everything sent -> everything evicted
+    // Warm the cache back up (same state, nothing sent) before checking hits,
+    // matching the eviction pattern in the test above.
+    const warm = compute(DEFAULT_STATE, knownKeysOf(first));
+    expect(sentStages(warm)).toEqual([]);
+
+    const uiChanged: AppState = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, showDiff: !DEFAULT_STATE.ui.showDiff } };
+    const timings: Record<string, number> = {};
+    const second = compute(uiChanged, knownKeysOf(warm), (stage, ms) => { timings[stage] = ms; });
+    expect(sentStages(second)).toEqual([]);
+    for (const s of STAGE_ORDER) expect(timings[s]).toBe(0);
+  });
 });

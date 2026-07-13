@@ -368,16 +368,27 @@ const rle: CodecDefinition = {
       return { bytes: new Uint8Array(0), outputDtype: 'uint8' };
     }
 
-    const output: number[] = [];
+    // Two passes: sum counts first to size the output exactly, then fill —
+    // avoids per-byte push()/growth on a plain number[]. Malformed odd-length
+    // input (a lone trailing count byte with no value) has no value byte at
+    // bytes[i+1]; the old push(count, undefined) coerced undefined -> 0 when
+    // Uint8Array-ing the result, so the missing value byte is treated as 0
+    // here too, to preserve that behavior exactly.
+    let total = 0;
     for (let i = 0; i < bytes.length; i += 2) {
-      const count = bytes[i];
-      const value = bytes[i + 1];
-      for (let j = 0; j < count; j++) {
-        output.push(value);
-      }
+      total += bytes[i];
     }
 
-    return { bytes: new Uint8Array(output), outputDtype: 'uint8' };
+    const output = new Uint8Array(total);
+    let pos = 0;
+    for (let i = 0; i < bytes.length; i += 2) {
+      const count = bytes[i];
+      const value = i + 1 < bytes.length ? bytes[i + 1] : 0;
+      output.fill(value, pos, pos + count);
+      pos += count;
+    }
+
+    return { bytes: output, outputDtype: 'uint8' };
   },
 };
 

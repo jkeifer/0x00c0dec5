@@ -671,10 +671,18 @@ export function createPipelineComputer(): (
     );
     const encoded = report('encoded', t0, encodedM);
 
+    // metadata/write's compute functions read the full AppState (they
+    // re-derive schema/codec config from state directly), but `state.ui`
+    // (pane selections, view modes, diff toggle) affects nothing either
+    // stage computes — key on a ui-less copy so a ui-only change is a memo
+    // hit here, matching useWorkerPipeline's comment that these memos never
+    // key on it.
+    const { ui: _ui, ...stateForKey } = state;
+
     t0 = performance.now();
     const metadataM = memo(
       'metadata',
-      { encodedKey: encodedM.key, typedKey: typedM.key, state },
+      { encodedKey: encodedM.key, typedKey: typedM.key, state: stateForKey },
       () => computeMetadataStage(state, encoded.encodedChunks, typed.variableStats),
     );
     const metadata = report('metadata', t0, metadataM);
@@ -682,7 +690,7 @@ export function createPipelineComputer(): (
     t0 = performance.now();
     const filesM = memo(
       'write',
-      { encodedKey: encodedM.key, typedKey: typedM.key, state },
+      { encodedKey: encodedM.key, typedKey: typedM.key, state: stateForKey },
       () => computeFilesStage(state, encoded.encodedChunks, typed.variableStats, encoded.stage.layout),
     );
     const files = report('write', t0, filesM);
