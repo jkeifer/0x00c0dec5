@@ -1,0 +1,30 @@
+{
+  "id": "sst-field",
+  "shape": [
+    1024,
+    1024
+  ],
+  "attribution": {
+    "source": "JPL MUR SST v4.1 (via NOAA CoastWatch ERDDAP)",
+    "source_url": "https://podaac.jpl.nasa.gov/dataset/MUR-JPL-L4-GLOB-v4.1",
+    "retrieved": "2026-07-13",
+    "license": "Open data — NASA JPL PO.DAAC"
+  },
+  "variables": [
+    {
+      "name": "sst",
+      "kind": "number",
+      "dtype": "float32",
+      "file": "sst.bin",
+      "min": 27.64,
+      "max": 30.54,
+      "logicalType": {
+        "type": "continuous",
+        "min": 27.64,
+        "max": 30.54,
+        "significantFigures": 6,
+        "generation": "smooth"
+      }
+    }
+  ]
+}

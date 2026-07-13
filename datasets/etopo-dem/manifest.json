@@ -1,0 +1,29 @@
+{
+  "id": "etopo-dem",
+  "shape": [
+    1024,
+    1024
+  ],
+  "attribution": {
+    "source": "NOAA NCEI ETOPO Global Relief (via ERDDAP)",
+    "source_url": "https://www.ncei.noaa.gov/products/etopo-global-relief-model",
+    "retrieved": "2026-07-13",
+    "license": "U.S. Government work — public domain"
+  },
+  "variables": [
+    {
+      "name": "elevation",
+      "kind": "number",
+      "dtype": "int16",
+      "file": "elevation.bin",
+      "min": -1485,
+      "max": 8271,
+      "logicalType": {
+        "type": "integer",
+        "min": -1485,
+        "max": 8271,
+        "generation": "smooth"
+      }
+    }
+  ]
+}

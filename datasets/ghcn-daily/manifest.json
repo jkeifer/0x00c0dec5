@@ -1,0 +1,84 @@
+{
+  "id": "ghcn-daily",
+  "shape": [
+    144769
+  ],
+  "attribution": {
+    "source": "NOAA NCEI GHCN-Daily (4 US stations)",
+    "source_url": "https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily",
+    "retrieved": "2026-07-13",
+    "license": "U.S. Government work — public domain"
+  },
+  "variables": [
+    {
+      "name": "date",
+      "kind": "number",
+      "dtype": "int32",
+      "file": "date.bin",
+      "min": 18690101,
+      "max": 20260709,
+      "logicalType": {
+        "type": "integer",
+        "min": 18690101,
+        "max": 20260709,
+        "generation": "sorted"
+      }
+    },
+    {
+      "name": "tmax",
+      "kind": "number",
+      "dtype": "int16",
+      "file": "tmax.bin",
+      "min": -167,
+      "max": 433,
+      "logicalType": {
+        "type": "integer",
+        "min": -167,
+        "max": 433,
+        "generation": "smooth"
+      }
+    },
+    {
+      "name": "tmin",
+      "kind": "number",
+      "dtype": "int16",
+      "file": "tmin.bin",
+      "min": -261,
+      "max": 289,
+      "logicalType": {
+        "type": "integer",
+        "min": -261,
+        "max": 289,
+        "generation": "smooth"
+      }
+    },
+    {
+      "name": "prcp",
+      "kind": "number",
+      "dtype": "int16",
+      "file": "prcp.bin",
+      "min": 0,
+      "max": 3772,
+      "logicalType": {
+        "type": "integer",
+        "min": 0,
+        "max": 3772,
+        "generation": "stepped"
+      }
+    },
+    {
+      "name": "station",
+      "kind": "string",
+      "dictFile": "station.dict.json",
+      "codesFile": "station.codes.bin",
+      "codesDtype": "uint8",
+      "logicalType": {
+        "type": "text",
+        "min": 0,
+        "max": 0,
+        "wordSet": "stations",
+        "generation": "stepped"
+      }
+    }
+  ]
+}
