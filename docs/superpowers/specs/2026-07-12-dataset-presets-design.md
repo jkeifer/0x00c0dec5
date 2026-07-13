@@ -114,8 +114,10 @@ revision degrades to defaults rather than breaking apply.
 
 ## State
 
-- `AppState.dataset?: { id: DatasetId; attribution: string }` —
-  absent/undefined = generated (Custom). Persisted like any other field;
+- `AppState.dataset: { id: DatasetId; attribution: string } | null` —
+  `null` = generated (Custom); explicit null (not optional/undefined) so JSON
+  persistence and the default-merge pass handle it unambiguously. Persisted
+  like any other field;
   **values are never persisted**. Attribution is copied out of the manifest at
   apply time so the UI can render it after a reload without refetching the
   manifest on the main thread.
