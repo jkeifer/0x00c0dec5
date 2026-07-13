@@ -5,16 +5,24 @@ import {
 import { generateValues } from '../../../src/engine/generate.ts';
 import { DEFAULT_STATE, type AppState, type Variable } from '../../../src/types/state.ts';
 
+// Dataset-backed variable: id has the `{datasetId}-{name}` shape.
+const DATASET_ID = 'etopo-dem';
 const VAR: Variable = {
-  id: 'v1', name: 'elevation', color: '#fff',
+  id: `${DATASET_ID}-elevation`, name: 'elevation', color: '#fff',
   logicalType: { type: 'integer', min: -10, max: 10, generation: 'smooth' },
+  typeAssignment: { storageDtype: 'int16' },
+};
+// A custom variable the user added alongside the dataset (id NOT prefixed).
+const CUSTOM: Variable = {
+  id: 'var-custom', name: 'noise', color: '#0ff',
+  logicalType: { type: 'integer', min: 0, max: 5, generation: 'random' },
   typeAssignment: { storageDtype: 'int16' },
 };
 
 describe('computeValuesStage with presetValues', () => {
-  it('uses injected values instead of the generator', () => {
+  it('uses injected values instead of the generator for a dataset-backed variable', () => {
     const preset = new Map([['elevation', new Float64Array([1, 2, 3, 4])]]);
-    const withPreset = computeValuesStage([4], [VAR], 'little', preset);
+    const withPreset = computeValuesStage([4], [VAR], 'little', preset, DATASET_ID);
     // Copied, not aliased (see the fix for the detached-buffer finding): same
     // values, different backing array, so the preset's own buffer survives a
     // downstream transfer/detach of the stage's array.
@@ -26,22 +34,45 @@ describe('computeValuesStage with presetValues', () => {
   });
 
   it('equals the generated pipeline when injected values equal generated values', () => {
-    const gen = generateValues(VAR.name, VAR.logicalType, 4);
+    const gen = generateValues(VAR.name, VAR.logicalType, 4, undefined, [4]);
     const preset = new Map([['elevation', gen]]);
     const a = computeValuesStage([4], [VAR], 'little');
-    const b = computeValuesStage([4], [VAR], 'little', preset);
+    const b = computeValuesStage([4], [VAR], 'little', preset, DATASET_ID);
     expect(b.stage.bytes).toEqual(a.stage.bytes);
   });
 
-  it('throws on missing variable name', () => {
+  it('mixes: dataset-backed var gets the preset, custom var gets generated values of the right length', () => {
+    const preset = new Map([['elevation', new Float64Array([1, 2, 3, 4])]]);
+    const res = computeValuesStage([4], [VAR, CUSTOM], 'little', preset, DATASET_ID);
+    // dataset var → the injected array
+    expect(res.variableValues.get('elevation')).toEqual(new Float64Array([1, 2, 3, 4]));
+    // custom var → generated, correct length, matches the bare generator
+    const custom = res.variableValues.get('noise')!;
+    expect(custom.length).toBe(4);
+    expect(custom).toEqual(generateValues(CUSTOM.name, CUSTOM.logicalType, 4, undefined, [4]));
+  });
+
+  it('hijack guard: a custom variable NAMED like a dataset one does NOT get the preset array', () => {
+    // Custom var whose NAME collides with the dataset var 'elevation', but its
+    // id is not prefixed — binding is by id prefix, so it must generate.
+    const hijack: Variable = { ...CUSTOM, id: 'var-custom', name: 'elevation' };
+    const preset = new Map([['elevation', new Float64Array([1, 2, 3, 4])]]);
+    // Only the custom var present (avoid a dup-name collision in the map lookup).
+    const res = computeValuesStage([4], [hijack], 'little', preset, DATASET_ID);
+    const vals = res.variableValues.get('elevation')!;
+    expect(Array.from(vals)).not.toEqual([1, 2, 3, 4]);
+    expect(vals).toEqual(generateValues(hijack.name, hijack.logicalType, 4, undefined, [4]));
+  });
+
+  it('throws on missing variable name for a dataset-backed variable (fail-loud retained)', () => {
     const preset = new Map([['wrong-name', new Float64Array([1, 2, 3, 4])]]);
-    expect(() => computeValuesStage([4], [VAR], 'little', preset))
+    expect(() => computeValuesStage([4], [VAR], 'little', preset, DATASET_ID))
       .toThrow(/elevation.*not present/i);
   });
 
   it('throws on length mismatch, naming variable and counts', () => {
     const preset = new Map([['elevation', new Float64Array([1, 2])]]);
-    expect(() => computeValuesStage([4], [VAR], 'little', preset))
+    expect(() => computeValuesStage([4], [VAR], 'little', preset, DATASET_ID))
       .toThrow(/elevation.*4.*got 2/);
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Variable, LogicalTypeConfig, LogicalType, WordSetKey } from '../../types/state.ts';
+import { isDatasetVariable, type Variable, type LogicalTypeConfig, type LogicalType, type WordSetKey } from '../../types/state.ts';
 import { wordSetMaxLength } from '../../engine/generate.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
@@ -83,7 +83,11 @@ export function SchemaEditor({
     onUpdateVariable(v.id, { logicalType: newType });
   }
 
-  const locked = dataset !== null;
+  // Shape stays dataset-owned; variable add/remove/rename are now per-row
+  // (Task 5): a dataset-backed row (id `{datasetId}-name`) locks name/logical
+  // type, custom rows the user added alongside are fully editable, and add is
+  // always available while a dataset is active.
+  const datasetLocked = dataset !== null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
@@ -136,7 +140,7 @@ export function SchemaEditor({
               min={1}
               value={shape[0]}
               onValue={(n) => onShapeChange([Math.max(1, Math.trunc(n))])}
-              disabled={locked}
+              disabled={datasetLocked}
               data-testid="shape-input"
               style={{ ...inputStyle(), width: 60 }}
             />
@@ -158,13 +162,13 @@ export function SchemaEditor({
                     newShape[d] = Math.max(1, Math.trunc(n));
                     onShapeChange(newShape);
                   }}
-                  disabled={locked}
+                  disabled={datasetLocked}
                   data-testid={`shape-input-${d}`}
                   style={{ ...inputStyle(), width: 60 }}
                 />
               </div>
             ))}
-            {!locked && (
+            {!datasetLocked && (
               <div style={{ display: 'flex', gap: spacing.xs }}>
                 <button
                   onClick={() => onShapeChange([...shape, 4])}
@@ -233,6 +237,9 @@ export function SchemaEditor({
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
           {variables.map((v, varIdx) => {
             const hasWarning = !v.name || duplicateNames.has(v.name);
+            // Per-row lock: only a dataset-backed variable freezes name/logical
+            // type. Custom variables added alongside the dataset stay editable.
+            const rowLocked = isDatasetVariable(dataset?.id, v);
             // For text, 'smooth' means drifting through the sorted word set
             // rather than a numeric random walk.
             const genDesc = v.logicalType.type === 'text' && v.logicalType.generation === 'smooth'
@@ -264,7 +271,7 @@ export function SchemaEditor({
                     value={v.name}
                     placeholder="name"
                     onChange={(e) => onUpdateVariable(v.id, { name: e.target.value })}
-                    disabled={locked}
+                    disabled={rowLocked}
                     data-testid={`variable-name-${varIdx}`}
                     style={{
                       ...inputStyle(),
@@ -273,9 +280,10 @@ export function SchemaEditor({
                       borderColor: hasWarning ? colors.warning : colors.border,
                     }}
                   />
-                  {!locked && (
-                    <button
-                      onClick={() => onRemoveVariable(v.id)}
+                  {/* Remove is available on every row (Task 5): re-applying
+                      the dataset restores its full variable set. */}
+                  <button
+                    onClick={() => onRemoveVariable(v.id)}
                       aria-label={v.name ? `Remove variable ${v.name}` : 'Remove variable'}
                       style={{
                         background: 'transparent',
@@ -289,7 +297,6 @@ export function SchemaEditor({
                     >
                       x
                     </button>
-                  )}
                 </div>
 
                 {/* Logical type + params row */}
@@ -325,7 +332,7 @@ export function SchemaEditor({
                         onUpdateVariable(v.id, { logicalType: base });
                       }
                     }}
-                    disabled={locked}
+                    disabled={rowLocked}
                     style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
                   >
                     {LOGICAL_TYPES.map((lt) => (
@@ -339,7 +346,7 @@ export function SchemaEditor({
                       <select
                         value={v.logicalType.wordSet ?? 'names'}
                         onChange={(e) => updateLogicalType(v, { wordSet: e.target.value as WordSetKey })}
-                        disabled={locked}
+                        disabled={rowLocked}
                         data-testid={`wordset-select-${varIdx}`}
                         style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
                       >
@@ -357,14 +364,14 @@ export function SchemaEditor({
                       <NumberInput
                         value={v.logicalType.min}
                         onValue={(n) => updateLogicalType(v, { min: n })}
-                        disabled={locked}
+                        disabled={rowLocked}
                         style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                       />
                       <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>max</span>
                       <NumberInput
                         value={v.logicalType.max}
                         onValue={(n) => updateLogicalType(v, { max: n })}
-                        disabled={locked}
+                        disabled={rowLocked}
                         style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                       />
                     </>
@@ -378,7 +385,7 @@ export function SchemaEditor({
                         max={10}
                         value={v.logicalType.decimalPlaces ?? 1}
                         onValue={(n) => updateLogicalType(v, { decimalPlaces: Math.max(0, Math.trunc(n)) })}
-                        disabled={locked}
+                        disabled={rowLocked}
                         style={{ ...inputStyle(fontSizes.xs), width: 40 }}
                       />
                     </>
@@ -392,7 +399,7 @@ export function SchemaEditor({
                         max={15}
                         value={v.logicalType.significantFigures ?? 6}
                         onValue={(n) => updateLogicalType(v, { significantFigures: Math.max(1, Math.trunc(n)) })}
-                        disabled={locked}
+                        disabled={rowLocked}
                         style={{ ...inputStyle(fontSizes.xs), width: 40 }}
                       />
                     </>
@@ -407,7 +414,7 @@ export function SchemaEditor({
                     onChange={(e) =>
                       updateLogicalType(v, { generation: e.target.value as LogicalTypeConfig['generation'] })
                     }
-                    disabled={locked}
+                    disabled={rowLocked}
                     data-testid={`generation-mode-${varIdx}`}
                     title={genDesc}
                     style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
@@ -437,15 +444,15 @@ export function SchemaEditor({
         </div>
       )}
 
-      {/* Add variable button */}
+      {/* Add variable button — always available, even with a dataset active
+          (Task 5: compose custom variables alongside the dataset). */}
       <button
         onClick={onAddVariable}
-        disabled={locked}
         data-testid="add-variable"
         style={{
           ...inputStyle(fontSizes.xs),
-          cursor: locked ? 'default' : 'pointer',
-          color: locked ? colors.textTertiary : colors.accent,
+          cursor: 'pointer',
+          color: colors.accent,
           background: 'transparent',
           textAlign: 'center',
         }}

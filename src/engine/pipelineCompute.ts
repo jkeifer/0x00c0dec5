@@ -1,4 +1,4 @@
-import type { AppState, Variable } from '../types/state.ts';
+import { isDatasetVariable, type AppState, type Variable } from '../types/state.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import type {
   PipelineStage,
@@ -103,16 +103,21 @@ export function computeValuesStage(
   variables: Variable[],
   byteOrder: 'little' | 'big' = 'little',
   presetValues?: Map<string, ValueArray>,
+  datasetId?: string | null,
 ): ValuesStageResult {
   const totalElements = shape.reduce((a, b) => a * b, 1);
 
   const variableValues = new Map<string, ValueArray>();
   for (const v of variables) {
-    if (presetValues) {
-      // Dataset preset: all-or-nothing. A missing name or wrong length means
-      // the persisted schema and the fetched assets disagree — fail loudly
-      // (surfaces via the worker's ResultErr path) rather than silently mixing
-      // real and generated values.
+    // Per-variable contract (Task 5): binding is by id PREFIX, not name. A
+    // dataset-backed variable (id `{datasetId}-{name}`) MUST get its real
+    // preset values — a missing name or wrong length means the persisted
+    // schema and the fetched assets disagree, so fail loudly (surfaces via the
+    // worker's ResultErr path) rather than silently substituting generated
+    // values. Custom variables the user added alongside the dataset generate,
+    // even while a dataset is active — so a custom var named identically to a
+    // dataset one is NOT handed dataset values (hijack guard).
+    if (presetValues && isDatasetVariable(datasetId, v)) {
       const vals = presetValues.get(v.name);
       if (!vals) throw new Error(`dataset values: variable "${v.name}" not present in the loaded dataset`);
       if (vals.length !== totalElements) {
@@ -458,7 +463,7 @@ export function computePipelineStages(
     return out;
   };
 
-  const values = timed('values', () => computeValuesStage(state.shape, state.variables, state.byteOrder, presetValues));
+  const values = timed('values', () => computeValuesStage(state.shape, state.variables, state.byteOrder, presetValues, state.dataset?.id ?? null));
   const typed = timed('typed', () => computeTypedStage(state.shape, state.variables, values.variableValues, state.byteOrder));
   const linearized = timed('linearized', () => computeLinearizedStage(
     state.shape,
@@ -613,7 +618,7 @@ export function createPipelineComputer(): (
       // buildLogicalValuesStage writes the Values-stage display bytes with
       // state.byteOrder, so the Values stage's OUTPUT bytes depend on it.
       { shape: state.shape, variables: state.variables, byteOrder: state.byteOrder, datasetId: state.dataset?.id ?? null },
-      () => computeValuesStage(state.shape, state.variables, state.byteOrder, presetValues),
+      () => computeValuesStage(state.shape, state.variables, state.byteOrder, presetValues, state.dataset?.id ?? null),
     );
     const values = report('values', t0, valuesM);
 

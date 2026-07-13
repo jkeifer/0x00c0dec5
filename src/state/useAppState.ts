@@ -10,7 +10,7 @@ import {
   createElement,
 } from 'react';
 import { produce } from 'immer';
-import { DEFAULT_STATE, makeEmptyState, reconcileChunkShape, type AppState, type Variable } from '../types/state.ts';
+import { DEFAULT_STATE, makeEmptyState, reconcileChunkShape, isDatasetVariable, type AppState, type Variable } from '../types/state.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import { loadState, saveState, loadActiveModel, saveActiveModel } from './persistence.ts';
 import { type PresetKey, resolvePreset, saveCustomPreset, loadCustomPreset } from './presets.ts';
@@ -65,17 +65,17 @@ export type AppAction =
   | { type: 'SET_DATASET_CUSTOM' };
 
 /**
- * Actions fully blocked while a dataset is active (D3): the schema lock. The
- * dataset owns shape and the variable set (from its manifest), so these are
- * no-ops until the user deselects the dataset. UPDATE_VARIABLE is NOT here —
- * it has a per-field partial lock (name/logicalType locked, typeAssignment
- * free), enforced explicitly in its own case below. Consulted once, at the
- * top of the reducer, rather than scattering identical guards per case.
+ * Actions fully blocked while a dataset is active: the schema lock. The
+ * dataset owns SHAPE (from its manifest), so SET_SHAPE is a no-op until the
+ * user deselects. ADD_VARIABLE/REMOVE_VARIABLE are NO LONGER locked (Task 5):
+ * users compose custom, generated variables alongside the dataset's real ones,
+ * and may remove any variable (re-applying the dataset restores its full set).
+ * UPDATE_VARIABLE is also not here — it has a per-field lock (name/logicalType
+ * frozen only on dataset-backed rows, via isDatasetVariable), enforced in its
+ * own case below. Consulted once, at the top of the reducer.
  */
 const DATASET_LOCKED_ACTIONS = new Set<AppAction['type']>([
   'SET_SHAPE',
-  'ADD_VARIABLE',
-  'REMOVE_VARIABLE',
 ]);
 
 export function reducer(state: AppState, action: AppAction): AppState {
@@ -100,8 +100,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
       });
 
     // ─── Schema ──────────────────────────────────────────────────────
-    // (SET_SHAPE / ADD_VARIABLE / REMOVE_VARIABLE are dataset-locked at the
-    // top of the reducer via DATASET_LOCKED_ACTIONS.)
+    // (SET_SHAPE is dataset-locked at the top of the reducer via
+    // DATASET_LOCKED_ACTIONS; ADD/REMOVE_VARIABLE stay editable while a
+    // dataset is active — Task 5.)
     case 'SET_SHAPE': {
       const newShape = action.shape;
       if (newShape.length === 0 || newShape.some(d => d <= 0)) {
@@ -131,11 +132,13 @@ export function reducer(state: AppState, action: AppAction): AppState {
       return produce(state, (draft) => {
         const v = draft.variables.find((v) => v.id === action.id);
         if (!v) return;
-        // Schema locks while a dataset is active: name/logicalType come from
-        // the manifest and stay fixed; typeAssignment (storage/precision) is
-        // still a free knob for exploring the pipeline.
-        if (action.changes.name !== undefined && !draft.dataset) v.name = action.changes.name;
-        if (action.changes.logicalType !== undefined && !draft.dataset) v.logicalType = action.changes.logicalType;
+        // Schema lock is per-variable (Task 5): a dataset-backed variable's
+        // name/logicalType come from the manifest and stay fixed;
+        // custom variables the user added alongside the dataset are fully
+        // editable. typeAssignment (storage/precision) is always a free knob.
+        const locked = isDatasetVariable(draft.dataset?.id, v);
+        if (action.changes.name !== undefined && !locked) v.name = action.changes.name;
+        if (action.changes.logicalType !== undefined && !locked) v.logicalType = action.changes.logicalType;
         if (action.changes.typeAssignment !== undefined) v.typeAssignment = action.changes.typeAssignment;
         // color is display-only, not part of the manifest-defined schema — applies
         // unconditionally, even while a dataset locks name/logicalType.

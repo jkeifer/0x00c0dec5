@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { reducer } from '../../../src/state/useAppState.ts';
 import { validateExternalState } from '../../../src/state/persistence.ts';
-import { DEFAULT_STATE, type AppState } from '../../../src/types/state.ts';
+import { DEFAULT_STATE, type AppState, type Variable } from '../../../src/types/state.ts';
 import { buildDatasetApplication } from '../../../src/datasets/apply.ts';
 import type { DatasetManifest } from '../../../src/datasets/types.ts';
 
@@ -113,19 +113,32 @@ describe('re-apply swaps seeded entries', () => {
   });
 });
 
-describe('schema locks while dataset active', () => {
-  it('SET_SHAPE / ADD_VARIABLE / REMOVE_VARIABLE are no-ops', () => {
+describe('schema lock while dataset active (Task 5: shape locked; compose allowed)', () => {
+  const CUSTOM_VAR: Variable = {
+    id: 'x', name: 'x', color: '#fff',
+    logicalType: { type: 'integer', min: 0, max: 1, generation: 'random' },
+    typeAssignment: { storageDtype: 'int16' },
+  };
+
+  it('SET_SHAPE is still a no-op (dataset owns shape)', () => {
     const s = applied();
     expect(reducer(s, { type: 'SET_SHAPE', shape: [9] })).toBe(s);
-    expect(reducer(s, {
-      type: 'ADD_VARIABLE',
-      variable: { id: 'x', name: 'x', color: '#fff',
-        logicalType: { type: 'integer', min: 0, max: 1, generation: 'random' },
-        typeAssignment: { storageDtype: 'int16' } },
-    })).toBe(s);
-    expect(reducer(s, { type: 'REMOVE_VARIABLE', id: 'ghcn-daily-date' })).toBe(s);
   });
-  it('UPDATE_VARIABLE strips name/logicalType but keeps typeAssignment', () => {
+
+  it('ADD_VARIABLE appends a custom variable (with an empty pipeline)', () => {
+    const s = applied();
+    const out = reducer(s, { type: 'ADD_VARIABLE', variable: CUSTOM_VAR });
+    expect(out.variables.map((v) => v.id)).toEqual(['ghcn-daily-date', 'x']);
+    expect(out.fieldPipelines['x']).toEqual([]);
+  });
+
+  it('REMOVE_VARIABLE removes a dataset-backed variable', () => {
+    const s = applied();
+    const out = reducer(s, { type: 'REMOVE_VARIABLE', id: 'ghcn-daily-date' });
+    expect(out.variables).toHaveLength(0);
+  });
+
+  it('UPDATE_VARIABLE strips name/logicalType on a dataset-backed row, keeps typeAssignment', () => {
     const s = applied();
     const out = reducer(s, {
       type: 'UPDATE_VARIABLE', id: 'ghcn-daily-date',
@@ -133,6 +146,17 @@ describe('schema locks while dataset active', () => {
     });
     expect(out.variables[0].name).toBe('date');
     expect(out.variables[0].typeAssignment.storageDtype).toBe('int16');
+  });
+
+  it('UPDATE_VARIABLE renames a CUSTOM variable added alongside the dataset', () => {
+    const s = reducer(applied(), { type: 'ADD_VARIABLE', variable: CUSTOM_VAR });
+    const out = reducer(s, {
+      type: 'UPDATE_VARIABLE', id: 'x',
+      changes: { name: 'renamed', logicalType: { type: 'text', min: 0, max: 0, generation: 'random' } },
+    });
+    const custom = out.variables.find((v) => v.id === 'x')!;
+    expect(custom.name).toBe('renamed');
+    expect(custom.logicalType.type).toBe('text');
   });
 });
 

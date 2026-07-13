@@ -51,6 +51,22 @@ export interface Variable {
 }
 
 /**
+ * Is this variable backed by the active dataset's real values (vs. a custom,
+ * generated one the user added alongside it)? Binding is by id PREFIX, never
+ * by name: `buildDatasetApplication` gives applied variables id
+ * `{datasetId}-{name}`, so a custom variable the user names identically to a
+ * dataset one is still NOT dataset-backed. Single source of truth shared by
+ * the reducer's schema lock, SchemaEditor's per-row disable, and
+ * computeValuesStage's preset-vs-generate branch.
+ */
+export function isDatasetVariable(
+  datasetId: string | null | undefined,
+  variable: { id: string },
+): boolean {
+  return datasetId != null && variable.id.startsWith(datasetId + '-');
+}
+
+/**
  * Read plan Task 1: which groups of auto-generated metadata get collected.
  * Each key maps to a specific reader-step failure when off — see
  * `METADATA_KEY_GROUPS` in `engine/metadata.ts`.

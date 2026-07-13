@@ -107,9 +107,33 @@ async function main() {
   const attribution = await page.locator('[data-testid="dataset-attribution"]').innerText().catch(() => '');
   h.check('(1) dataset-attribution visible with non-empty text', attribution.trim().length > 0, attribution);
 
+  // Task 5 contract: shape stays dataset-owned (locked); add-variable is
+  // available (compose custom vars alongside); a dataset-backed row's name is
+  // still frozen.
   h.check('(1) shape-input disabled while dataset active', await page.locator('[data-testid="shape-input"]').isDisabled());
-  h.check('(1) add-variable disabled while dataset active', await page.locator('[data-testid="add-variable"]').isDisabled());
-  h.check('(1) variable-name-0 disabled while dataset active', await page.locator('[data-testid="variable-name-0"]').isDisabled());
+  h.check('(1) add-variable ENABLED while dataset active (compose allowed)', !(await page.locator('[data-testid="add-variable"]').isDisabled()));
+  h.check('(1) variable-name-0 (dataset-backed row) still disabled', await page.locator('[data-testid="variable-name-0"]').isDisabled());
+
+  // Compose: add a custom variable alongside the dataset; it must appear as a
+  // new, fully-editable row and the pipeline must settle without error.
+  const rowCountBefore = await page.locator('[data-testid^="variable-row-"]').count();
+  await page.locator('[data-testid="add-variable"]').click();
+  await page.waitForTimeout(200);
+  await waitForPipelineIdle(page, 30_000);
+  const rowCountAfter = await page.locator('[data-testid^="variable-row-"]').count();
+  h.check('(1) add-variable appends a custom row while a dataset is active', rowCountAfter === rowCountBefore + 1, `before=${rowCountBefore} after=${rowCountAfter}`);
+  const newNameDisabled = await page.locator(`[data-testid="variable-name-${rowCountAfter - 1}"]`).isDisabled();
+  h.check('(1) the new custom row name input is EDITABLE (not dataset-backed)', !newNameDisabled);
+  const composeRead = await readStatusText(page);
+  h.check(
+    '(1) pipeline settles cleanly after composing a custom variable onto the dataset',
+    /File parsed successfully/.test(composeRead) && !/Read failed/.test(composeRead),
+    composeRead.slice(0, 120).replace(/\n/g, ' '),
+  );
+  // Remove it again so the rest of the scenario sees the pristine dataset schema.
+  await page.locator(`[data-testid="variable-row-${rowCountAfter - 1}"] button[aria-label^="Remove"]`).click();
+  await page.waitForTimeout(200);
+  await waitForPipelineIdle(page, 30_000);
 
   // Table view renders with real/fixture ghcn-daily values. Variable IDs are
   // minted as `{datasetId}-{name}` (buildDatasetApplication) but table cell
