@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { STEPS } from '../../../src/components/guide/steps.ts';
+import { STEPS, BLOG_POSTS } from '../../../src/components/guide/steps.ts';
 
 // Must stay in sync with Sidebar.tsx's SECTION_TESTIDS values.
 const SIDEBAR_SLUGS = [
@@ -60,5 +60,43 @@ describe('guide steps', () => {
         expect(opt.cons.trim(), `step ${step.id} "${opt.label}" cons`).not.toBe('');
       }
     }
+  });
+});
+
+describe('blog post links', () => {
+  it('every BLOG_POSTS entry has an element84.com URL and a nonempty label', () => {
+    expect(BLOG_POSTS.length).toBe(5);
+    for (const post of BLOG_POSTS) {
+      expect(post.label.trim(), `post ${post.url} label`).not.toBe('');
+      expect(post.url, `post "${post.label}" url`).toMatch(/^https:\/\/element84\.com\//);
+    }
+  });
+
+  it('intro step links to all five blog posts', () => {
+    const step = STEPS.find((s) => s.id === 'intro')!;
+    expect(step.links).toEqual(BLOG_POSTS);
+  });
+
+  it('chunk step links to both Chunks and Chunkability posts', () => {
+    const step = STEPS.find((s) => s.id === 'chunk')!;
+    const urls = (step.links ?? []).map((l) => l.url);
+    expect(urls.filter((u) => u.includes('chunks-and-chunkability')).length).toBe(2);
+    expect(step.links?.length).toBe(2);
+  });
+
+  it('codecs step links to the raster compression post', () => {
+    const step = STEPS.find((s) => s.id === 'codecs')!;
+    const urls = (step.links ?? []).map((l) => l.url);
+    expect(urls).toContain(
+      'https://element84.com/software-engineering/beyond-the-default-a-modern-guide-to-raster-compression/',
+    );
+  });
+
+  it('metadata step links to the format metadata post', () => {
+    const step = STEPS.find((s) => s.id === 'metadata')!;
+    const urls = (step.links ?? []).map((l) => l.url);
+    expect(urls).toContain(
+      'https://element84.com/software-engineering/metadata-makes-the-data-format-metadata-storage-and-representation-across-array-formats/',
+    );
   });
 });

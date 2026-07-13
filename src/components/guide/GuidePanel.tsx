@@ -230,6 +230,26 @@ export function GuidePanel() {
           <h3 style={headingStyle}>Try it</h3>
           <span>{step.tryIt}</span>
         </div>
+
+        {step.links && step.links.length > 0 && (
+          <div>
+            <h3 style={headingStyle}>Further reading</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+              {step.links.map((link, i) => (
+                <a
+                  key={link.url}
+                  href={link.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid={`guide-link-${i}`}
+                  style={{ color: colors.accent, wordBreak: 'break-word' }}
+                >
+                  {link.label}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Footer: nav + step dots */}

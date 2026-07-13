@@ -3,6 +3,7 @@ import { colors, fonts, fontSizes, radii, spacing } from '../../theme.ts';
 import { useAppState } from '../../state/useAppState.ts';
 import type { WorkerDiagnostics } from '../../worker/client.ts';
 import { BUILD_INFO } from '../../build-info.js';
+import { BLOG_POSTS } from '../guide/steps.ts';
 
 const GITHUB_URL = 'https://github.com/jkeifer/0x00c0dec5';
 
@@ -103,6 +104,24 @@ export function AboutModal({ onClose, diagnostics }: AboutModalProps) {
             <a href={GITHUB_URL} target="_blank" rel="noreferrer" style={{ color: colors.accent }}>
               {GITHUB_URL}
             </a>
+          </div>
+
+          <div style={{ marginTop: spacing.md }}>
+            <div style={{ color: colors.textTertiary, marginBottom: spacing.xs }}>Further reading</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+              {BLOG_POSTS.map((post, i) => (
+                <a
+                  key={post.url}
+                  href={post.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid={`about-blog-link-${i}`}
+                  style={{ color: colors.accent, wordBreak: 'break-word' }}
+                >
+                  {post.label}
+                </a>
+              ))}
+            </div>
           </div>
         </div>
 

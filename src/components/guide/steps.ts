@@ -13,6 +13,11 @@ export interface GuideStepOption {
   cons: string;
 }
 
+export interface GuideLink {
+  label: string;
+  url: string;
+}
+
 export interface GuideStep {
   id: string;
   title: string;
@@ -26,7 +31,34 @@ export interface GuideStep {
   body: string;
   /** A concrete action using real UI controls. */
   tryIt: string;
+  /** Further-reading blog post links, drawn from BLOG_POSTS. Omitted where irrelevant. */
+  links?: GuideLink[];
 }
+
+// Element 84 blog posts backing this guide's content. Titles verified against
+// each page's <title>/<h1> at authoring time.
+export const BLOG_POSTS: GuideLink[] = [
+  {
+    label: 'Chunks and Chunkability: An Origin Story',
+    url: 'https://element84.com/software-engineering/chunks-and-chunkability-an-origin-story/',
+  },
+  {
+    label: 'Chunks and Chunkability: Tyranny of the Chunk',
+    url: 'https://element84.com/software-engineering/chunks-and-chunkability-tyranny-of-the-chunk/',
+  },
+  {
+    label: 'Beyond the default: a modern guide to raster compression',
+    url: 'https://element84.com/software-engineering/beyond-the-default-a-modern-guide-to-raster-compression/',
+  },
+  {
+    label: 'Metadata makes the data format: metadata storage and representation across array formats',
+    url: 'https://element84.com/software-engineering/metadata-makes-the-data-format-metadata-storage-and-representation-across-array-formats/',
+  },
+  {
+    label: 'Is Zarr the new COG?',
+    url: 'https://element84.com/software-engineering/is-zarr-the-new-cog/',
+  },
+];
 
 export const STEPS: GuideStep[] = [
   {
@@ -48,6 +80,7 @@ export const STEPS: GuideStep[] = [
       'Hover a value in the left pane (Values, Table view) and watch its bytes light up in ' +
       'the right pane (Write, Hex view). The hover bar above the panes names the value, its ' +
       'coordinates, and its dtype at that stage.',
+    links: BLOG_POSTS,
   },
   {
     id: 'schema',
@@ -139,6 +172,7 @@ export const STEPS: GuideStep[] = [
       'four offset entries. Try 1 and watch ChunkConfig call out the chunk count. On an N-d ' +
       'array, switch Order from C to Morton and watch the Linearized stage’s hex view reorder ' +
       'within each chunk — same byte count, different first row — while Read still round-trips.',
+    links: BLOG_POSTS.filter((p) => p.url.includes('chunks-and-chunkability')),
   },
   {
     id: 'interleave',
@@ -277,6 +311,7 @@ export const STEPS: GuideStep[] = [
       'shrink. Add the same two codecs to temperature after setting its generation to random: ' +
       'the byte count grows and turns the warning color. Same pipeline, opposite result — the ' +
       'codec was never the point; the data’s structure was. Then swap RLE for Zstd and compare.',
+    links: BLOG_POSTS.filter((p) => p.url.includes('beyond-the-default-a-modern-guide-to-raster-compression')),
   },
   {
     id: 'metadata',
@@ -330,6 +365,9 @@ export const STEPS: GuideStep[] = [
       'fail with no-chunk-index. Separately: in the Chunk section, set Byte order to Big-endian, ' +
       'then here untick "Include endianness" — Read still says success, but open the diff view ' +
       'and watch the values that were actually written come back wrong.',
+    links: BLOG_POSTS.filter((p) =>
+      p.url.includes('metadata-makes-the-data-format-metadata-storage-and-representation-across-array-formats'),
+    ),
   },
   {
     id: 'write',
