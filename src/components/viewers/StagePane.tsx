@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { colors, fontSizes, spacing } from '../../theme.ts';
+import { colors, fontSizes, spacing, collapseButtonStyle } from '../../theme.ts';
 import { Radio } from '../shared/Radio.tsx';
 import type { StageName } from '../../types/pipeline.ts';
 import { STAGE_ORDER } from '../../types/pipeline.ts';
@@ -75,20 +75,6 @@ interface StagePaneProps {
   onToggleCollapse: () => void;
 }
 
-// Icon-button style shared by the collapse/expand toggle, matching
-// GuidePanel.tsx's iconButtonStyle precedent.
-const collapseButtonStyle: React.CSSProperties = {
-  background: 'transparent',
-  color: colors.textSecondary,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 3,
-  padding: `1px ${spacing.xs}px`,
-  fontSize: fontSizes.sm,
-  fontFamily: 'inherit',
-  cursor: 'pointer',
-  lineHeight: 1.4,
-  flexShrink: 0,
-};
 
 export function StagePane({
   paneId,

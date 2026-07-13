@@ -11,7 +11,7 @@ import { MetadataEditor } from '../config/MetadataEditor.tsx';
 import { WriteConfig } from '../config/WriteConfig.tsx';
 import { ReadStatus } from '../config/ReadStatus.tsx';
 import { FileExplorer } from '../files/FileExplorer.tsx';
-import { colors, fontSizes, radii, spacing } from '../../theme.ts';
+import { colors, fontSizes, radii, spacing, collapseButtonStyle } from '../../theme.ts';
 import { DATASETS } from '../../datasets/registry.ts';
 
 const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Type Assignment', 'Codecs', 'Metadata', 'Write', 'Read'] as const;
@@ -46,21 +46,6 @@ const sectionLabelStyle: React.CSSProperties = {
 const dividerStyle: React.CSSProperties = {
   height: 1,
   background: colors.borderSubtle,
-  flexShrink: 0,
-};
-
-// Icon-button style shared by the collapse/expand toggle, matching
-// GuidePanel.tsx's iconButtonStyle precedent.
-const collapseButtonStyle: React.CSSProperties = {
-  background: 'transparent',
-  color: colors.textSecondary,
-  border: `1px solid ${colors.border}`,
-  borderRadius: radii.sm,
-  padding: `1px ${spacing.xs}px`,
-  fontSize: fontSizes.sm,
-  fontFamily: 'inherit',
-  cursor: 'pointer',
-  lineHeight: 1.4,
   flexShrink: 0,
 };
 

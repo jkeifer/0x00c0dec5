@@ -85,3 +85,18 @@ export const radii = {
   lg: 8,
   pill: 9999,
 } as const;
+
+// Icon-button style shared by collapse/expand toggles throughout the app
+// (Sidebar, StagePane). Matches GuidePanel.tsx's iconButtonStyle precedent.
+export const collapseButtonStyle: React.CSSProperties = {
+  background: 'transparent',
+  color: colors.textSecondary,
+  border: `1px solid ${colors.border}`,
+  borderRadius: radii.sm,
+  padding: `1px ${spacing.xs}px`,
+  fontSize: fontSizes.sm,
+  fontFamily: 'inherit',
+  cursor: 'pointer',
+  lineHeight: 1.4,
+  flexShrink: 0,
+};
