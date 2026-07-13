@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useAppState } from '../../state/useAppState.ts';
 import { usePipelineContext } from '../../state/PipelineContext.tsx';
 import { useGuide } from '../../state/GuideContext.tsx';
@@ -12,6 +12,7 @@ import { WriteConfig } from '../config/WriteConfig.tsx';
 import { ReadStatus } from '../config/ReadStatus.tsx';
 import { FileExplorer } from '../files/FileExplorer.tsx';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
+import { DATASETS } from '../../datasets/registry.ts';
 
 const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Type Assignment', 'Codecs', 'Metadata', 'Write', 'Read'] as const;
 
@@ -53,12 +54,13 @@ const dividerStyle: React.CSSProperties = {
 // props, so consuming context directly (rather than adding a prop-drilling
 // wrapper) removes the last props App.tsx had to thread through it.
 export function Sidebar() {
-  const { state, dispatch } = useAppState();
+  const { state, dispatch, applyDataset, selectCustomDataset } = useAppState();
   const { files, readResult, variableStats, runtimeStatus } = usePipelineContext();
   // Guide highlight (plan Phase 5): the section matching the guide's active
   // step gets an accent outline and is scrolled into view.
   const { activeSection } = useGuide();
   const sectionRefs = useRef(new Map<string, HTMLDivElement>());
+  const [datasetStatus, setDatasetStatus] = useState<{ loading: boolean; error: string | null }>({ loading: false, error: null });
 
   useEffect(() => {
     if (!activeSection) return;
@@ -66,6 +68,19 @@ export function Sidebar() {
       .get(activeSection)
       ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [activeSection]);
+
+  async function handleSelectDataset(id: string | 'custom') {
+    if (id === 'custom') {
+      setDatasetStatus({ loading: false, error: null });
+      selectCustomDataset();
+      return;
+    }
+    setDatasetStatus({ loading: true, error: null });
+    const ok = await applyDataset(id);
+    setDatasetStatus(ok
+      ? { loading: false, error: null }
+      : { loading: false, error: 'dataset failed to load — check your connection and try again' });
+  }
 
   function renderSection(section: (typeof SECTIONS)[number]) {
     switch (section) {
@@ -94,6 +109,10 @@ export function Sidebar() {
               dispatch({ type: 'UPDATE_VARIABLE', id, changes })
             }
             onShapeChange={(shape) => dispatch({ type: 'SET_SHAPE', shape })}
+            dataset={state.dataset}
+            datasetOptions={DATASETS.filter((d) => d.dataModel === state.dataModel).map((d) => ({ id: d.id, label: d.label }))}
+            datasetStatus={datasetStatus}
+            onSelectDataset={handleSelectDataset}
           />
         );
       case 'Chunk':

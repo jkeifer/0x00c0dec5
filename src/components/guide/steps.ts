@@ -89,7 +89,10 @@ export const STEPS: GuideStep[] = [
       'Variables need not be numeric: the text type draws words from a bundled set — names, ' +
       'cities, countries, or prefix-heavy station IDs like WX-0042-A — and because the sets ' +
       'are stored sorted, the same four modes shape categorical data too: stepped becomes ' +
-      'runs of one repeated word, sorted becomes alphabetical order.',
+      'runs of one repeated word, sorted becomes alphabetical order. The Data picker loads ' +
+      'real public-domain datasets (terrain, sea-surface temperature, weather stations) in ' +
+      'place of the generator — dataset presets choose the data, format presets choose the ' +
+      'pipeline.',
     tryIt:
       'In Schema, change temperature’s generation from smooth to random and watch the Values ' +
       'pane. Then check the Encoded stage’s entropy stat in the pipeline strip — random data ' +

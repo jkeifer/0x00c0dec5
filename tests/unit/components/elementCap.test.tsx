@@ -24,6 +24,10 @@ describe('SchemaEditor element cap warning', () => {
         onRemoveVariable={noop}
         onUpdateVariable={noop}
         onShapeChange={noop}
+        dataset={null}
+        datasetOptions={[]}
+        datasetStatus={{ loading: false, error: null }}
+        onSelectDataset={noop}
       />,
     );
     expect(screen.queryByTestId('element-cap-warning')).toBeNull();
@@ -44,6 +48,10 @@ describe('SchemaEditor element cap warning', () => {
         onRemoveVariable={noop}
         onUpdateVariable={noop}
         onShapeChange={noop}
+        dataset={null}
+        datasetOptions={[]}
+        datasetStatus={{ loading: false, error: null }}
+        onSelectDataset={noop}
       />,
     );
 
