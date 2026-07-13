@@ -440,8 +440,9 @@ export const STEPS: GuideStep[] = [
       'the write-side decision that caused it. On success, the diff view compares the ' +
       'round-trip against the original values — lossy type assignments and float Delta show ' +
       'up here as per-value differences, honestly attributed to the step that spent the ' +
-      'precision. The Metadata section’s five group toggles (schema, layout, codecs, chunk ' +
-      'index, descriptive) each starve the reader of one specific fact, and the Read pane’s ' +
+      'precision. Five of the Metadata section’s six group toggles (schema, layout, codecs, ' +
+      'chunk index, descriptive) each starve the reader of one specific fact — the sixth, ' +
+      'endianness, misreads silently instead (see the Metadata step) — and the Read pane’s ' +
       'Process view narrates the eight-step attempt live, so you can watch exactly which step ' +
       'a missing group stops the reader at.',
     tryIt:
@@ -456,25 +457,30 @@ export const STEPS: GuideStep[] = [
     section: null,
     decision:
       'Every decision you just made — layout, chunking, orientation, dtypes, codecs, metadata ' +
-      'placement — is the same menu every real format ordered from. The presets in the header ' +
-      'are those orders, written down.',
+      'placement — is the same menu every real format ordered from. The format presets in the ' +
+      'header (Presets…) are those orders, written down, each loaded over a real public-domain ' +
+      'dataset so the bytes are the format’s own, not the generator’s.',
     options: [],
     body:
-      '"Basically Parquet" is tabular, column-oriented, per-column codecs — delta+RLE on the ' +
-      'stepped numeric column, Dictionary on the categorical text column — footer metadata ' +
-      'with a trailer. "Basically GeoTIFF" is a 2-d array, tiled chunks, header metadata, no ' +
-      'codecs at all (real GeoTIFF usually does compress, but leaving these variables raw ' +
-      'keeps the CRS/transform metadata story the focus). "Basically Zarr" is an N-d array, ' +
-      'per-chunk files, sidecar metadata — real Zarr’s default compressor is Zstd, which you ' +
-      'can add from the Codecs section yourself to see the preset’s own bytes shrink further. ' +
-      'None of them is magic — each is one path through the sidebar you just walked. When a ' +
-      'format ships a feature, it is answering one of these questions differently; when you ' +
-      'read a spec, you now know which question each section answers.',
+      '"Parquet-adjacent" is tabular, column-oriented, per-column codecs — delta+deflate on the ' +
+      'numeric columns, dictionary+RLE on the categorical station column — footer metadata with ' +
+      'a length trailer, binary serialization. "Avro-esque" is the row-oriented counterpart on ' +
+      'the same weather data: one shared per-chunk pipeline, header metadata, JSON. ' +
+      '"GeoTIFFesque" is a 2-d array of three bands (elevation plus generated slope and ' +
+      'hillshade), tiled 256×256 chunks, row/pixel-interleaved, header metadata serialized to ' +
+      'binary, with a Deflate chunk pipeline. "Zarrish" is a 2-d array, per-chunk files, sidecar ' +
+      'JSON metadata, and Byte Shuffle + Zstd already applied — real Zarr’s default compressor ' +
+      'is Zstd, and you can watch it work here without adding a thing. None of them is magic — ' +
+      'each is one path through the sidebar you just walked. When a format ships a feature, it ' +
+      'is answering one of these questions differently; when you read a spec, you now know which ' +
+      'question each section answers.',
     tryIt:
-      'Load "Basically Parquet" from the Presets menu and walk the sidebar top to bottom, ' +
-      'naming the option it picked at every step. Then switch the data model to N-d Array ' +
-      'and do the same for "Basically GeoTIFF" and "Basically Zarr". On Zarr, add Zstd to ' +
-      'temperature’s pipeline and watch the Encoded stage shrink — the differences between ' +
-      'the three presets, plus this one live edit, are the differences between the formats.',
+      'The Presets… menu offers only the presets for the active data model. In Tabular, load ' +
+      '"Parquet-adjacent" and walk the sidebar top to bottom, naming the option it picked at ' +
+      'every step; then load "Avro-esque" and watch the same data flip to row orientation. ' +
+      'Switch the data model to N-d Array and do the same for "GeoTIFFesque" and "Zarrish". On ' +
+      'Zarrish, open the Codecs section and see the Byte Shuffle + Zstd pipeline the preset ' +
+      'already carries — the differences between the four presets are the differences between ' +
+      'the formats.',
   },
 ];
