@@ -15,6 +15,7 @@ import {
   type HexSectionData,
 } from './useHexData.ts';
 import { FileMapStrip } from './FileMapStrip.tsx';
+import { scrollToIndexCentered } from './viewerUtils.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 
 export type { HexSection };
@@ -43,7 +44,6 @@ interface HexSectionViewProps {
   offsetWidth: number;
   hoveredTraceId: string | null;
   hoveredChunkId: string | null;
-  isCrossPane: boolean;
   chunkShape: number[];
   interleaving: 'row' | 'column';
   onHover: (traceId: string, chunkId: string) => void;
@@ -137,7 +137,6 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
       offsetWidth,
       hoveredTraceId,
       hoveredChunkId,
-      isCrossPane,
       chunkShape,
       interleaving,
       onHover,
@@ -178,7 +177,7 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
           onWindowStartChange(clampWindowStart(windowStartForByte(rowIndex * bytesPerRow, bytesPerRow, rowCount), rowCount));
           return;
         }
-        virtualizer.scrollToIndex(rowIndex - clampedWindowStart, { align: 'auto' });
+        scrollToIndexCentered(virtualizer, rowIndex - clampedWindowStart);
       },
     }));
 
@@ -187,7 +186,7 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
       const target = pendingScrollRow.current;
       pendingScrollRow.current = null;
       if (target >= clampedWindowStart && target < clampedWindowStart + visibleCount) {
-        virtualizer.scrollToIndex(target - clampedWindowStart, { align: 'auto' });
+        scrollToIndexCentered(virtualizer, target - clampedWindowStart);
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [clampedWindowStart]);
@@ -272,7 +271,6 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
                   totalBytes={sectionData.bytes.length}
                   hoveredTraceId={hoveredTraceId}
                   hoveredChunkId={hoveredChunkId}
-                  isCrossPane={isCrossPane}
                   chunkShape={chunkShape}
                   interleaving={interleaving}
                   onHover={onHover}
@@ -310,8 +308,6 @@ export function HexView({ sections, paneId, chunkShape, interleaving }: HexViewP
   // Below WINDOWED_SECTION_ROWS a section never reads this — it's always 0
   // and unused, preserving today's unbounded-virtualizer behavior exactly.
   const [windowStarts, setWindowStarts] = useState<Record<string, number>>({});
-
-  const isCrossPane = hoverSource !== null && hoverSource !== paneId;
 
   // HexRowRenderer already resolves the chunkId (falling back to
   // chunkIdForElement for Values/Typed/Read stage bytes — UI-2 fix,
@@ -368,7 +364,6 @@ export function HexView({ sections, paneId, chunkShape, interleaving }: HexViewP
           offsetWidth={hexData.offsetWidth}
           hoveredTraceId={hoveredTraceId}
           hoveredChunkId={hoveredChunkId}
-          isCrossPane={isCrossPane}
           chunkShape={chunkShape}
           interleaving={interleaving}
           onHover={handleHover}

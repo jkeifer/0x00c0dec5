@@ -275,29 +275,39 @@ describe('scrollOffsetForCell', () => {
     expect(result).toEqual({ scrollTop: 0, scrollLeft: 0 });
   });
 
-  it('scrolls down/right (nearest) when the cell is below/right of the viewport', () => {
+  it('centers the cell when it is below/right of the viewport', () => {
     // cols=10, cellSize=20 -> row = floor(idx/10). idx=59 -> row=5,col=9
-    // cellTop = 100, cellBottom = 120; clientHeight=100 -> scrollTop should
-    // become cellBottom - clientHeight = 20
+    // cellTop = 100, out of view -> centered: 100 - (100-20)/2 = 60
     const result = scrollOffsetForCell(59, 10, 20, viewport);
-    expect(result.scrollTop).toBe(20);
-    // cellLeft = 9*20 = 180, cellRight = 200; clientWidth=100 -> scrollLeft = 100
-    expect(result.scrollLeft).toBe(100);
+    expect(result.scrollTop).toBe(60);
+    // cellLeft = 9*20 = 180, out of view -> centered: 180 - 40 = 140
+    expect(result.scrollLeft).toBe(140);
   });
 
-  it('scrolls up/left (nearest) when the cell is above/left of the current scroll position', () => {
+  it('centers (clamped to 0) when the cell is above/left of the current scroll position', () => {
     const scrolledViewport = { scrollTop: 500, scrollLeft: 500, clientWidth: 100, clientHeight: 100 };
-    // cell 0 at (0,0), cellSize 20 -> well above/left of scroll position 500
+    // cell 0 at (0,0), cellSize 20 -> centered would be 0 - 40 = -40, clamped to 0
     const result = scrollOffsetForCell(0, 10, 20, scrolledViewport);
     expect(result.scrollTop).toBe(0);
     expect(result.scrollLeft).toBe(0);
   });
 
   it('leaves scroll position unchanged on the axis the cell is already visible on', () => {
-    const scrolledViewport = { scrollTop: 50, scrollLeft: 0, clientWidth: 100, clientHeight: 100 };
-    // idx=0 -> row 0, col 0; cellTop=0 < scrollTop=50 -> scrolls up to 0
+    const scrolledViewport = { scrollTop: 50, scrollLeft: 30, clientWidth: 100, clientHeight: 100 };
+    // idx=0 -> row 0, col 0; cellTop=0 < scrollTop=50 -> centers vertically
+    // (clamped to 0); horizontally the cell [0,20) is NOT visible either
+    // (scrollLeft 30) -> also centered/clamped to 0.
     const result = scrollOffsetForCell(0, 10, 20, scrolledViewport);
     expect(result.scrollTop).toBe(0);
+    expect(result.scrollLeft).toBe(0);
+  });
+
+  it('changes only the out-of-view axis, keeping the visible axis put', () => {
+    // idx=51 -> row 5, col 1; cellTop=100..120 out of view vertically
+    // (visible [0,100)) -> centered: 100 - 40 = 60. cellLeft=20..40 fully
+    // visible -> scrollLeft unchanged.
+    const result = scrollOffsetForCell(51, 10, 20, viewport);
+    expect(result.scrollTop).toBe(60);
     expect(result.scrollLeft).toBe(0);
   });
 });

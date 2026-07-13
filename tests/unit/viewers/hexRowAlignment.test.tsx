@@ -30,7 +30,6 @@ function renderRow(byteStart: number, byteEnd: number, totalBytes: number): stri
         totalBytes={totalBytes}
         hoveredTraceId={null}
         hoveredChunkId={null}
-        isCrossPane={false}
         chunkShape={[totalBytes]}
         interleaving="column"
         onHover={() => {}}

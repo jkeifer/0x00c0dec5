@@ -114,10 +114,11 @@ export function GridCanvas({
     const viewport = containerRef.current;
     const cellTop = row * scale;
     const cellBottom = cellTop + scale;
-    if (cellTop < viewport.scrollTop) {
-      viewport.scrollTop = cellTop;
-    } else if (cellBottom > viewport.scrollTop + viewport.clientHeight) {
-      viewport.scrollTop = cellBottom - viewport.clientHeight;
+    if (cellTop < viewport.scrollTop || cellBottom > viewport.scrollTop + viewport.clientHeight) {
+      // Not fully visible: CENTER the target row (nearest-edge scrolling
+      // parked it at the extreme top/bottom). The browser clamps scrollTop
+      // assignments to the valid range, so no explicit clamping needed.
+      viewport.scrollTop = cellTop - (viewport.clientHeight - scale) / 2;
     }
   }, [hoveredTraceId, hoverSource, paneId, variable.name, shape, cols, scale]);
 

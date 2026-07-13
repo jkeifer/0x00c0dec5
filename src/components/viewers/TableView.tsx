@@ -6,10 +6,11 @@ import { formatValue, formatLogicalValue } from '../../engine/elements.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { elementInChunk, chunkIdForElement, type ValueArray } from '../../engine/layout.ts';
+import { hoverHighlightFor } from './hoverHighlight.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
-import { isDiffValue, computeDiffSummary, type DiffSummary } from './viewerUtils.ts';
+import { isDiffValue, computeDiffSummary, scrollToIndexCentered, type DiffSummary } from './viewerUtils.ts';
 
 interface TableViewProps {
   variables: Variable[];
@@ -82,6 +83,11 @@ export function TableView({ variables, shape, paneId, values, chunkShape, interl
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
     paddingStart: headerHeight,
+    // The sticky header covers the top `headerHeight` px of the viewport, so
+    // a row scrolled under it is NOT actually visible — this makes
+    // scrollToIndexCentered's visibility check (and center math) account for
+    // the occluded strip.
+    scrollPaddingStart: headerHeight,
   });
 
   const virtualizerRef = useRef(virtualizer);
@@ -128,10 +134,10 @@ export function TableView({ variables, shape, paneId, values, chunkShape, interl
     return null;
   }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, traceIdToRowIndex, columns, shape, chunkShape]);
 
-  // Auto-scroll
+  // Auto-scroll: centered when the target row isn't already visible.
   useEffect(() => {
     if (hoveredRowIndex !== null && hoveredRowIndex < rowCount) {
-      virtualizerRef.current.scrollToIndex(hoveredRowIndex, { align: 'auto' });
+      scrollToIndexCentered(virtualizerRef.current, hoveredRowIndex);
     }
   }, [hoveredRowIndex, rowCount]);
 
@@ -262,11 +268,15 @@ export function TableView({ variables, shape, paneId, values, chunkShape, interl
               {columns.map((col) => {
                 const coords = flatIndexToCoords(rowIdx, shape);
                 const traceId = makeTraceId(col.variable.name, coords);
-                const isValueHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
-                const isChunkHovered = !isValueHovered && hoveredChunkId != null && hoveredChunkId !== ''
-                  && elementInChunk(hoveredChunkId, col.variable.name, coords, chunkShape);
-                const val = rowIdx < col.values.length ? col.values[rowIdx] : undefined;
                 const chunkId = chunkIdForElement(col.variable.name, coords, chunkShape, interleaving);
+                const highlight = hoverHighlightFor(
+                  { traceId, chunkId, coords, variableName: col.variable.name },
+                  { traceId: hoveredTraceId, chunkId: hoveredChunkId },
+                  chunkShape,
+                );
+                const isValueHovered = highlight === 'value';
+                const isChunkHovered = highlight === 'chunk';
+                const val = rowIdx < col.values.length ? col.values[rowIdx] : undefined;
 
                 // Diff detection
                 const origVals = showDiff && diffValues ? diffValues.get(col.variable.name) : undefined;

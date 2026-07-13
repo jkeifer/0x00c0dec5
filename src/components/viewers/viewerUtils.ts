@@ -1,3 +1,4 @@
+import type { Virtualizer } from '@tanstack/react-virtual';
 import type { ByteTrace, ChunkRegion } from '../../types/pipeline.ts';
 import type { LogicalValue } from '../../types/dtypes.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
@@ -323,6 +324,26 @@ export function computeMaxAbsDiff(values: ValueArray, origValues: ValueArray): n
 }
 
 /**
+ * Cross-pane scroll-to-hover for virtualized views: no-op when the item is
+ * already fully visible; otherwise CENTER it in the viewport. The previous
+ * `scrollToIndex(i, { align: 'auto' })` everywhere did a nearest-edge scroll,
+ * parking the target at the extreme top/bottom of the pane — not where the
+ * eye looks. Visibility is detected via the virtualizer's own math:
+ * `getOffsetForIndex(i, 'auto')` returns align 'auto' only on its
+ * "already fully visible, no scroll needed" path (any needed scroll resolves
+ * to 'start'/'end'), so this handles paddingStart/scrollMargin/measurements
+ * without reimplementing layout arithmetic.
+ */
+export function scrollToIndexCentered(
+  virtualizer: Virtualizer<HTMLDivElement, Element>,
+  index: number,
+): void {
+  const info = virtualizer.getOffsetForIndex(index, 'auto');
+  if (info && info[1] === 'auto') return; // fully visible — don't move
+  virtualizer.scrollToIndex(index, { align: 'center' });
+}
+
+/**
  * Row/column for a flat cell index in GridView's fixed-size CSS grid, and
  * the scroll offset needed to bring that cell into view within a viewport
  * of the given size. Used to replace the `querySelector('[data-cell-idx]')`
@@ -338,9 +359,13 @@ export function cellIndexToRowCol(index: number, cols: number): { row: number; c
 
 /**
  * Compute the scroll offset (top/left) that brings the cell at `index` into
- * view, mimicking `Element.scrollIntoView({ block: 'nearest', inline:
- * 'nearest' })` without needing a DOM node for the cell itself — only the
- * viewport's current scroll position and size are needed.
+ * view, without needing a DOM node for the cell itself — only the viewport's
+ * current scroll position and size are needed. Per axis: if the cell is
+ * already fully visible the offset is unchanged (no scroll); otherwise the
+ * cell is CENTERED in the viewport (a nearest-edge scroll parks the target
+ * at the extreme top/bottom — not where the eye looks). Offsets are clamped
+ * to >= 0; the max is left to the browser, which clamps scrollTop/scrollLeft
+ * assignments to the valid range.
  */
 export function scrollOffsetForCell(
   index: number,
@@ -355,17 +380,13 @@ export function scrollOffsetForCell(
   const cellRight = cellLeft + cellSize;
 
   let scrollTop = viewport.scrollTop;
-  if (cellTop < viewport.scrollTop) {
-    scrollTop = cellTop;
-  } else if (cellBottom > viewport.scrollTop + viewport.clientHeight) {
-    scrollTop = cellBottom - viewport.clientHeight;
+  if (cellTop < viewport.scrollTop || cellBottom > viewport.scrollTop + viewport.clientHeight) {
+    scrollTop = Math.max(0, cellTop - (viewport.clientHeight - cellSize) / 2);
   }
 
   let scrollLeft = viewport.scrollLeft;
-  if (cellLeft < viewport.scrollLeft) {
-    scrollLeft = cellLeft;
-  } else if (cellRight > viewport.scrollLeft + viewport.clientWidth) {
-    scrollLeft = cellRight - viewport.clientWidth;
+  if (cellLeft < viewport.scrollLeft || cellRight > viewport.scrollLeft + viewport.clientWidth) {
+    scrollLeft = Math.max(0, cellLeft - (viewport.clientWidth - cellSize) / 2);
   }
 
   return { scrollTop, scrollLeft };

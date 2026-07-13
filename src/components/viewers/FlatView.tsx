@@ -2,8 +2,9 @@ import { useRef, useEffect, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import { useHover } from '../../hooks/useHover.ts';
-import { elementInChunk, chunkIdForElement, type ValueSources } from '../../engine/layout.ts';
-import { flatGroupCount, flatGroupAt, flatGroupIndexOf, byteToHex } from './viewerUtils.ts';
+import { chunkIdForElement, type ValueSources } from '../../engine/layout.ts';
+import { flatGroupCount, flatGroupAt, flatGroupIndexOf, byteToHex, scrollToIndexCentered } from './viewerUtils.ts';
+import { hoverHighlightFor } from './hoverHighlight.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 
 interface FlatViewProps {
@@ -49,8 +50,6 @@ export function FlatView({ stage, sources, paneId, chunkShape, interleaving }: F
   const virtualizerRef = useRef(virtualizer);
   virtualizerRef.current = virtualizer;
 
-  const isCrossPane = hoverSource !== null && hoverSource !== paneId;
-
   // Scroll to hovered trace from other pane — falls back to the chunkId when
   // the exact traceId has no bytes in this stage (e.g. a chunk-level hover
   // from an entropy-coded pane while this pane is pre-chunking).
@@ -61,7 +60,7 @@ export function FlatView({ stage, sources, paneId, chunkShape, interleaving }: F
         groupIdx = flatGroupIndexOf(layout, hoveredChunkId);
       }
       if (groupIdx !== undefined) {
-        virtualizerRef.current.scrollToIndex(groupIdx, { align: 'auto' });
+        scrollToIndexCentered(virtualizerRef.current, groupIdx);
       }
     }
   }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, layout]);
@@ -101,12 +100,13 @@ export function FlatView({ stage, sources, paneId, chunkShape, interleaving }: F
           const resolvedChunkId = group.chunkId
             || (group.coords.length > 0 ? chunkIdForElement(group.variableName, group.coords, chunkShape, interleaving) : '');
 
-          const isValueHovered = hoveredTraceId !== null && group.traceId === hoveredTraceId;
-          const isChunkHovered = !isValueHovered && (
-            (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && group.chunkId === hoveredChunkId)
-            || (hoveredChunkId != null && hoveredChunkId !== '' && group.coords.length > 0
-              && elementInChunk(hoveredChunkId, group.variableName, group.coords, chunkShape))
+          const highlight = hoverHighlightFor(
+            { traceId: group.traceId, chunkId: group.chunkId, coords: group.coords, variableName: group.variableName },
+            { traceId: hoveredTraceId, chunkId: hoveredChunkId },
+            chunkShape,
           );
+          const isValueHovered = highlight === 'value';
+          const isChunkHovered = highlight === 'chunk';
 
           // Structural traces (magic/metadata) carry no variableName/coords —
           // fall back to displayValue (e.g. "magic (start)", "metadata") so

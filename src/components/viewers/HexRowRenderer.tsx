@@ -1,6 +1,7 @@
 import type { StageLayout, ValueSources } from '../../engine/layout.ts';
-import { traceAt, elementInChunk, chunkIdForElement } from '../../engine/layout.ts';
+import { traceAt, chunkIdForElement } from '../../engine/layout.ts';
 import { byteToHex, formatOffset, byteToAscii } from './viewerUtils.ts';
+import { hoverHighlightFor } from './hoverHighlight.ts';
 import { colors, displayColor, spacing } from '../../theme.ts';
 
 interface HexRowRendererProps {
@@ -17,7 +18,6 @@ interface HexRowRendererProps {
   totalBytes: number;
   hoveredTraceId: string | null;
   hoveredChunkId: string | null;
-  isCrossPane: boolean;
   chunkShape: number[];
   interleaving: 'row' | 'column';
   onHover: (traceId: string, chunkId: string) => void;
@@ -36,7 +36,6 @@ export function HexRowRenderer({
   totalBytes,
   hoveredTraceId,
   hoveredChunkId,
-  isCrossPane,
   chunkShape,
   interleaving,
   onHover,
@@ -54,6 +53,18 @@ export function HexRowRenderer({
     { length: Math.min(bytesPerRow, byteEnd - byteStart) },
     (_, col) => traceAt(layout, byteStart + col, sources),
   );
+
+  // Value/chunk highlight classification, computed once per column and
+  // shared by both the hex and ASCII columns below (was duplicated inline
+  // in each).
+  const rowHighlights = rowTraces.map((trace) => {
+    if (!trace) return null;
+    return hoverHighlightFor(
+      { traceId: trace.traceId, chunkId: resolvedChunkId(trace), coords: trace.coords, variableName: trace.variableName },
+      { traceId: hoveredTraceId, chunkId: hoveredChunkId },
+      chunkShape,
+    );
+  });
 
   // UI-2 fix (remediation-plan.md task 4.2): Values/Typed/Read stage traces
   // carry chunkId '' (they precede chunking). Fall back to chunkIdForElement
@@ -94,12 +105,9 @@ export function HexRowRenderer({
             return <span key={col}>{'  '}</span>;
           }
           const trace = rowTraces[col];
-          const isValueHovered = trace != null && hoveredTraceId !== null && trace.traceId === hoveredTraceId;
-          const isChunkHovered = !isValueHovered && trace != null && (
-            (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && trace.chunkId === hoveredChunkId)
-            || (hoveredChunkId != null && hoveredChunkId !== '' && trace.coords.length > 0
-              && elementInChunk(hoveredChunkId, trace.variableName, trace.coords, chunkShape))
-          );
+          const highlight = rowHighlights[col];
+          const isValueHovered = highlight === 'value';
+          const isChunkHovered = highlight === 'chunk';
           const textColor = trace?.variableColor ? displayColor(trace.variableColor) : colors.textSecondary;
           const regionTint = regionByByte[byteIdx] === 1 ? 'var(--region-tint)' : undefined;
 
@@ -135,12 +143,9 @@ export function HexRowRenderer({
           const byteIdx = byteStart + col;
           if (byteIdx >= byteEnd) return <span key={col}> </span>;
           const trace = rowTraces[col];
-          const isValueHovered = trace != null && hoveredTraceId !== null && trace.traceId === hoveredTraceId;
-          const isChunkHovered = !isValueHovered && trace != null && (
-            (isCrossPane && hoveredChunkId !== null && hoveredChunkId !== '' && trace.chunkId === hoveredChunkId)
-            || (hoveredChunkId != null && hoveredChunkId !== '' && trace.coords.length > 0
-              && elementInChunk(hoveredChunkId, trace.variableName, trace.coords, chunkShape))
-          );
+          const highlight = rowHighlights[col];
+          const isValueHovered = highlight === 'value';
+          const isChunkHovered = highlight === 'chunk';
 
           return (
             <span

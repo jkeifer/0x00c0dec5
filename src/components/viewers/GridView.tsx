@@ -4,11 +4,12 @@ import type { LogicalValue } from '../../types/dtypes.ts';
 import { flatIndexToCoords } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
 import { formatLogicalValue } from '../../engine/elements.ts';
-import { elementInChunk, chunkIdForElement, type ValueArray } from '../../engine/layout.ts';
+import { chunkIdForElement, type ValueArray } from '../../engine/layout.ts';
+import { hoverHighlightFor } from './hoverHighlight.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
 import { computeMaxAbsDiff, computeDiffSummary, scrollOffsetForCell } from './viewerUtils.ts';
-import { valueToColor, diffToColor } from './gridImage.ts';
+import { valueToColor, diffToColor, stretchRange } from './gridImage.ts';
 import { GridCanvas } from './GridCanvas.tsx';
 
 interface GridViewProps {
@@ -35,6 +36,11 @@ const MAX_CELLS = 10000;
 export function GridView({ variables, shape, paneId, values: valuesByName, chunkShape, interleaving, diffValues, showDiff }: GridViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const [selectedVarIdx, setSelectedVarIdx] = useState(0);
+  // Per-session view knob (like selectedVarIdx) — not persisted AppState.
+  // Defaults to percentile: better out-of-box contrast when one outlier
+  // (e.g. an ocean trench in a DEM) would otherwise wash out the rest of
+  // the ramp under a plain min-max stretch.
+  const [stretchMode, setStretchMode] = useState<'minmax' | 'percentile'>('percentile');
   const gridRef = useRef<HTMLDivElement>(null);
 
   // Clamp to the valid range so the active tab and displayed data always agree,
@@ -51,9 +57,9 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
   // ordinal (sorted-unique word index) mapping for text variables — this
   // branch fully replaces the numeric scan for string arrays, since
   // `'abc' < Infinity` is false and the numeric path would yield rgb(NaN).
-  const { values, colorValues, min, max } = useMemo(() => {
+  const { values, colorValues, min, max, isText } = useMemo(() => {
     if (!selectedVar) {
-      return { values: [] as LogicalValue[], colorValues: [] as number[], min: Infinity, max: -Infinity };
+      return { values: [] as LogicalValue[], colorValues: [] as number[], min: Infinity, max: -Infinity, isText: false };
     }
     const vals = valuesByName.get(selectedVar.name) ?? [];
 
@@ -68,19 +74,18 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
         colorValues: words.map((v) => rank.get(String(v)) ?? 0),
         min: 0,
         max: uniq.length - 1,
+        isText: true,
       };
     }
 
     const nums = vals as Float64Array;
-    let mn = Infinity;
-    let mx = -Infinity;
-    for (const v of nums) {
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
+    // Text colorValues are ranks — uniform by construction, so a percentile
+    // stretch would be meaningless there. Numeric variables use the
+    // per-pane stretch mode picked in the header strip below.
+    const { min, max } = stretchRange(nums, stretchMode);
 
-    return { values: vals, colorValues: nums, min: mn, max: mx };
-  }, [valuesByName, selectedVar]);
+    return { values: vals, colorValues: nums, min, max, isText: false };
+  }, [valuesByName, selectedVar, stretchMode]);
 
   // Task 4.5 (remediation-plan.md, fixes UI-5): maxAbsDiff was previously
   // recomputed with a full reduce PER CELL (an O(n^2) per-render cost) and
@@ -142,8 +147,10 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
   // from data indices, not by reaching into the DOM). GridView renders every
   // cell (it isn't virtualized) in a fixed-size CSS grid, so the scroll
   // offset for a given cell index is computable directly from `cols` and
-  // `CELL_SIZE` — no element lookup needed. `scrollOffsetForCell` reproduces
-  // `scrollIntoView({ block: 'nearest', inline: 'nearest' })` semantics.
+  // `CELL_SIZE` — no element lookup needed. `scrollOffsetForCell` leaves the
+  // offsets unchanged when the cell is already visible and otherwise CENTERS
+  // it in the viewport (nearest-edge scrolling parked the target at the
+  // extreme top/bottom).
   useEffect(() => {
     if (!hoveredTraceId || hoverSource === paneId || !gridRef.current || !selectedVar) return;
     const parsed = parseTraceId(hoveredTraceId);
@@ -190,6 +197,7 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
       <div
         style={{
           display: 'flex',
+          alignItems: 'center',
           gap: spacing.xs,
           padding: `${spacing.xs}px ${spacing.sm}px`,
           borderBottom: `1px solid ${colors.borderSubtle}`,
@@ -214,6 +222,32 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
             {v.name}
           </button>
         ))}
+        {/* Text colorValues are ordinal ranks (uniform by construction) and
+            diff mode uses its own diverging maxAbsDiff scale — the stretch
+            picker only applies to the plain numeric ramp, so it's hidden
+            (not just disabled) in either case rather than shown inert. */}
+        {!isText && !showDiff && (
+          <select
+            value={stretchMode}
+            onChange={(e) => setStretchMode(e.target.value as 'minmax' | 'percentile')}
+            data-testid="grid-stretch-select"
+            style={{
+              marginLeft: 'auto',
+              background: colors.surfaceInput,
+              color: colors.textPrimary,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 3,
+              padding: `2px ${spacing.xs}px`,
+              fontSize: fontSizes.sm,
+              fontFamily: fonts.mono,
+              cursor: 'pointer',
+              outline: 'none',
+            }}
+          >
+            <option value="percentile">stretch: 2–98%</option>
+            <option value="minmax">stretch: min–max</option>
+          </select>
+        )}
       </div>
 
       {is1D && (
@@ -298,10 +332,14 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
             const val = values[i];
             const coords = flatIndexToCoords(i, shape);
             const traceId = makeTraceId(selectedVar.name, coords);
-            const isValueHovered = hoveredTraceId !== null && hoveredTraceId === traceId;
-            const isChunkHovered = !isValueHovered && hoveredChunkId != null && hoveredChunkId !== ''
-              && elementInChunk(hoveredChunkId, selectedVar.name, coords, chunkShape);
             const chunkId = chunkIdForElement(selectedVar.name, coords, chunkShape, interleaving);
+            const highlight = hoverHighlightFor(
+              { traceId, chunkId, coords, variableName: selectedVar.name },
+              { traceId: hoveredTraceId, chunkId: hoveredChunkId },
+              chunkShape,
+            );
+            const isValueHovered = highlight === 'value';
+            const isChunkHovered = highlight === 'chunk';
 
             // Diff mode. `maxAbsDiff` is hoisted above into a useMemo keyed on
             // values/origVarVals (fixes UI-5's per-cell O(n) reduce); the

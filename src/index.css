@@ -28,8 +28,12 @@
   --pane-accent-left: #58a6ff;
   --pane-accent-right: #d19a66;
 
-  /* Hover/region overlays (white-alpha in dark, black-alpha in light). */
-  --hover-strong: rgba(255, 255, 255, 0.18);
+  /* Hover/region overlays. --hover-strong is accent-tinted (matches
+     --accent, #58a6ff) at high alpha so a value hover reads unmistakably as
+     "the" highlighted element; --hover-weak stays a neutral white-alpha wash
+     for the chunk-level fallback, kept clearly weaker so the two never read
+     as the same thing. */
+  --hover-strong: rgba(88, 166, 255, 0.45);
   --hover-weak: rgba(255, 255, 255, 0.08);
   --region-tint: rgba(255, 255, 255, 0.05);
   --chunk-outline: rgba(255, 255, 255, 0.6);
@@ -80,7 +84,9 @@
   --pane-accent-left: #0969da;
   --pane-accent-right: #bc4c00;
 
-  --hover-strong: rgba(0, 0, 0, 0.14);
+  /* Accent-tinted (matches --accent, #0969da) at high alpha — see :root's
+     --hover-strong comment. */
+  --hover-strong: rgba(9, 105, 218, 0.35);
   --hover-weak: rgba(0, 0, 0, 0.06);
   --region-tint: rgba(0, 0, 0, 0.04);
   --chunk-outline: rgba(0, 0, 0, 0.45);

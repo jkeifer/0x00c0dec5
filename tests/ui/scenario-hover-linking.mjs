@@ -146,6 +146,27 @@ async function main() {
     barTextTypedHex.replace(/\n/g, ' | ').slice(0, 200),
   );
 
+  // ── Fix pin: a Values-stage table-cell hover must produce a visible ──
+  // value-level (strong) highlight on the hovered value's bytes in a Typed
+  // hex pane — the original complaint was that only the chunk wash was
+  // visible, not the specific value. The wash itself is intentional (it
+  // shows chunk membership); the strong accent-tinted highlight on top is
+  // the fix. Left pane is already Typed/Hex from the block above.
+  await page.mouse.move(10, 10);
+  await setPaneStage(page, 'right', 'values');
+  await setPaneViewMode(page, 'right', 'Table');
+  const valuesCell = page.locator('[data-testid="pane-right"] [data-testid^="table-cell-temperature-"]').first();
+  await valuesCell.hover();
+  await page.waitForTimeout(400);
+  await shot(page, 'hover-linking-values-strong-highlight-typed-hex');
+
+  const typedHexHighlights = await highlightCounts(page, '[data-testid="pane-left"]');
+  h.check(
+    'hovering a Values-stage table cell strong-highlights the matching bytes in a Typed-stage hex pane',
+    typedHexHighlights.valueLevel > 0,
+    `valueLevel=${typedHexHighlights.valueLevel} chunkLevel=${typedHexHighlights.chunkLevel}`,
+  );
+
   await browser.close();
   h.finish();
   process.exit(process.exitCode ?? 0);
