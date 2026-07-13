@@ -4,6 +4,8 @@ import {
 } from '../../../src/datasets/assets.ts';
 import type { DatasetManifest } from '../../../src/datasets/types.ts';
 
+const KNOWN_IDS = ['etopo-dem', 'sst-field', 'ghcn-daily'];
+
 function le16(values: number[]): ArrayBuffer {
   const buf = new ArrayBuffer(values.length * 2);
   const dv = new DataView(buf);
@@ -24,7 +26,7 @@ const MANIFEST: DatasetManifest = {
 
 describe('validateManifest', () => {
   it('passes a well-formed manifest through', () => {
-    expect(validateManifest(JSON.parse(JSON.stringify(MANIFEST)))).toEqual(MANIFEST);
+    expect(validateManifest(JSON.parse(JSON.stringify(MANIFEST)), KNOWN_IDS)).toEqual(MANIFEST);
   });
   it.each([
     ['not an object', 42],
@@ -35,7 +37,7 @@ describe('validateManifest', () => {
     ['bad dtype', { ...MANIFEST, variables: [{ ...MANIFEST.variables[0], dtype: 'int64' }] }],
     ['missing attribution', { ...MANIFEST, attribution: undefined }],
   ])('throws on %s', (_label, raw) => {
-    expect(() => validateManifest(raw)).toThrow(/dataset manifest/i);
+    expect(() => validateManifest(raw, KNOWN_IDS)).toThrow(/dataset manifest/i);
   });
 });
 

@@ -17,45 +17,39 @@ const GHCN_MANIFEST: DatasetManifest = {
 };
 
 describe('registry', () => {
-  it('has all three datasets with model scoping', () => {
+  it('has all three datasets with model scoping (id/label/dataModel only — no curated block)', () => {
     expect(DATASETS.map((d) => d.id).sort()).toEqual(['etopo-dem', 'ghcn-daily', 'sst-field']);
     expect(datasetById('etopo-dem')!.dataModel).toBe('array');
     expect(datasetById('sst-field')!.dataModel).toBe('array');
     expect(datasetById('ghcn-daily')!.dataModel).toBe('tabular');
     expect(datasetById('nope')).toBeUndefined();
+    // Registry entries are now { id, label, dataModel } — no curated config.
+    expect(DATASETS.every((d) => !('curated' in d))).toBe(true);
   });
   it('builds dataset-relative URLs', () => {
     expect(datasetUrl('etopo-dem', 'manifest.json')).toMatch(/\/datasets\/etopo-dem\/manifest\.json$/);
   });
 });
 
-describe('buildDatasetApplication', () => {
-  const entry = datasetById('ghcn-daily')!;
-  const app = buildDatasetApplication(entry, GHCN_MANIFEST);
+describe('buildDatasetApplication — schema + metadata only', () => {
+  const app = buildDatasetApplication(GHCN_MANIFEST);
 
   it('mints deterministic ids and palette colors', () => {
     expect(app.variables.map((v) => v.id)).toEqual(['ghcn-daily-date', 'ghcn-daily-station']);
     expect(app.variables.every((v) => typeof v.color === 'string' && v.color.length > 0)).toBe(true);
   });
-  it('takes logicalType from the manifest and shape/dataset from entry+manifest', () => {
+  it('takes logicalType/shape from the manifest and derives dataset id + attribution', () => {
     expect(app.shape).toEqual([4]);
-    expect(app.dataset).toEqual({ id: 'ghcn-daily', attribution: 'NOAA · PD' });
+    expect(app.datasetId).toBe('ghcn-daily');
+    expect(app.attribution).toBe('NOAA · PD');
     expect(app.variables[0].logicalType.generation).toBe('sorted');
   });
-  it('applies curated typeAssignment by name; falls back to bin dtype / char16', () => {
-    // curated block covers these names — the assertions pin what registry.ts declares
+  it('typeAssignment defaults to the manifest bin dtype (numbers) / char16 (strings) — natural storage, no curated tuning', () => {
     expect(app.variables[0].typeAssignment.storageDtype).toBe('int32');
     expect(app.variables[1].typeAssignment.storageDtype).toBe('char16');
   });
-  it('keys fieldPipelines by minted variable id and ignores unknown curated names', () => {
-    for (const key of Object.keys(app.fieldPipelines)) {
-      expect(app.variables.some((v) => v.id === key)).toBe(true);
-    }
-    // curated names not present in the manifest (e.g. tmax here) simply don't appear
-    expect(Object.keys(app.fieldPipelines)).not.toContain('ghcn-daily-tmax');
-  });
-  it('seeds provenance customEntries', () => {
-    expect(app.customEntries).toEqual([
+  it('seeds provenance entries (returned as seededEntries, appended by the reducer)', () => {
+    expect(app.seededEntries).toEqual([
       { key: 'source', value: 'NOAA' },
       { key: 'source_url', value: 'https://ncei.noaa.gov' },
       { key: 'retrieved', value: '2026-07-12' },

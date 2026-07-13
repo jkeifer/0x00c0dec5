@@ -203,6 +203,48 @@ describe('UPDATE_VARIABLE', () => {
     expect(result).toBe(state);
   });
 
+  it('updates color', () => {
+    const v = makeVariable({ id: 'v1', name: 'temp', color: '#e06c75' });
+    const state = makeState({ variables: [v], fieldPipelines: { v1: [] } });
+    const result = reducer(state, {
+      type: 'UPDATE_VARIABLE',
+      id: 'v1',
+      changes: { color: '#61afef' },
+    });
+    expect(result.variables[0].color).toBe('#61afef');
+    expect(result.variables[0].name).toBe('temp');
+  });
+
+  it('updates color even when a dataset locks the schema (display-only, not schema)', () => {
+    const v = makeVariable({ id: 'v1', name: 'temp', color: '#e06c75' });
+    const state = makeState({
+      variables: [v],
+      fieldPipelines: { v1: [] },
+      dataset: { id: 'etopo-dem', attribution: 'test', seededEntries: [] },
+    });
+    const result = reducer(state, {
+      type: 'UPDATE_VARIABLE',
+      id: 'v1',
+      changes: { color: '#61afef' },
+    });
+    expect(result.variables[0].color).toBe('#61afef');
+  });
+
+  it('blocks name change when a dataset locks the schema', () => {
+    const v = makeVariable({ id: 'v1', name: 'temp' });
+    const state = makeState({
+      variables: [v],
+      fieldPipelines: { v1: [] },
+      dataset: { id: 'etopo-dem', attribution: 'test', seededEntries: [] },
+    });
+    const result = reducer(state, {
+      type: 'UPDATE_VARIABLE',
+      id: 'v1',
+      changes: { name: 'renamed' },
+    });
+    expect(result.variables[0].name).toBe('temp');
+  });
+
   // Fixed by Phase 3.1 (D5, id-keyed pipelines) — was `it.fails` under SW-1.
   it('renaming a variable to another variable\'s name preserves the target\'s pipeline', () => {
     const a = makeVariable({ id: 'a', name: 'alpha' });

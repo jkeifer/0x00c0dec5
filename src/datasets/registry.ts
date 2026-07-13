@@ -1,30 +1,18 @@
-import type { AppState, TypeAssignment } from '../types/state.ts';
-import type { CodecStep } from '../types/codecs.ts';
+import type { AppState } from '../types/state.ts';
 import type { DatasetId, DatasetManifest } from './types.ts';
 import { validateManifest } from './assets.ts';
 
 /**
- * Curated pipeline defaults applied on dataset selection. Keyed by variable
- * NAME (ids are minted at apply time). These reference app registry keys
- * (codec ids, dtype keys) and so live HERE on main, version-locked to the
- * app — never in the remote manifest (spec: a codec rename must not strand
- * remote config). Names that match no manifest variable are ignored, so a
- * data-branch schema revision degrades to defaults rather than breaking apply.
+ * A dataset preset now supplies only its identity, label, and data model.
+ * Applying one sets SCHEMA + METADATA only (see `buildDatasetApplication`);
+ * the curated pipeline/chunking/interleaving configs that used to live here
+ * moved into the top-level format presets (src/presets/*.json), which carry a
+ * `dataset` ref of their own.
  */
-export interface CuratedDefaults {
-  chunkShape: number[];
-  interleaving?: AppState['interleaving'];
-  linearization?: AppState['linearization'];
-  typeAssignments: Record<string, TypeAssignment>;
-  fieldPipelines: Record<string, CodecStep[]>;
-  chunkPipeline?: CodecStep[];
-}
-
 export interface DatasetRegistryEntry {
   id: DatasetId;
   label: string;
   dataModel: AppState['dataModel'];
-  curated: CuratedDefaults;
 }
 
 /** Asset base. Dev: the vite middleware serving data-branch-work/ with a
@@ -39,62 +27,9 @@ export function datasetUrl(id: DatasetId, file: string): string {
 }
 
 export const DATASETS: DatasetRegistryEntry[] = [
-  {
-    id: 'etopo-dem',
-    label: 'Terrain elevation (ETOPO)',
-    dataModel: 'array',
-    curated: {
-      chunkShape: [256, 256],
-      linearization: 'c',
-      typeAssignments: { elevation: { storageDtype: 'int16' } },
-      fieldPipelines: {
-        elevation: [
-          { codec: 'delta', params: {} },
-          { codec: 'zigzag', params: {} },
-          { codec: 'deflate', params: {} },
-        ],
-      },
-    },
-  },
-  {
-    id: 'sst-field',
-    label: 'Sea-surface temperature (MUR)',
-    dataModel: 'array',
-    curated: {
-      chunkShape: [256, 256],
-      linearization: 'c',
-      typeAssignments: { sst: { storageDtype: 'float32', keepBits: 8 } },
-      fieldPipelines: {
-        sst: [
-          { codec: 'byte-shuffle', params: {} },
-          { codec: 'zstd', params: {} },
-        ],
-      },
-    },
-  },
-  {
-    id: 'ghcn-daily',
-    label: 'Weather station daily (GHCN)',
-    dataModel: 'tabular',
-    curated: {
-      chunkShape: [65536],
-      interleaving: 'column',
-      typeAssignments: {
-        date: { storageDtype: 'int32' },
-        tmax: { storageDtype: 'int16' },
-        tmin: { storageDtype: 'int16' },
-        prcp: { storageDtype: 'int16' },
-        station: { storageDtype: 'char16' },
-      },
-      fieldPipelines: {
-        date: [{ codec: 'delta', params: {} }, { codec: 'deflate', params: {} }],
-        tmax: [{ codec: 'delta', params: {} }, { codec: 'zigzag', params: {} }, { codec: 'deflate', params: {} }],
-        tmin: [{ codec: 'delta', params: {} }, { codec: 'zigzag', params: {} }, { codec: 'deflate', params: {} }],
-        prcp: [{ codec: 'rle', params: {} }, { codec: 'deflate', params: {} }],
-        station: [{ codec: 'dictionary', params: {} }, { codec: 'rle', params: {} }],
-      },
-    },
-  },
+  { id: 'etopo-dem', label: 'Terrain elevation (ETOPO)', dataModel: 'array' },
+  { id: 'sst-field', label: 'Sea-surface temperature (MUR)', dataModel: 'array' },
+  { id: 'ghcn-daily', label: 'Weather station daily (GHCN)', dataModel: 'tabular' },
 ];
 
 export function datasetById(id: string): DatasetRegistryEntry | undefined {
@@ -111,7 +46,7 @@ export function loadManifest(id: DatasetId, fetchFn: typeof fetch = fetch): Prom
     p = (async () => {
       const res = await fetchFn(datasetUrl(id, 'manifest.json'));
       if (!res.ok) throw new Error(`dataset manifest fetch failed (${res.status}) — ${datasetUrl(id, 'manifest.json')}`);
-      return validateManifest(await res.json());
+      return validateManifest(await res.json(), DATASETS.map((d) => d.id));
     })();
     p.catch(() => manifestCache.delete(id));
     manifestCache.set(id, p);

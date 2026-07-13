@@ -2,6 +2,18 @@
 
 Date: 2026-07-12
 Status: implemented (DP-1..DP-8 complete; see tests/ui/scenario-dataset-presets.mjs)
+
+> **SUPERSEDED (2026-07-13, split redefinition):** dataset selection now applies
+> **SCHEMA + METADATA ONLY** — shape, variables (typeAssignment defaulted from
+> the data's natural storage dtype), empty field pipelines, and *appended*
+> provenance metadata (tracked in `state.dataset.seededEntries`, removed on
+> deselect). It no longer applies the curated codec/chunking/interleaving/write
+> config described below; `CuratedDefaults` is deleted from `registry.ts`
+> (entries are now just `{ id, label, dataModel }`). Those curated configs moved
+> into the four top-level FORMAT presets (Parquet-adjacent, Avro-esque,
+> GeoTIFFesque, Zarrish), each a full AppState snapshot carrying its own
+> `dataset` ref. See CLAUDE.md's `dataset-select` bullet for the current
+> behavior. The sections below describing curated-apply are historical.
 Roadmap: `notes/improvement-ideas.md` §2 "Dataset presets (real data)"
 
 ## Overview

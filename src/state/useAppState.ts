@@ -10,13 +10,13 @@ import {
   createElement,
 } from 'react';
 import { produce } from 'immer';
-import { DEFAULT_STATE, makeEmptyState, type AppState, type Variable } from '../types/state.ts';
+import { DEFAULT_STATE, makeEmptyState, reconcileChunkShape, type AppState, type Variable } from '../types/state.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import { loadState, saveState, loadActiveModel, saveActiveModel } from './persistence.ts';
 import { type PresetKey, resolvePreset, saveCustomPreset, loadCustomPreset } from './presets.ts';
 import { consumeShareHash, loadCheckpoint } from './share.ts';
 import { datasetById, loadManifest } from '../datasets/registry.ts';
-import { buildDatasetApplication, type DatasetApplication } from '../datasets/apply.ts';
+import { buildDatasetApplication, removeUnmodifiedSeeded, type DatasetApplication } from '../datasets/apply.ts';
 
 export type AppAction =
   // SET_DATA_MODEL only sets `state.dataModel` — it is intentionally pure
@@ -36,7 +36,7 @@ export type AppAction =
   | { type: 'SET_SHAPE'; shape: number[] }
   | { type: 'ADD_VARIABLE'; variable: Variable }
   | { type: 'REMOVE_VARIABLE'; id: string }
-  | { type: 'UPDATE_VARIABLE'; id: string; changes: Partial<Pick<Variable, 'name' | 'logicalType' | 'typeAssignment'>> }
+  | { type: 'UPDATE_VARIABLE'; id: string; changes: Partial<Pick<Variable, 'name' | 'logicalType' | 'typeAssignment' | 'color'>> }
   // Chunk
   | { type: 'SET_CHUNK_SHAPE'; chunkShape: number[] }
   // Interleave
@@ -64,7 +64,22 @@ export type AppAction =
   | { type: 'APPLY_DATASET'; application: DatasetApplication }
   | { type: 'SET_DATASET_CUSTOM' };
 
+/**
+ * Actions fully blocked while a dataset is active (D3): the schema lock. The
+ * dataset owns shape and the variable set (from its manifest), so these are
+ * no-ops until the user deselects the dataset. UPDATE_VARIABLE is NOT here —
+ * it has a per-field partial lock (name/logicalType locked, typeAssignment
+ * free), enforced explicitly in its own case below. Consulted once, at the
+ * top of the reducer, rather than scattering identical guards per case.
+ */
+const DATASET_LOCKED_ACTIONS = new Set<AppAction['type']>([
+  'SET_SHAPE',
+  'ADD_VARIABLE',
+  'REMOVE_VARIABLE',
+]);
+
 export function reducer(state: AppState, action: AppAction): AppState {
+  if (state.dataset && DATASET_LOCKED_ACTIONS.has(action.type)) return state;
   switch (action.type) {
     case 'SET_DATA_MODEL': {
       // Pure: just sets dataModel. No storage I/O here (SW-4) — see
@@ -85,39 +100,26 @@ export function reducer(state: AppState, action: AppAction): AppState {
       });
 
     // ─── Schema ──────────────────────────────────────────────────────
+    // (SET_SHAPE / ADD_VARIABLE / REMOVE_VARIABLE are dataset-locked at the
+    // top of the reducer via DATASET_LOCKED_ACTIONS.)
     case 'SET_SHAPE': {
-      if (state.dataset) return state;
       const newShape = action.shape;
       if (newShape.length === 0 || newShape.some(d => d <= 0)) {
         return state;
       }
       return produce(state, (draft) => {
-        const oldLen = draft.shape.length;
-        const newLen = newShape.length;
-        const newChunkShape: number[] = [];
-        for (let d = 0; d < newLen; d++) {
-          if (d < oldLen) {
-            // Clamp existing chunk dim to new shape dim
-            newChunkShape.push(Math.min(draft.chunkShape[d], newShape[d]));
-          } else {
-            // New dim: default chunk size = shape size
-            newChunkShape.push(newShape[d]);
-          }
-        }
+        draft.chunkShape = reconcileChunkShape(draft.chunkShape, newShape);
         draft.shape = newShape;
-        draft.chunkShape = newChunkShape;
       });
     }
 
     case 'ADD_VARIABLE':
-      if (state.dataset) return state;
       return produce(state, (draft) => {
         draft.variables.push(action.variable);
         draft.fieldPipelines[action.variable.id] = [];
       });
 
     case 'REMOVE_VARIABLE':
-      if (state.dataset) return state;
       return produce(state, (draft) => {
         const idx = draft.variables.findIndex((v) => v.id === action.id);
         if (idx === -1) return;
@@ -135,6 +137,9 @@ export function reducer(state: AppState, action: AppAction): AppState {
         if (action.changes.name !== undefined && !draft.dataset) v.name = action.changes.name;
         if (action.changes.logicalType !== undefined && !draft.dataset) v.logicalType = action.changes.logicalType;
         if (action.changes.typeAssignment !== undefined) v.typeAssignment = action.changes.typeAssignment;
+        // color is display-only, not part of the manifest-defined schema — applies
+        // unconditionally, even while a dataset locks name/logicalType.
+        if (action.changes.color !== undefined) v.color = action.changes.color;
         // fieldPipelines is keyed by Variable.id (D5), which never changes here —
         // no re-keying needed on rename. (Fixes SW-1.)
       });
@@ -212,24 +217,47 @@ export function reducer(state: AppState, action: AppAction): AppState {
       });
 
     // ─── Dataset presets ────────────────────────────────────────────
+    // APPLY_DATASET sets SCHEMA + METADATA ONLY: shape, variables (new ids,
+    // typeAssignment defaulted from the data's natural storage dtype), empty
+    // fieldPipelines for the new ids, and appended provenance metadata. It
+    // deliberately does NOT touch interleaving/linearization/byteOrder/
+    // chunkPipeline/write — those belong to the top-level format presets.
     case 'APPLY_DATASET': {
       const a = action.application;
       return produce(state, (draft) => {
-        draft.dataset = a.dataset;
+        // Re-applying while a dataset is active: strip the OUTGOING dataset's
+        // still-unmodified seeded entries first, so provenance doesn't pile up.
+        if (draft.dataset) {
+          draft.metadata.customEntries = removeUnmodifiedSeeded(
+            draft.metadata.customEntries,
+            draft.dataset.seededEntries,
+          );
+        }
+        draft.dataset = {
+          id: a.datasetId,
+          attribution: a.attribution,
+          seededEntries: a.seededEntries,
+        };
+        draft.chunkShape = reconcileChunkShape(draft.chunkShape, a.shape);
         draft.shape = a.shape;
-        draft.chunkShape = a.chunkShape;
-        if (a.interleaving !== undefined) draft.interleaving = a.interleaving;
-        if (a.linearization !== undefined) draft.linearization = a.linearization;
         draft.variables = a.variables;
-        draft.fieldPipelines = a.fieldPipelines;
-        draft.chunkPipeline = a.chunkPipeline;
-        draft.metadata.customEntries = a.customEntries;
+        // Fresh empty pipelines for exactly the new variable ids (no stale keys).
+        draft.fieldPipelines = {};
+        for (const v of a.variables) draft.fieldPipelines[v.id] = [];
+        // Append seeded provenance, preserving the user's own entries.
+        draft.metadata.customEntries.push(...a.seededEntries);
       });
     }
 
     case 'SET_DATASET_CUSTOM':
       if (state.dataset === null) return state;
       return produce(state, (draft) => {
+        // Remove only the seeded entries the user hasn't modified; entries
+        // they edited (matched key but changed value) stay.
+        draft.metadata.customEntries = removeUnmodifiedSeeded(
+          draft.metadata.customEntries,
+          draft.dataset!.seededEntries,
+        );
         draft.dataset = null;
       });
 
@@ -415,13 +443,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         // model-scoped). Deliberately does NOT re-snapshot currentState —
         // that would overwrite the very thing being restored.
         const restored = loadCustomPreset(currentState.dataModel);
-        if (!restored) return;
+        if (!restored) {
+          // Part C: the user actively picked 'Custom (restore)'; a silent
+          // no-op is confusing. Name why nothing happened.
+          console.error(`loadPreset('custom'): no valid custom snapshot for model '${currentState.dataModel}' — nothing to restore`);
+          return;
+        }
         dispatch({ type: 'REPLACE_STATE', state: restored });
         return;
       }
 
       const preset = resolvePreset(key);
-      if (!preset) return;
+      if (!preset) {
+        // Part C: surface the owner-reported "preset just doesn't load"
+        // silent-failure path — resolvePreset returned null (validation
+        // failed on the checked-in JSON, a preset-file bug).
+        console.error(`loadPreset('${key}'): resolvePreset returned null — the preset's checked-in JSON failed validation`);
+        return;
+      }
 
       // D10: snapshot current state to its model's custom slot FIRST,
       // before replacing it. This never writes to the
@@ -448,7 +487,11 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     // resolved state" behavior) so the restore isn't lost if the debounced
     // autosave hasn't fired yet before e.g. a demo reload.
     const restored = loadCheckpoint();
-    if (!restored) return;
+    if (!restored) {
+      // Part C: the user clicked Restore; say why nothing happened.
+      console.error('restoreCheckpoint: no valid checkpoint to restore (none saved, or it failed validation)');
+      return;
+    }
     saveActiveModel(restored.dataModel);
     saveState(restored);
     dispatch({ type: 'REPLACE_STATE', state: restored });
@@ -471,7 +514,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       // Same snapshot contract as loadPreset: the pre-apply state is
       // recoverable via 'Custom (restore)'.
       saveCustomPreset(stateRef.current);
-      dispatch({ type: 'APPLY_DATASET', application: buildDatasetApplication(entry, manifest) });
+      dispatch({ type: 'APPLY_DATASET', application: buildDatasetApplication(manifest) });
       return true;
     } catch {
       return false;

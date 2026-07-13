@@ -54,7 +54,7 @@ describe('full pipeline with presetValues', () => {
     const state: AppState = {
       ...structuredClone(DEFAULT_STATE),
       dataModel: 'array',
-      dataset: { id: 'etopo-dem', attribution: 'test' },
+      dataset: { id: 'etopo-dem', attribution: 'test', seededEntries: [] },
       shape: [32, 32], chunkShape: [16, 16],
       variables: [VAR],
       fieldPipelines: { v1: [{ codec: 'delta', params: {} }, { codec: 'zigzag', params: {} }] },
@@ -84,7 +84,7 @@ describe('createPipelineComputer dataset keying', () => {
       ...structuredClone(DEFAULT_STATE),
       dataModel: 'array', shape: [4, 4], chunkShape: [4, 4],
       variables: [VAR], fieldPipelines: { v1: [] },
-      dataset: { id: 'etopo-dem', attribution: 'a' },
+      dataset: { id: 'etopo-dem', attribution: 'a', seededEntries: [] },
     };
     const d1 = compute(base, {}, undefined, preset);
     // same state, client now knows the keys → values omitted from delta
@@ -92,7 +92,7 @@ describe('createPipelineComputer dataset keying', () => {
     const d2 = compute(base, known, undefined, preset);
     expect(d2.values.payload).toBeUndefined();
     // dataset switched → values key changes → payload present
-    const other = { ...base, dataset: { id: 'sst-field', attribution: 'a' } };
+    const other = { ...base, dataset: { id: 'sst-field', attribution: 'a', seededEntries: [] } };
     const preset2 = new Map([['elevation', new Float64Array(16).fill(7)]]);
     const d3 = compute(other, known, undefined, preset2);
     expect(d3.values.key).not.toBe(d1.values.key);
@@ -104,7 +104,7 @@ describe('createPipelineComputer dataset keying', () => {
     const base: AppState = {
       ...structuredClone(DEFAULT_STATE), dataModel: 'array',
       shape: [4, 4], chunkShape: [4, 4], variables: [VAR], fieldPipelines: { v1: [] },
-      dataset: { id: 'etopo-dem', attribution: 'a' },
+      dataset: { id: 'etopo-dem', attribution: 'a', seededEntries: [] },
     };
     expect(() => compute(base, {})).toThrow(/dataset.*not loaded/i);
   });
@@ -127,7 +127,7 @@ describe('createPipelineComputer dataset keying', () => {
       ...structuredClone(DEFAULT_STATE),
       dataModel: 'array', shape: [4, 4], chunkShape: [4, 4],
       variables: [VAR], fieldPipelines: { v1: [] },
-      dataset: { id: 'etopo-dem', attribution: 'a' },
+      dataset: { id: 'etopo-dem', attribution: 'a', seededEntries: [] },
     };
 
     // Compute #1: values payload is present (first time this dataset's key

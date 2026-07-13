@@ -3,9 +3,16 @@ import type {
   DatasetManifest, ManifestVariable, NumericBinDtype,
 } from './types.ts';
 
-const DATASET_IDS: readonly string[] = ['etopo-dem', 'sst-field', 'ghcn-daily'];
-const NUMERIC_DTYPES: readonly string[] = ['int16', 'int32', 'float32', 'float64'];
 const CODES_DTYPES: readonly string[] = ['uint8', 'uint16'];
+
+const READERS: Record<NumericBinDtype, { size: number; read: (dv: DataView, off: number) => number }> = {
+  int16:   { size: 2, read: (dv, o) => dv.getInt16(o, true) },
+  int32:   { size: 4, read: (dv, o) => dv.getInt32(o, true) },
+  float32: { size: 4, read: (dv, o) => dv.getFloat32(o, true) },
+  float64: { size: 8, read: (dv, o) => dv.getFloat64(o, true) },
+};
+
+const NUMERIC_DTYPES: readonly string[] = Object.keys(READERS);
 
 function fail(msg: string): never {
   throw new Error(`dataset manifest invalid: ${msg}`);
@@ -16,10 +23,12 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /** Structural validation of a fetched manifest. Throws (never coerces):
- * a bad manifest is a data-branch bug, not user input — surface it. */
-export function validateManifest(raw: unknown): DatasetManifest {
+ * a bad manifest is a data-branch bug, not user input — surface it.
+ * `knownIds` is passed by the caller (the registry, which owns the id list)
+ * rather than duplicated here. */
+export function validateManifest(raw: unknown, knownIds: readonly string[]): DatasetManifest {
   if (!isRecord(raw)) fail('not an object');
-  if (typeof raw.id !== 'string' || !DATASET_IDS.includes(raw.id)) fail(`unknown id ${JSON.stringify(raw.id)}`);
+  if (typeof raw.id !== 'string' || !knownIds.includes(raw.id)) fail(`unknown id ${JSON.stringify(raw.id)}`);
   if (!Array.isArray(raw.shape) || raw.shape.length === 0 ||
       !raw.shape.every((d) => typeof d === 'number' && Number.isInteger(d) && d > 0)) {
     fail('shape must be positive integers');
@@ -48,13 +57,6 @@ export function validateManifest(raw: unknown): DatasetManifest {
   }
   return raw as unknown as DatasetManifest;
 }
-
-const READERS: Record<NumericBinDtype, { size: number; read: (dv: DataView, off: number) => number }> = {
-  int16:   { size: 2, read: (dv, o) => dv.getInt16(o, true) },
-  int32:   { size: 4, read: (dv, o) => dv.getInt32(o, true) },
-  float32: { size: 4, read: (dv, o) => dv.getFloat32(o, true) },
-  float64: { size: 8, read: (dv, o) => dv.getFloat64(o, true) },
-};
 
 /** Decode a little-endian numeric bin into logical (float64) values.
  * Explicit-LE DataView reads, not typed-array views (platform endianness). */
@@ -109,16 +111,21 @@ export async function fetchDatasetValues(
 ): Promise<Map<string, ValueArray>> {
   const n = manifest.shape.reduce((a, b) => a * b, 1);
   const out = new Map<string, ValueArray>();
-  for (const v of manifest.variables as ManifestVariable[]) {
+  await Promise.all((manifest.variables as ManifestVariable[]).map(async (v) => {
     if (v.kind === 'number') {
       out.set(v.name, decodeNumericBin(await fetchBuf(urlFor(v.file), v.file, fetchFn), v.dtype, n, v.file));
     } else {
-      const dictRes = await fetchFn(urlFor(v.dictFile));
-      if (!dictRes.ok) throw new Error(`dataset asset ${v.dictFile}: fetch failed (${dictRes.status})`);
-      const dict = await dictRes.json();
-      const codes = await fetchBuf(urlFor(v.codesFile), v.codesFile, fetchFn);
+      // Fetch a string column's dict + codes in parallel.
+      const [dict, codes] = await Promise.all([
+        (async () => {
+          const dictRes = await fetchFn(urlFor(v.dictFile));
+          if (!dictRes.ok) throw new Error(`dataset asset ${v.dictFile}: fetch failed (${dictRes.status})`);
+          return dictRes.json();
+        })(),
+        fetchBuf(urlFor(v.codesFile), v.codesFile, fetchFn),
+      ]);
       out.set(v.name, decodeStringColumn(dict, codes, v.codesDtype, n, v.name));
     }
-  }
+  }));
   return out;
 }

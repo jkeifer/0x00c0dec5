@@ -314,7 +314,9 @@ function validateState(state: AppState): AppState {
   // Dataset presets: a persisted dataset ref must name a known dataset whose
   // model matches this state, else it degrades to generated (null) — same
   // graceful-degrade as every other field. (Values are never persisted; the
-  // worker refetches by id.)
+  // worker refetches by id.) `seededEntries` (the provenance entries apply
+  // appended, tracked so deselect can remove exactly them) is tolerated:
+  // malformed/missing entries degrade to [] rather than nulling the whole ref.
   const ds = state.dataset as unknown;
   if (
     !isPlainObject(ds) ||
@@ -323,6 +325,16 @@ function validateState(state: AppState): AppState {
     datasetById(ds.id)?.dataModel !== state.dataModel
   ) {
     state.dataset = null;
+  } else {
+    const raw = Array.isArray(ds.seededEntries) ? ds.seededEntries : [];
+    state.dataset = {
+      id: ds.id,
+      attribution: ds.attribution,
+      seededEntries: raw.filter(
+        (e): e is { key: string; value: string } =>
+          isPlainObject(e) && typeof e.key === 'string' && typeof e.value === 'string',
+      ),
+    };
   }
 
   return state;

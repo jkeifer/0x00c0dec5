@@ -98,8 +98,14 @@ export interface AppState {
    * `attribution` is copied from the manifest at apply time so the UI renders
    * it after a reload without a main-thread manifest refetch. Values are
    * NEVER persisted — the worker fetches+caches them by id.
+   *
+   * `seededEntries` records the provenance entries (source/source_url/
+   * retrieved/license) that APPLY_DATASET appended to metadata.customEntries,
+   * so SET_DATASET_CUSTOM (and a re-apply) can remove exactly those the user
+   * hasn't since modified — matched by key AND value. Malformed persisted
+   * seededEntries degrade to [] (see persistence.ts).
    */
-  dataset: { id: string; attribution: string } | null;
+  dataset: { id: string; attribution: string; seededEntries: { key: string; value: string }[] } | null;
   variables: Variable[];
   /**
    * D5 (remediation-plan.md, Phase 3.1): keyed by Variable.id, not name — names
@@ -150,6 +156,19 @@ export interface AppState {
     rightPaneView: string;
     showDiff: boolean;
   };
+}
+
+/**
+ * Reconcile a chunk shape to a new data shape: clamp each existing chunk dim
+ * to the new shape's per-dim extent, and default any dims the new shape adds
+ * to the full extent. Shared by SET_SHAPE and APPLY_DATASET (both change the
+ * shape and must reconcile chunkShape the same way) and by persistence's
+ * validateState.
+ */
+export function reconcileChunkShape(oldChunkShape: number[], newShape: number[]): number[] {
+  return newShape.map((dim, d) =>
+    d < oldChunkShape.length ? Math.min(oldChunkShape[d], dim) : dim,
+  );
 }
 
 export const DEFAULT_VARIABLES: Variable[] = [
