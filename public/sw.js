@@ -21,6 +21,15 @@ const PYODIDE_CACHE = `0xc-pyodide-${PYODIDE_VERSION}`;
 const PYODIDE_ORIGIN = 'https://cdn.jsdelivr.net';
 const PYODIDE_PATH_PREFIX = `/pyodide/v${PYODIDE_VERSION}/`;
 
+// Dataset presets: real-data assets from the orphan `data` branch. The
+// branch is MUTABLE (branch-name URLs, not SHA-pinned), so unlike the
+// pinned pyodide wheels this must be network-first with cache fallback —
+// cache-first would pin stale data forever. Persistent across app deploys
+// (not keyed to VERSION): the data lifecycle is independent of the app's.
+const DATA_ORIGIN = 'https://raw.githubusercontent.com';
+const DATA_PATH_PREFIX = '/jkeifer/0x00c0dec5/data/';
+const DATA_CACHE = '0xc-data-v1';
+
 // Origins whose GETs we persist: same-origin (the app shell + its assets)
 // plus the pinned Pyodide CDN origin, handled separately below.
 const CACHEABLE_ORIGINS = [self.location.origin];
@@ -35,7 +44,7 @@ self.addEventListener('activate', event => {
             const names = await self.caches.keys();
             await Promise.all(
                 names
-                    .filter(name => name.startsWith('0xc-') && name !== CACHE && name !== PYODIDE_CACHE)
+                    .filter(name => name.startsWith('0xc-') && name !== CACHE && name !== PYODIDE_CACHE && name !== DATA_CACHE)
                     .map(name => self.caches.delete(name))
             );
             await self.clients.claim();
@@ -67,6 +76,30 @@ self.addEventListener('fetch', event => {
                     await cache.put(request, response.clone());
                 }
                 return response;
+            })()
+        );
+        return;
+    }
+    if (url.origin === DATA_ORIGIN) {
+        if (!url.pathname.startsWith(DATA_PATH_PREFIX)) {
+            return;
+        }
+        event.respondWith(
+            (async () => {
+                const cache = await self.caches.open(DATA_CACHE);
+                try {
+                    const response = await fetch(request);
+                    if (response.ok) {
+                        await cache.put(request, response.clone());
+                    }
+                    return response;
+                } catch (error) {
+                    const cached = await cache.match(request);
+                    if (cached) {
+                        return cached;
+                    }
+                    throw error;
+                }
             })()
         );
         return;
