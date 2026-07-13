@@ -1,0 +1,30 @@
+{
+  "id": "sst-field",
+  "shape": [
+    16,
+    16
+  ],
+  "attribution": {
+    "source": "synthetic test fixture",
+    "source_url": "https://example.invalid",
+    "retrieved": "2026-07-12",
+    "license": "n/a (generated)"
+  },
+  "variables": [
+    {
+      "name": "sst",
+      "kind": "number",
+      "dtype": "float32",
+      "file": "sst.bin",
+      "min": 18,
+      "max": 22,
+      "logicalType": {
+        "type": "continuous",
+        "min": 18,
+        "max": 22,
+        "significantFigures": 6,
+        "generation": "smooth"
+      }
+    }
+  ]
+}

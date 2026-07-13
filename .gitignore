@@ -27,3 +27,5 @@ dist-ssr
 tests/ui/screenshots/
 
 src/build-info.js
+
+data-branch-work/

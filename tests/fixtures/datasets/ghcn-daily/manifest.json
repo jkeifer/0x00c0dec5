@@ -1,0 +1,84 @@
+{
+  "id": "ghcn-daily",
+  "shape": [
+    96
+  ],
+  "attribution": {
+    "source": "synthetic test fixture",
+    "source_url": "https://example.invalid",
+    "retrieved": "2026-07-12",
+    "license": "n/a (generated)"
+  },
+  "variables": [
+    {
+      "name": "date",
+      "kind": "number",
+      "dtype": "int32",
+      "file": "date.bin",
+      "min": 20200101,
+      "max": 20200148,
+      "logicalType": {
+        "type": "integer",
+        "min": 20200101,
+        "max": 20200148,
+        "generation": "sorted"
+      }
+    },
+    {
+      "name": "tmax",
+      "kind": "number",
+      "dtype": "int16",
+      "file": "tmax.bin",
+      "min": 120,
+      "max": 180,
+      "logicalType": {
+        "type": "integer",
+        "min": 120,
+        "max": 180,
+        "generation": "smooth"
+      }
+    },
+    {
+      "name": "tmin",
+      "kind": "number",
+      "dtype": "int16",
+      "file": "tmin.bin",
+      "min": 20,
+      "max": 80,
+      "logicalType": {
+        "type": "integer",
+        "min": 20,
+        "max": 80,
+        "generation": "smooth"
+      }
+    },
+    {
+      "name": "prcp",
+      "kind": "number",
+      "dtype": "int16",
+      "file": "prcp.bin",
+      "min": 0,
+      "max": 25,
+      "logicalType": {
+        "type": "integer",
+        "min": 0,
+        "max": 25,
+        "generation": "stepped"
+      }
+    },
+    {
+      "name": "station",
+      "kind": "string",
+      "dictFile": "station.dict.json",
+      "codesFile": "station.codes.bin",
+      "codesDtype": "uint8",
+      "logicalType": {
+        "type": "text",
+        "min": 0,
+        "max": 0,
+        "wordSet": "stations",
+        "generation": "stepped"
+      }
+    }
+  ]
+}

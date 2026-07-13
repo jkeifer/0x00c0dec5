@@ -1,0 +1,29 @@
+{
+  "id": "etopo-dem",
+  "shape": [
+    16,
+    16
+  ],
+  "attribution": {
+    "source": "synthetic test fixture",
+    "source_url": "https://example.invalid",
+    "retrieved": "2026-07-12",
+    "license": "n/a (generated)"
+  },
+  "variables": [
+    {
+      "name": "elevation",
+      "kind": "number",
+      "dtype": "int16",
+      "file": "elevation.bin",
+      "min": 97,
+      "max": 178,
+      "logicalType": {
+        "type": "integer",
+        "min": 97,
+        "max": 178,
+        "generation": "smooth"
+      }
+    }
+  ]
+}
