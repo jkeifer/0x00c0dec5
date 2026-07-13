@@ -1,0 +1,212 @@
+{
+  "dataModel": "tabular",
+  "shape": [
+    144769
+  ],
+  "chunkShape": [
+    65536
+  ],
+  "interleaving": "column",
+  "linearization": "c",
+  "byteOrder": "little",
+  "dataset": {
+    "id": "ghcn-daily",
+    "attribution": "NOAA NCEI GHCN-Daily (4 US stations) · U.S. Government work — public domain",
+    "seededEntries": [
+      {
+        "key": "source",
+        "value": "NOAA NCEI GHCN-Daily (4 US stations)"
+      },
+      {
+        "key": "source_url",
+        "value": "https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily"
+      },
+      {
+        "key": "retrieved",
+        "value": "2026-07-13"
+      },
+      {
+        "key": "license",
+        "value": "U.S. Government work — public domain"
+      }
+    ]
+  },
+  "variables": [
+    {
+      "id": "ghcn-daily-date",
+      "name": "date",
+      "color": "#e06c75",
+      "logicalType": {
+        "type": "integer",
+        "min": 18690101,
+        "max": 20260709,
+        "generation": "sorted"
+      },
+      "typeAssignment": {
+        "storageDtype": "int32"
+      }
+    },
+    {
+      "id": "ghcn-daily-tmax",
+      "name": "tmax",
+      "color": "#61afef",
+      "logicalType": {
+        "type": "integer",
+        "min": -167,
+        "max": 433,
+        "generation": "smooth"
+      },
+      "typeAssignment": {
+        "storageDtype": "int16"
+      }
+    },
+    {
+      "id": "ghcn-daily-tmin",
+      "name": "tmin",
+      "color": "#98c379",
+      "logicalType": {
+        "type": "integer",
+        "min": -261,
+        "max": 289,
+        "generation": "smooth"
+      },
+      "typeAssignment": {
+        "storageDtype": "int16"
+      }
+    },
+    {
+      "id": "ghcn-daily-prcp",
+      "name": "prcp",
+      "color": "#e5c07b",
+      "logicalType": {
+        "type": "integer",
+        "min": 0,
+        "max": 3772,
+        "generation": "stepped"
+      },
+      "typeAssignment": {
+        "storageDtype": "int16"
+      }
+    },
+    {
+      "id": "ghcn-daily-station",
+      "name": "station",
+      "color": "#c678dd",
+      "logicalType": {
+        "type": "text",
+        "min": 0,
+        "max": 0,
+        "wordSet": "stations",
+        "generation": "stepped"
+      },
+      "typeAssignment": {
+        "storageDtype": "char16"
+      }
+    }
+  ],
+  "fieldPipelines": {
+    "ghcn-daily-date": [
+      {
+        "codec": "delta",
+        "params": {}
+      },
+      {
+        "codec": "deflate",
+        "params": {}
+      }
+    ],
+    "ghcn-daily-tmax": [
+      {
+        "codec": "delta",
+        "params": {}
+      },
+      {
+        "codec": "zigzag",
+        "params": {}
+      },
+      {
+        "codec": "deflate",
+        "params": {}
+      }
+    ],
+    "ghcn-daily-tmin": [
+      {
+        "codec": "delta",
+        "params": {}
+      },
+      {
+        "codec": "zigzag",
+        "params": {}
+      },
+      {
+        "codec": "deflate",
+        "params": {}
+      }
+    ],
+    "ghcn-daily-prcp": [
+      {
+        "codec": "rle",
+        "params": {}
+      },
+      {
+        "codec": "deflate",
+        "params": {}
+      }
+    ],
+    "ghcn-daily-station": [
+      {
+        "codec": "dictionary",
+        "params": {}
+      },
+      {
+        "codec": "rle",
+        "params": {}
+      }
+    ]
+  },
+  "chunkPipeline": [],
+  "metadata": {
+    "customEntries": [
+      {
+        "key": "source",
+        "value": "NOAA NCEI GHCN-Daily (4 US stations)"
+      },
+      {
+        "key": "source_url",
+        "value": "https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily"
+      },
+      {
+        "key": "retrieved",
+        "value": "2026-07-13"
+      },
+      {
+        "key": "license",
+        "value": "U.S. Government work — public domain"
+      }
+    ],
+    "serialization": "binary",
+    "include": {
+      "schema": true,
+      "layout": true,
+      "codecs": true,
+      "chunkIndex": true,
+      "descriptive": true,
+      "endianness": true
+    }
+  },
+  "write": {
+    "includeMetadata": true,
+    "magicNumber": "50415231",
+    "partitioning": "single",
+    "metadataPlacement": "footer",
+    "chunkOrder": "row-major",
+    "footerLocator": "trailer"
+  },
+  "ui": {
+    "leftPaneStage": "values",
+    "rightPaneStage": "write",
+    "leftPaneView": "table",
+    "rightPaneView": "hex",
+    "showDiff": false
+  }
+}

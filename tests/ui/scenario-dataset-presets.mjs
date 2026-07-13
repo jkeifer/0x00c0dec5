@@ -1,16 +1,23 @@
-// Regression scenario: dataset presets (dataset-presets project, Task DP-8).
+// Regression scenario: dataset presets + format presets.
 //
-// Covers the six checks from the task brief:
+// Datasets now apply SCHEMA + METADATA ONLY (no codecs); the curated codec/
+// chunking/write configs moved into the four top-level FORMAT presets
+// (Parquet-adjacent, Avro-esque, GeoTIFFesque, Zarrish), each carrying a
+// `dataset` ref so loading one fetches real data.
+//
+// Covers:
 //   1. Tabular dataset select (ghcn-daily): attribution shown, schema locked,
-//      table renders, read succeeds.
-//   2. Compression sanity: curated codecs (delta/zigzag/deflate on the real
-//      DEM data) actually shrink the Encoded stage below the Typed stage.
+//      table renders, read succeeds. (Schema+metadata only — no codecs.)
+//   2. Compression sanity: load the GeoTIFFesque format preset (which carries
+//      the codec config + etopo-dem dataset) and assert Encoded < Typed there.
 //   3. Unlock: selecting "custom" clears the lock and attribution.
 //   4. Persistence: dataset selection survives a reload.
-//   5. Array datasets: etopo-dem and sst-field (zstd, pyodide-backed) both
-//      lock + compute successfully.
+//   5. Array datasets: etopo-dem and sst-field both lock + compute.
 //   6. Failure path: a blocked manifest fetch shows dataset-error and leaves
 //      state on custom rather than partially applying.
+//   7. All four format presets load from the Header preset-select (pins the
+//      owner's "Parquet preset does not load" report): variables appear and
+//      read-status reports success for each. Model-scoped, so we switch models.
 //
 // Run: node tests/ui/scenario-dataset-presets.mjs   (dev server must be running)
 
@@ -126,14 +133,43 @@ async function main() {
   );
   await shot(page, 'dataset-presets-1-ghcn-daily');
 
-  // ─── (2) Compression sanity: Encoded < Typed ─────────────────────────────
+  // ─── (2) Compression sanity via the GeoTIFFesque FORMAT preset ────────────
+  // Datasets no longer apply codecs, so the ghcn dataset above has Encoded ==
+  // Typed. The codec story now lives in the format presets: load GeoTIFFesque
+  // (array, etopo-dem + delta/deflate) on the array model and assert Encoded <
+  // Typed there. deflate is Pyodide-backed — wait for the runtime first.
+  await page.locator('[data-testid="model-toggle-array"]').click();
+  await page.waitForTimeout(500);
+  await waitForPipelineIdle(page, 30_000);
+
+  const deflateReady = await page
+    .waitForFunction(() => {
+      const opt = document.querySelector('option[value="deflate"]');
+      return opt !== null && !opt.disabled;
+    }, { timeout: 180_000 })
+    .then(() => true)
+    .catch(() => false);
+  h.check('(2) compression runtime (deflate) ready before loading GeoTIFFesque', deflateReady);
+
+  await page.locator('[data-testid="preset-select"]').selectOption('geotiffesque');
+  await page.waitForSelector('[data-testid="dataset-loading"]', { state: 'detached', timeout: 60_000 }).catch(() => {});
+  await waitForPipelineIdle(page, 90_000);
+
   const typedBytes = await stageByteCount(page, 1);
   const encodedBytes = await stageByteCount(page, 3);
   h.check(
-    '(2) curated codecs shrink Encoded stage below Typed stage',
+    '(2) GeoTIFFesque preset codecs shrink Encoded stage below Typed stage',
     typedBytes !== null && encodedBytes !== null && encodedBytes < typedBytes,
     `typed=${typedBytes} encoded=${encodedBytes}`,
   );
+  await shot(page, 'dataset-presets-2-geotiffesque');
+
+  // Back to tabular; the ghcn-daily selection from check 1 persisted per-model.
+  await page.locator('[data-testid="model-toggle-tabular"]').click();
+  await page.waitForTimeout(500);
+  await waitForPipelineIdle(page, 30_000);
+  const backToGhcn = await page.locator('[data-testid="dataset-select"]').inputValue();
+  h.check('(2) tabular ghcn-daily selection persisted across the model round-trip', backToGhcn === 'ghcn-daily', backToGhcn);
 
   // ─── (3) Unlock via custom ────────────────────────────────────────────────
   await page.locator('[data-testid="dataset-select"]').selectOption('custom');
@@ -262,6 +298,60 @@ async function main() {
 
   await page.unroute('**/data-dev/datasets/etopo-dem/manifest.json');
   await shot(page, 'dataset-presets-6-failure');
+
+  // ─── (7) All four format presets load from the Header preset-select ───────
+  // Pins the owner's "Parquet preset does not load" report. Presets are
+  // model-scoped, so switch to each preset's model first. Each uses a
+  // Pyodide-backed codec, so the runtime must be ready (it is by now — checks
+  // 2 and 5 already loaded it). We fresh-reload (clears the aborted-route
+  // state and any half-applied dataset) and seed metadata on for both models.
+  await safeReload(page);
+  await seedMergedAndReload(page, {
+    [TABULAR_KEY]: { write: { includeMetadata: true } },
+    [ARRAY_KEY]: { write: { includeMetadata: true } },
+  });
+  await waitForPipelineIdle(page, 30_000);
+
+  const presetsByModel = [
+    { model: 'tabular', presets: ['parquet-adjacent', 'avroesque'] },
+    { model: 'array', presets: ['geotiffesque', 'zarrish'] },
+  ];
+  for (const { model, presets } of presetsByModel) {
+    await page.locator(`[data-testid="model-toggle-${model}"]`).click();
+    await page.waitForTimeout(400);
+    await waitForPipelineIdle(page, 30_000);
+    // Runtime must be ready (deflate/zstd) before loading — presets compress.
+    await page
+      .waitForFunction(() => {
+        const opt = document.querySelector('option[value="deflate"]');
+        return opt !== null && !opt.disabled;
+      }, { timeout: 180_000 })
+      .catch(() => {});
+    for (const key of presets) {
+      const present = await page.locator(`[data-testid="preset-select"] option[value="${key}"]`).count();
+      h.check(`(7) ${key} offered in the ${model} preset-select`, present === 1);
+
+      await page.locator('[data-testid="preset-select"]').selectOption(key);
+      await page.waitForSelector('[data-testid="dataset-loading"]', { state: 'detached', timeout: 60_000 }).catch(() => {});
+      await waitForPipelineIdle(page, 90_000);
+
+      const varCount = await page.locator('[data-testid^="variable-row-"]').count();
+      h.check(`(7) ${key}: variables appear after load`, varCount > 0, `variables=${varCount}`);
+
+      const readStatus = await readStatusText(page);
+      h.check(
+        `(7) ${key}: read-status reports success`,
+        /File parsed successfully/.test(readStatus) && !/Read failed/.test(readStatus),
+        readStatus.slice(0, 120).replace(/\n/g, ' '),
+      );
+      // Return to a clean custom state before the next preset (avoids stacking
+      // dataset locks / snapshots between loads).
+      await page.locator('[data-testid="dataset-select"]').selectOption('custom');
+      await page.waitForTimeout(200);
+      await waitForPipelineIdle(page, 30_000);
+    }
+  }
+  await shot(page, 'dataset-presets-7-all-presets');
 
   // ─── zero pageerrors across the whole session ────────────────────────────
   h.check(

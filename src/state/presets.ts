@@ -1,35 +1,40 @@
 import type { AppState } from '../types/state.ts';
 import { validateExternalState } from './persistence.ts';
-import basicallyParquetRaw from '../presets/basically-parquet.json';
-import basicallyGeotiffRaw from '../presets/basically-geotiff.json';
-import basicallyZarrRaw from '../presets/basically-zarr.json';
+import geotiffesqueRaw from '../presets/geotiffesque.json';
+import zarrishRaw from '../presets/zarrish.json';
+import parquetAdjacentRaw from '../presets/parquet-adjacent.json';
+import avroesqueRaw from '../presets/avroesque.json';
 
 /**
- * D10 (remediation-plan.md, Phase 6.2): built-in presets are checked-in JSON
- * files conforming to the persisted `AppState` shape (see
- * `scripts/gen-presets.ts`, which generated them against the real `AppState`
- * type and validated each one reads back successfully). They are loaded
- * through the exact same `validateExternalState` -> migrate -> default-merge
- * -> validate pipeline as any other persisted state, so a future `AppState`
- * shape change that isn't reflected in these files fails the same way a
- * stale localStorage save would (default-merged, not silently broken) —
- * these files double as loader regression fixtures.
+ * Built-in FORMAT presets: checked-in JSON files conforming to the persisted
+ * `AppState` shape (see `scripts/gen-presets.ts`, which builds them against
+ * the real `AppState` type). Each is a full state snapshot that now carries a
+ * `dataset` ref (loading one fetches real data) with its seeded provenance
+ * entries mirrored in `metadata.customEntries` (so deselect-removal works
+ * after a preset load), plus a curated pipeline/chunking/write config tuned to
+ * its namesake real-world format. They load through the exact same
+ * `validateExternalState` -> migrate -> default-merge -> validate pipeline as
+ * any persisted state, so an `AppState` shape change not reflected in these
+ * files fails the same way a stale save would — these files double as loader
+ * regression fixtures.
  */
-export type PresetKey = 'basically-parquet' | 'basically-geotiff' | 'basically-zarr';
+export type PresetKey = 'geotiffesque' | 'zarrish' | 'parquet-adjacent' | 'avroesque';
 
 /** `dataModel` mirrors each preset JSON's own declared model so the Header
  * can offer only the presets that belong to the active data model (loading a
- * preset never switches models anymore). */
+ * preset never switches models). */
 export const PRESET_OPTIONS: { key: PresetKey; label: string; dataModel: AppState['dataModel'] }[] = [
-  { key: 'basically-parquet', label: 'Basically Parquet', dataModel: 'tabular' },
-  { key: 'basically-geotiff', label: 'Basically GeoTIFF', dataModel: 'array' },
-  { key: 'basically-zarr', label: 'Basically Zarr', dataModel: 'array' },
+  { key: 'parquet-adjacent', label: 'Parquet-adjacent', dataModel: 'tabular' },
+  { key: 'avroesque', label: 'Avro-esque', dataModel: 'tabular' },
+  { key: 'geotiffesque', label: 'GeoTIFFesque', dataModel: 'array' },
+  { key: 'zarrish', label: 'Zarrish', dataModel: 'array' },
 ];
 
 const PRESET_RAW: Record<PresetKey, unknown> = {
-  'basically-parquet': basicallyParquetRaw,
-  'basically-geotiff': basicallyGeotiffRaw,
-  'basically-zarr': basicallyZarrRaw,
+  'geotiffesque': geotiffesqueRaw,
+  'zarrish': zarrishRaw,
+  'parquet-adjacent': parquetAdjacentRaw,
+  'avroesque': avroesqueRaw,
 };
 
 /**

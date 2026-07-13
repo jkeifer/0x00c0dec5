@@ -1,0 +1,111 @@
+{
+  "dataModel": "array",
+  "shape": [
+    1024,
+    1024
+  ],
+  "chunkShape": [
+    256,
+    256
+  ],
+  "interleaving": "column",
+  "linearization": "c",
+  "byteOrder": "little",
+  "dataset": {
+    "id": "etopo-dem",
+    "attribution": "NOAA NCEI ETOPO Global Relief (via ERDDAP) · U.S. Government work — public domain",
+    "seededEntries": [
+      {
+        "key": "source",
+        "value": "NOAA NCEI ETOPO Global Relief (via ERDDAP)"
+      },
+      {
+        "key": "source_url",
+        "value": "https://www.ncei.noaa.gov/products/etopo-global-relief-model"
+      },
+      {
+        "key": "retrieved",
+        "value": "2026-07-13"
+      },
+      {
+        "key": "license",
+        "value": "U.S. Government work — public domain"
+      }
+    ]
+  },
+  "variables": [
+    {
+      "id": "etopo-dem-elevation",
+      "name": "elevation",
+      "color": "#e06c75",
+      "logicalType": {
+        "type": "integer",
+        "min": -1485,
+        "max": 8271,
+        "generation": "smooth"
+      },
+      "typeAssignment": {
+        "storageDtype": "int16"
+      }
+    }
+  ],
+  "fieldPipelines": {
+    "etopo-dem-elevation": [
+      {
+        "codec": "delta",
+        "params": {
+          "order": 1
+        }
+      },
+      {
+        "codec": "deflate",
+        "params": {}
+      }
+    ]
+  },
+  "chunkPipeline": [],
+  "metadata": {
+    "customEntries": [
+      {
+        "key": "source",
+        "value": "NOAA NCEI ETOPO Global Relief (via ERDDAP)"
+      },
+      {
+        "key": "source_url",
+        "value": "https://www.ncei.noaa.gov/products/etopo-global-relief-model"
+      },
+      {
+        "key": "retrieved",
+        "value": "2026-07-13"
+      },
+      {
+        "key": "license",
+        "value": "U.S. Government work — public domain"
+      }
+    ],
+    "serialization": "json",
+    "include": {
+      "schema": true,
+      "layout": true,
+      "codecs": true,
+      "chunkIndex": true,
+      "descriptive": true,
+      "endianness": true
+    }
+  },
+  "write": {
+    "includeMetadata": true,
+    "magicNumber": "49492A00",
+    "partitioning": "single",
+    "metadataPlacement": "header",
+    "chunkOrder": "row-major",
+    "footerLocator": "trailer"
+  },
+  "ui": {
+    "leftPaneStage": "values",
+    "rightPaneStage": "write",
+    "leftPaneView": "grid",
+    "rightPaneView": "hex",
+    "showDiff": false
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "dataModel": "array",
+  "shape": [
+    1024,
+    1024
+  ],
+  "chunkShape": [
+    256,
+    256
+  ],
+  "interleaving": "column",
+  "linearization": "c",
+  "byteOrder": "little",
+  "dataset": {
+    "id": "sst-field",
+    "attribution": "JPL MUR SST v4.1 (via NOAA CoastWatch ERDDAP) · Open data — NASA JPL PO.DAAC",
+    "seededEntries": [
+      {
+        "key": "source",
+        "value": "JPL MUR SST v4.1 (via NOAA CoastWatch ERDDAP)"
+      },
+      {
+        "key": "source_url",
+        "value": "https://podaac.jpl.nasa.gov/dataset/MUR-JPL-L4-GLOB-v4.1"
+      },
+      {
+        "key": "retrieved",
+        "value": "2026-07-13"
+      },
+      {
+        "key": "license",
+        "value": "Open data — NASA JPL PO.DAAC"
+      }
+    ]
+  },
+  "variables": [
+    {
+      "id": "sst-field-sst",
+      "name": "sst",
+      "color": "#e06c75",
+      "logicalType": {
+        "type": "continuous",
+        "min": 27.64,
+        "max": 30.54,
+        "significantFigures": 6,
+        "generation": "smooth"
+      },
+      "typeAssignment": {
+        "storageDtype": "float32"
+      }
+    }
+  ],
+  "fieldPipelines": {
+    "sst-field-sst": [
+      {
+        "codec": "byte-shuffle",
+        "params": {
+          "elementSize": 4
+        }
+      },
+      {
+        "codec": "zstd",
+        "params": {}
+      }
+    ]
+  },
+  "chunkPipeline": [],
+  "metadata": {
+    "customEntries": [
+      {
+        "key": "source",
+        "value": "JPL MUR SST v4.1 (via NOAA CoastWatch ERDDAP)"
+      },
+      {
+        "key": "source_url",
+        "value": "https://podaac.jpl.nasa.gov/dataset/MUR-JPL-L4-GLOB-v4.1"
+      },
+      {
+        "key": "retrieved",
+        "value": "2026-07-13"
+      },
+      {
+        "key": "license",
+        "value": "Open data — NASA JPL PO.DAAC"
+      }
+    ],
+    "serialization": "json",
+    "include": {
+      "schema": true,
+      "layout": true,
+      "codecs": true,
+      "chunkIndex": true,
+      "descriptive": true,
+      "endianness": true
+    }
+  },
+  "write": {
+    "includeMetadata": true,
+    "magicNumber": "",
+    "partitioning": "per-chunk",
+    "metadataPlacement": "sidecar",
+    "chunkOrder": "row-major",
+    "footerLocator": "trailer"
+  },
+  "ui": {
+    "leftPaneStage": "values",
+    "rightPaneStage": "write",
+    "leftPaneView": "grid",
+    "rightPaneView": "hex",
+    "showDiff": false
+  }
+}
