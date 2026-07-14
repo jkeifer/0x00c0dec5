@@ -8,15 +8,14 @@ import avroesqueRaw from '../presets/avroesque.json';
 /**
  * Built-in FORMAT presets: checked-in JSON files conforming to the persisted
  * `AppState` shape (see `scripts/gen-presets.ts`, which builds them against
- * the real `AppState` type). Each is a full state snapshot that now carries a
- * `dataset` ref (loading one fetches real data) with its seeded provenance
- * entries mirrored in `metadata.customEntries` (so deselect-removal works
- * after a preset load), plus a curated pipeline/chunking/write config tuned to
- * its namesake real-world format. They load through the exact same
- * `validateExternalState` -> migrate -> default-merge -> validate pipeline as
- * any persisted state, so an `AppState` shape change not reflected in these
- * files fails the same way a stale save would — these files double as loader
- * regression fixtures.
+ * the real `AppState` type). Each is a full state snapshot with a curated
+ * pipeline/chunking/write config tuned to its namesake real-world format.
+ * Preset variables carry per-variable `source` refs (curated variables fetch
+ * real data), and provenance is baked directly into `metadata.customEntries`.
+ * They load through the exact same `validateExternalState` -> migrate ->
+ * default-merge -> validate pipeline as any persisted state, so an `AppState`
+ * shape change not reflected in these files fails the same way a stale save
+ * would — these files double as loader regression fixtures.
  */
 export type PresetKey = 'geotiffesque' | 'zarrish' | 'parquet-adjacent' | 'avroesque';
 

@@ -132,9 +132,8 @@ export function computeValuesStage(
       // fillFromSource returns a FRESH array (never aliases `entry.values`), so
       // the copy-on-injection discipline (DP-4) is satisfied: the worker's
       // long-lived source cache buffer is never the one transferred/detached on
-      // postMessage. .slice() belt-and-suspenders keeps that true even for the
-      // exact-fit no-op case where a naive fill might return the input.
-      variableValues.set(v.name, fillFromSource(entry.values, entry.naturalShape, shape).slice());
+      // postMessage.
+      variableValues.set(v.name, fillFromSource(entry.values, entry.naturalShape, shape));
     } else {
       variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements, undefined, shape));
     }

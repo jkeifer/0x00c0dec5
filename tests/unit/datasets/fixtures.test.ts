@@ -12,7 +12,7 @@ const ROOT = path.join(__dirname, '..', '..', 'fixtures', 'datasets');
 // Datasets are a catalog of curated variables now; a row binds by `source`.
 // The fixture roundtrip is codec-free (no Pyodide runtime needed). Curated
 // pipeline/chunking configs live in the top-level format presets, round-tripped
-// in-browser by tests/ui/scenario-dataset-presets.mjs.
+// in-browser by tests/ui/scenario-curated-variables.mjs.
 const KNOWN_IDS = DATASETS.map((d) => d.id);
 
 function fsFetch(id: string): typeof fetch {

@@ -20,7 +20,7 @@
  *
  * NOTE: the in-browser codec round-trip (all four presets use a Pyodide-backed
  * codec — deflate/zstd — which throws in node) is pinned by
- * tests/ui/scenario-dataset-presets.mjs, not here.
+ * tests/ui/scenario-curated-variables.mjs, not here.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';

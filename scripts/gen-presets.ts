@@ -21,7 +21,7 @@
  * so `computePipelineStages` can't round-trip them here. `assertReads` skips
  * the pipeline check for presets whose pipelines touch a Pyodide codec and
  * only type-checks + writes them; the real in-browser round-trip is pinned by
- * tests/ui/scenario-dataset-presets.mjs. Presets with no Pyodide codec still
+ * tests/ui/scenario-curated-variables.mjs. Presets with no Pyodide codec still
  * get the full read-back assertion, fed a `sourceValues` map built from the
  * fixture data exactly the way the worker builds it.
  */
@@ -87,7 +87,7 @@ async function buildSourceValues(state: AppState): Promise<SourceValues | undefi
 
 async function assertReads(name: string, state: AppState): Promise<void> {
   if (usesPyodideCodec(state)) {
-    console.log(`${name}: SKIP read-back (Pyodide-backed codec — validated in-browser by scenario-dataset-presets.mjs)`);
+    console.log(`${name}: SKIP read-back (Pyodide-backed codec — validated in-browser by scenario-curated-variables.mjs)`);
     return;
   }
   const sourceValues = await buildSourceValues(state);
