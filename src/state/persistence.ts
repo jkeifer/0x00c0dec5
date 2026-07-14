@@ -125,22 +125,16 @@ function migrateState(raw: Record<string, unknown>): AppState | null {
       delete legacyMeta.includeChunkIndex;
     }
 
-    // Curated-variables migration: pre-change states carry a schema-wide
-    // `dataset: { id, ... }` and bind values by id prefix. Convert each
-    // prefixed variable to an explicit per-variable `source` ref, then drop
-    // `dataset`. Seeded metadata entries need no handling — they already live
-    // in `customEntries` as ordinary entries.
+    // Curated-variables rework: pre-change states carry a schema-wide
+    // `dataset: { id, ... }` and bind values by id prefix — a shape the
+    // current per-variable `source` ref model can't cleanly represent.
+    // Rather than migrate, drop these states entirely (caller degrades to
+    // defaults). `dataset: null`/absent needs no handling — `deepMergeDefaults`
+    // already drops it since `dataset` isn't a `DEFAULT_STATE` field.
     const rawDataset = (state as unknown as Record<string, unknown>).dataset;
-    if (isPlainObject(rawDataset) && typeof rawDataset.id === 'string' && Array.isArray(state.variables)) {
-      const datasetId = rawDataset.id;
-      const prefix = `${datasetId}-`;
-      for (const v of state.variables as unknown as Array<Record<string, unknown>>) {
-        if (typeof v.id === 'string' && v.id.startsWith(prefix) && typeof v.name === 'string') {
-          v.source = { datasetId, variableName: v.name };
-        }
-      }
+    if (rawDataset !== null && rawDataset !== undefined) {
+      return null;
     }
-    delete (state as unknown as Record<string, unknown>).dataset;
 
     return state;
   } catch {

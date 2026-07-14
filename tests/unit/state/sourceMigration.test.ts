@@ -3,16 +3,15 @@ import { validateExternalState } from '../../../src/state/persistence.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
 
 /**
- * Curated-variables migration: a persisted PRE-change state carries a
- * schema-wide `dataset: { id, attribution, seededEntries }` and binds values by
- * id prefix (`{dataset.id}-{name}`). `migrateState` converts each prefixed
- * variable to an explicit per-variable `source` ref and drops `dataset`.
- * Seeded metadata entries need no handling — they already live in
- * `customEntries` as ordinary entries.
+ * Curated-variables rework: pre-change states carried a schema-wide
+ * `dataset: { id, attribution, seededEntries }` and bound values by id
+ * prefix (`{dataset.id}-{name}`). That shape is incompatible with the
+ * current per-variable `source` ref model, so `migrateState` drops the whole
+ * state (returns `null`, degrading to defaults) rather than converting it.
  */
-describe('dataset -> per-variable source migration', () => {
-  // A raw pre-change etopo-dem (array) state literal.
-  const raw = {
+describe('pre-curated-variables dataset states are dropped, not migrated', () => {
+  // A raw pre-change etopo-dem (array) state literal — `dataset` active.
+  const rawWithDataset = {
     ...JSON.parse(JSON.stringify(DEFAULT_STATE)),
     dataModel: 'array',
     shape: [16, 16],
@@ -48,26 +47,55 @@ describe('dataset -> per-variable source migration', () => {
     },
   };
 
-  const migrated = validateExternalState(raw, 'array');
-
-  it('the prefixed variable gains the right source ref', () => {
-    const elev = migrated!.variables.find((v) => v.name === 'elevation')!;
-    expect(elev.source).toEqual({ datasetId: 'etopo-dem', variableName: 'elevation' });
+  it('validateExternalState returns null for a state with a non-null dataset', () => {
+    expect(validateExternalState(rawWithDataset, 'array')).toBeNull();
   });
 
-  it('the custom (unprefixed) variable is untouched — no source', () => {
-    const noise = migrated!.variables.find((v) => v.name === 'noise')!;
-    expect(noise.source).toBeUndefined();
+  it('a state with `dataset: null` loads normally, variables intact as custom rows', () => {
+    const raw = {
+      ...JSON.parse(JSON.stringify(DEFAULT_STATE)),
+      dataModel: 'array',
+      shape: [16, 16],
+      chunkShape: [16, 16],
+      dataset: null,
+      variables: [
+        {
+          id: 'var_123', name: 'noise', color: '#61afef',
+          logicalType: { type: 'integer', min: 0, max: 5, generation: 'random' },
+          typeAssignment: { storageDtype: 'int16' },
+        },
+      ],
+    };
+
+    const loaded = validateExternalState(raw, 'array');
+    expect(loaded).not.toBeNull();
+    expect(loaded!.variables).toHaveLength(1);
+    expect(loaded!.variables[0]).toMatchObject({ id: 'var_123', name: 'noise' });
+    expect(loaded!.variables[0].source).toBeUndefined();
+    expect('dataset' in (loaded as unknown as Record<string, unknown>)).toBe(false);
   });
 
-  it('the schema-wide dataset field is gone from the result', () => {
-    expect('dataset' in (migrated as unknown as Record<string, unknown>)).toBe(false);
-  });
+  it('a current-shape state with per-variable `source` refs loads unchanged', () => {
+    const raw = {
+      ...JSON.parse(JSON.stringify(DEFAULT_STATE)),
+      dataModel: 'array',
+      shape: [16, 16],
+      chunkShape: [16, 16],
+      variables: [
+        {
+          id: 'var_elev', name: 'elevation', color: '#e06c75',
+          logicalType: { type: 'integer', min: 97, max: 178, generation: 'smooth' },
+          typeAssignment: { storageDtype: 'int16' },
+          source: { datasetId: 'etopo-dem', variableName: 'elevation' },
+        },
+      ],
+    };
 
-  it('customEntries are preserved verbatim (seeded entries stay as ordinary entries)', () => {
-    expect(migrated!.metadata.customEntries).toEqual([
-      { key: 'source', value: 'NOAA NCEI ETOPO' },
-      { key: 'license', value: 'public domain' },
-    ]);
+    const loaded = validateExternalState(raw, 'array');
+    expect(loaded).not.toBeNull();
+    const elev = loaded!.variables.find((v) => v.name === 'elevation');
+    // `etopo-dem`/`elevation` is a real 'array'-model catalog entry, so the
+    // source ref resolves and survives normalizeSource unchanged.
+    expect(elev?.source).toEqual({ datasetId: 'etopo-dem', variableName: 'elevation' });
   });
 });
