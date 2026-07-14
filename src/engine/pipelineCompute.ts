@@ -1,5 +1,6 @@
-import { isDatasetVariable, type AppState, type Variable } from '../types/state.ts';
+import type { AppState, Variable } from '../types/state.ts';
 import type { CodecStep } from '../types/codecs.ts';
+import { fillFromSource } from './sourceFill.ts';
 import type {
   PipelineStage,
   Chunk,
@@ -98,39 +99,42 @@ export interface ValuesStageResult {
   variableValues: Map<string, ValueArray>;
 }
 
+/** A curated variable's fetched values plus its natural (source) shape. Keyed
+ * `${datasetId}/${variableName}` — exactly the `Variable.source` ref. The
+ * worker builds this map before compute; missing/wrong-length entries fail
+ * loud. */
+export type SourceValues = Map<string, { values: ValueArray; naturalShape: number[] }>;
+
 export function computeValuesStage(
   shape: number[],
   variables: Variable[],
   byteOrder: 'little' | 'big' = 'little',
-  presetValues?: Map<string, ValueArray>,
-  datasetId?: string | null,
+  sourceValues?: SourceValues,
 ): ValuesStageResult {
   const totalElements = shape.reduce((a, b) => a * b, 1);
 
   const variableValues = new Map<string, ValueArray>();
   for (const v of variables) {
-    // Per-variable contract (Task 5): binding is by id PREFIX, not name. A
-    // dataset-backed variable (id `{datasetId}-{name}`) MUST get its real
-    // preset values — a missing name or wrong length means the persisted
-    // schema and the fetched assets disagree, so fail loudly (surfaces via the
-    // worker's ResultErr path) rather than silently substituting generated
-    // values. Custom variables the user added alongside the dataset generate,
-    // even while a dataset is active — so a custom var named identically to a
-    // dataset one is NOT handed dataset values (hijack guard).
-    if (presetValues && isDatasetVariable(datasetId, v)) {
-      const vals = presetValues.get(v.name);
-      if (!vals) throw new Error(`dataset values: variable "${v.name}" not present in the loaded dataset`);
-      if (vals.length !== totalElements) {
-        throw new Error(`dataset values: variable "${v.name}" expected ${totalElements} values, got ${vals.length} — re-select the dataset`);
+    // Per-variable contract: binding is by the explicit `source` ref only. A
+    // curated variable MUST get its real source values (fail loud if the ref
+    // wasn't loaded — surfaces via the worker's ResultErr path); custom
+    // variables generate. Renaming a row never hijacks or loses values.
+    if (v.source) {
+      const key = `${v.source.datasetId}/${v.source.variableName}`;
+      const entry = sourceValues?.get(key);
+      if (!entry) {
+        throw new Error(`source values: variable "${v.name}" ref "${key}" not loaded before compute`);
       }
-      // Copy, don't alias: this array flows into the values payload's
-      // logicalValues, whose .buffer collectTransferables() puts on
-      // postMessage's transfer list — that DETACHES it on send. presetValues
-      // comes from the worker's long-lived datasetValuesCache (PERF-1
-      // evict-on-send), so aliasing it here would detach the cache's own
-      // buffer, leaving it length-0 for the next compute. .slice() copies
-      // both Float64Array (fresh buffer) and LogicalValue[] (fresh array).
-      variableValues.set(v.name, vals.slice());
+      const srcTotal = entry.naturalShape.reduce((a, b) => a * b, 1);
+      if (entry.values.length !== srcTotal) {
+        throw new Error(`source values: variable "${v.name}" ref "${key}" expected ${srcTotal} values (natural shape), got ${entry.values.length}`);
+      }
+      // fillFromSource returns a FRESH array (never aliases `entry.values`), so
+      // the copy-on-injection discipline (DP-4) is satisfied: the worker's
+      // long-lived source cache buffer is never the one transferred/detached on
+      // postMessage. .slice() belt-and-suspenders keeps that true even for the
+      // exact-fit no-op case where a naive fill might return the input.
+      variableValues.set(v.name, fillFromSource(entry.values, entry.naturalShape, shape).slice());
     } else {
       variableValues.set(v.name, generateValues(v.name, v.logicalType, totalElements, undefined, shape));
     }
@@ -453,7 +457,7 @@ function buildStageSources(
 export function computePipelineStages(
   state: AppState,
   onStage?: (stage: StageName, ms: number) => void,
-  presetValues?: Map<string, ValueArray>,
+  sourceValues?: SourceValues,
 ): PipelineResult {
   const timed = <T,>(stage: StageName, fn: () => T): T => {
     if (!onStage) return fn();
@@ -463,7 +467,7 @@ export function computePipelineStages(
     return out;
   };
 
-  const values = timed('values', () => computeValuesStage(state.shape, state.variables, state.byteOrder, presetValues, state.dataset?.id ?? null));
+  const values = timed('values', () => computeValuesStage(state.shape, state.variables, state.byteOrder, sourceValues));
   const typed = timed('typed', () => computeTypedStage(state.shape, state.variables, values.variableValues, state.byteOrder));
   const linearized = timed('linearized', () => computeLinearizedStage(
     state.shape,
@@ -583,7 +587,7 @@ export function createPipelineComputer(): (
   state: AppState,
   knownKeys?: StageKnownKeys,
   onStage?: (stage: StageName, ms: number) => void,
-  presetValues?: Map<string, ValueArray>,
+  sourceValues?: SourceValues,
 ) => PipelineDelta {
   const cache = new Map<StageName, { key: string; value: unknown }>();
 
@@ -596,12 +600,10 @@ export function createPipelineComputer(): (
     return { value, key, hit: false };
   };
 
-  return (state, knownKeys = {}, onStage, presetValues) => {
-    if (state.dataset && !presetValues) {
-      // The worker resolves values before calling compute; hitting this means
-      // a caller skipped that step.
-      throw new Error(`dataset "${state.dataset.id}" values not loaded before compute`);
-    }
+  return (state, knownKeys = {}, onStage, sourceValues) => {
+    // Per-variable fail-loud lives in computeValuesStage: a variable with a
+    // `source` ref but no matching loaded entry throws there. No schema-wide
+    // guard needed.
     // memo() has already run (and decided hit vs. miss) by the time `report`
     // sees it, so per the brief: report 0ms for a hit, and the wall-clock
     // time actually spent for a miss (measured by the caller wrapping the
@@ -617,8 +619,10 @@ export function createPipelineComputer(): (
       'values',
       // buildLogicalValuesStage writes the Values-stage display bytes with
       // state.byteOrder, so the Values stage's OUTPUT bytes depend on it.
-      { shape: state.shape, variables: state.variables, byteOrder: state.byteOrder, datasetId: state.dataset?.id ?? null },
-      () => computeValuesStage(state.shape, state.variables, state.byteOrder, presetValues, state.dataset?.id ?? null),
+      // `variables` carries each row's `source` ref, so a source change busts
+      // the memo (values content itself was never keyed — unchanged).
+      { shape: state.shape, variables: state.variables, byteOrder: state.byteOrder },
+      () => computeValuesStage(state.shape, state.variables, state.byteOrder, sourceValues),
     );
     const values = report('values', t0, valuesM);
 

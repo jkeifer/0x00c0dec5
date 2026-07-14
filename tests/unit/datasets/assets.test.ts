@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  validateManifest, decodeNumericBin, decodeStringColumn, fetchDatasetValues,
+  validateManifest, decodeNumericBin, decodeStringColumn, fetchDatasetValues, fetchDatasetVariable,
 } from '../../../src/datasets/assets.ts';
 import type { DatasetManifest } from '../../../src/datasets/types.ts';
 
@@ -95,5 +95,26 @@ describe('fetchDatasetValues', () => {
     const m = { ...MANIFEST, variables: [{ ...MANIFEST.variables[0], file: 'missing.bin' }] };
     await expect(fetchDatasetValues(m, (f) => `http://x/${f}`, fakeFetch))
       .rejects.toThrow(/missing\.bin.*404/);
+  });
+});
+
+describe('fetchDatasetVariable', () => {
+  const files = new Map<string, ArrayBuffer | string>([
+    ['elevation.bin', le16([-3, 0, 7, 9])],
+  ]);
+  const fakeFetch = ((url: string) => {
+    const key = url.split('/').pop()!;
+    const body = files.get(key);
+    if (body === undefined) return Promise.resolve(new Response(null, { status: 404 }));
+    return Promise.resolve(new Response(body));
+  }) as unknown as typeof fetch;
+
+  it('fetches and decodes one named variable', async () => {
+    const vals = await fetchDatasetVariable(MANIFEST, 'elevation', (f) => `http://x/${f}`, fakeFetch);
+    expect(Array.from(vals as Float64Array)).toEqual([-3, 0, 7, 9]);
+  });
+  it('throws on an unknown variable name', async () => {
+    await expect(fetchDatasetVariable(MANIFEST, 'nope', (f) => `http://x/${f}`, fakeFetch))
+      .rejects.toThrow(/no variable named "nope"/);
   });
 });

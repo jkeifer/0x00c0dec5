@@ -3,11 +3,10 @@ import type { DatasetId, DatasetManifest, NumericBinDtype } from './types.ts';
 import { validateManifest } from './assets.ts';
 
 /**
- * A dataset preset now supplies only its identity, label, and data model.
- * Applying one sets SCHEMA + METADATA only (see `buildDatasetApplication`);
- * the curated pipeline/chunking/interleaving configs that used to live here
- * moved into the top-level format presets (src/presets/*.json), which carry a
- * `dataset` ref of their own.
+ * A dataset is now just a catalog of curated variables (see CURATED_VARIABLES).
+ * Its registry entry supplies only identity, label, and data model. Variables
+ * bind to it per-row via `Variable.source`; presets (src/presets/*.json) do the
+ * composing.
  */
 export interface DatasetRegistryEntry {
   id: DatasetId;

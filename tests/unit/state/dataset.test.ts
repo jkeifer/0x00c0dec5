@@ -2,221 +2,124 @@ import { describe, it, expect } from 'vitest';
 import { reducer } from '../../../src/state/useAppState.ts';
 import { validateExternalState } from '../../../src/state/persistence.ts';
 import { DEFAULT_STATE, type AppState, type Variable } from '../../../src/types/state.ts';
-import { buildDatasetApplication } from '../../../src/datasets/apply.ts';
-import type { DatasetManifest } from '../../../src/datasets/types.ts';
-
-const MANIFEST: DatasetManifest = {
-  id: 'ghcn-daily',
-  shape: [4],
-  attribution: { source: 'NOAA', source_url: 'u', retrieved: '2026-07-12', license: 'PD' },
-  variables: [
-    { name: 'date', kind: 'number', dtype: 'int32', file: 'date.bin', min: 1, max: 4,
-      logicalType: { type: 'integer', min: 1, max: 4, generation: 'sorted' } },
-  ],
-};
-const APPLICATION = buildDatasetApplication(MANIFEST);
-const SEEDED = [
-  { key: 'source', value: 'NOAA' },
-  { key: 'source_url', value: 'u' },
-  { key: 'retrieved', value: '2026-07-12' },
-  { key: 'license', value: 'PD' },
-];
-
-// A second dataset (etopo-dem, array) for the re-apply swap test.
-const ETOPO_MANIFEST: DatasetManifest = {
-  id: 'etopo-dem',
-  shape: [4],
-  attribution: { source: 'ETOPO', source_url: 'e', retrieved: '2026-01-01', license: 'PD2' },
-  variables: [
-    { name: 'elevation', kind: 'number', dtype: 'int16', file: 'elevation.bin', min: 0, max: 9,
-      logicalType: { type: 'integer', min: 0, max: 9, generation: 'smooth' } },
-  ],
-};
-const ETOPO_APPLICATION = buildDatasetApplication(ETOPO_MANIFEST);
+import { curatedVariable } from '../../../src/datasets/registry.ts';
 
 function base(overrides: Partial<AppState> = {}): AppState {
   return { ...structuredClone(DEFAULT_STATE), ...overrides };
 }
 
-function applied(state: AppState = base()) {
-  return reducer(state, { type: 'APPLY_DATASET', application: APPLICATION });
-}
+// A custom (generated) row.
+const CUSTOM: Variable = {
+  id: 'v1', name: 'noise', color: '#fff',
+  logicalType: { type: 'integer', min: 0, max: 5, generation: 'random' },
+  typeAssignment: { storageDtype: 'int16' },
+};
 
-describe('APPLY_DATASET — schema + metadata only', () => {
-  it('sets dataset ref (with seededEntries), shape, variables, empty pipelines', () => {
-    const s = applied();
-    expect(s.dataset).toEqual({ id: 'ghcn-daily', attribution: 'NOAA · PD', seededEntries: SEEDED });
-    expect(s.shape).toEqual([4]);
-    expect(s.variables.map((v) => v.name)).toEqual(['date']);
-    expect(s.variables[0].id).toBe('ghcn-daily-date');
-    expect(s.variables[0].typeAssignment.storageDtype).toBe('int32');
-    expect(Object.keys(s.fieldPipelines)).toEqual(['ghcn-daily-date']);
-    expect(s.fieldPipelines['ghcn-daily-date']).toEqual([]);
+// The elevation ref (etopo-dem, array model) — a real catalog entry.
+const ELEV_REF = { datasetId: 'etopo-dem' as const, variableName: 'elevation' };
+
+describe('UPDATE_VARIABLE — source set/clear', () => {
+  function stateWith(v: Variable, model: AppState['dataModel'] = 'array'): AppState {
+    return base({ dataModel: model, variables: [v], fieldPipelines: { [v.id]: [] } });
+  }
+
+  it('setting source pulls the catalog logicalType (deep copy) and defaults typeAssignment from the natural dtype', () => {
+    const s = reducer(stateWith(CUSTOM), { type: 'UPDATE_VARIABLE', id: 'v1', changes: { source: ELEV_REF } });
+    const v = s.variables[0];
+    expect(v.source).toEqual(ELEV_REF);
+    const cat = curatedVariable(ELEV_REF)!;
+    expect(v.logicalType).toEqual(cat.logicalType);
+    expect(v.logicalType).not.toBe(cat.logicalType); // deep copy, not shared ref
+    expect(v.typeAssignment.storageDtype).toBe(cat.dtype); // int16
   });
 
-  it('appends seeded provenance entries, preserving the user\'s own entries', () => {
-    const s = applied(base({
-      metadata: { ...DEFAULT_STATE.metadata, customEntries: [{ key: 'mine', value: 'keep' }] },
-    }));
-    expect(s.metadata.customEntries).toEqual([{ key: 'mine', value: 'keep' }, ...SEEDED]);
+  it('setting a string source defaults typeAssignment to char16', () => {
+    // station is a text curated var (tabular). Use a tabular custom row.
+    const s = reducer(
+      stateWith(CUSTOM, 'tabular'),
+      { type: 'UPDATE_VARIABLE', id: 'v1', changes: { source: { datasetId: 'ghcn-daily', variableName: 'station' } } },
+    );
+    expect(s.variables[0].typeAssignment.storageDtype).toBe('char16');
+    expect(s.variables[0].logicalType.type).toBe('text');
   });
 
-  it('does NOT touch interleaving / linearization / byteOrder / chunkPipeline / write', () => {
-    const start = base({
-      interleaving: 'row',
-      linearization: 'morton',
-      byteOrder: 'big',
-      chunkPipeline: [{ codec: 'rle', params: {} }],
-      write: { ...DEFAULT_STATE.write, magicNumber: 'CAFE', metadataPlacement: 'footer' },
+  it('while source is set, logicalType changes are ignored (single lock point)', () => {
+    const bound = reducer(stateWith(CUSTOM), { type: 'UPDATE_VARIABLE', id: 'v1', changes: { source: ELEV_REF } });
+    const attempt = reducer(bound, {
+      type: 'UPDATE_VARIABLE', id: 'v1',
+      changes: { logicalType: { type: 'text', min: 0, max: 0, generation: 'random' } },
     });
-    const s = applied(start);
-    expect(s.interleaving).toBe('row');
-    expect(s.linearization).toBe('morton');
-    expect(s.byteOrder).toBe('big');
-    expect(s.chunkPipeline).toEqual([{ codec: 'rle', params: {} }]);
-    expect(s.write.magicNumber).toBe('CAFE');
-    expect(s.write.metadataPlacement).toBe('footer');
+    expect(attempt.variables[0].logicalType).toEqual(bound.variables[0].logicalType);
   });
 
-  it('reconciles chunkShape to the new shape (clamped per-dim), like SET_SHAPE', () => {
-    // Start 2-D with a big chunk; applying a 1-D [4] dataset clamps to [4].
-    const s = applied(base({ shape: [32, 32], chunkShape: [16, 16] }));
-    expect(s.chunkShape).toEqual([4]);
+  it('name stays editable on a curated row', () => {
+    const bound = reducer(stateWith(CUSTOM), { type: 'UPDATE_VARIABLE', id: 'v1', changes: { source: ELEV_REF } });
+    const renamed = reducer(bound, { type: 'UPDATE_VARIABLE', id: 'v1', changes: { name: 'terrain' } });
+    expect(renamed.variables[0].name).toBe('terrain');
+    expect(renamed.variables[0].source).toEqual(ELEV_REF); // still bound
+  });
+
+  it('typeAssignment stays editable on a curated row', () => {
+    const bound = reducer(stateWith(CUSTOM), { type: 'UPDATE_VARIABLE', id: 'v1', changes: { source: ELEV_REF } });
+    const retyped = reducer(bound, { type: 'UPDATE_VARIABLE', id: 'v1', changes: { typeAssignment: { storageDtype: 'int32' } } });
+    expect(retyped.variables[0].typeAssignment.storageDtype).toBe('int32');
+  });
+
+  it('clearing source (null) keeps current logicalType and unlocks the row', () => {
+    const bound = reducer(stateWith(CUSTOM), { type: 'UPDATE_VARIABLE', id: 'v1', changes: { source: ELEV_REF } });
+    const lt = bound.variables[0].logicalType;
+    const cleared = reducer(bound, { type: 'UPDATE_VARIABLE', id: 'v1', changes: { source: null } });
+    expect(cleared.variables[0].source).toBeUndefined();
+    expect(cleared.variables[0].logicalType).toEqual(lt); // kept as a starting point
+    // now editable again
+    const edited = reducer(cleared, {
+      type: 'UPDATE_VARIABLE', id: 'v1',
+      changes: { logicalType: { type: 'text', min: 0, max: 0, generation: 'random' } },
+    });
+    expect(edited.variables[0].logicalType.type).toBe('text');
+  });
+
+  it('an unknown ref is ignored (no source set)', () => {
+    const s = reducer(stateWith(CUSTOM), {
+      type: 'UPDATE_VARIABLE', id: 'v1',
+      changes: { source: { datasetId: 'etopo-dem', variableName: 'nope' } },
+    });
+    expect(s.variables[0].source).toBeUndefined();
   });
 });
 
-describe('re-apply swaps seeded entries', () => {
-  it('removes the previous dataset\'s unmodified seeded entries before appending the new one\'s', () => {
-    const first = applied();
-    expect(first.metadata.customEntries).toEqual(SEEDED);
-    const second = reducer(first, { type: 'APPLY_DATASET', application: ETOPO_APPLICATION });
-    // ghcn's seeded entries gone, etopo's present.
-    expect(second.metadata.customEntries).toEqual([
-      { key: 'source', value: 'ETOPO' },
-      { key: 'source_url', value: 'e' },
-      { key: 'retrieved', value: '2026-01-01' },
-      { key: 'license', value: 'PD2' },
-    ]);
-    expect(second.dataset!.id).toBe('etopo-dem');
-  });
-
-  it('a modified seeded entry survives a re-apply', () => {
-    const first = applied();
-    // User edits the license value.
-    const edited = reducer(first, {
-      type: 'UPDATE_METADATA_ENTRY',
-      index: first.metadata.customEntries.findIndex((e) => e.key === 'license'),
-      value: 'edited',
-    });
-    const second = reducer(edited, { type: 'APPLY_DATASET', application: ETOPO_APPLICATION });
-    expect(second.metadata.customEntries).toContainEqual({ key: 'license', value: 'edited' });
+describe('schema actions have no dataset conditions', () => {
+  it('SET_SHAPE works even with a curated variable present', () => {
+    const s = base({ dataModel: 'array', variables: [{ ...CUSTOM, source: ELEV_REF }], fieldPipelines: { v1: [] } });
+    expect(reducer(s, { type: 'SET_SHAPE', shape: [9, 9] }).shape).toEqual([9, 9]);
   });
 });
 
-describe('schema lock while dataset active (Task 5: shape locked; compose allowed)', () => {
-  const CUSTOM_VAR: Variable = {
-    id: 'x', name: 'x', color: '#fff',
-    logicalType: { type: 'integer', min: 0, max: 1, generation: 'random' },
-    typeAssignment: { storageDtype: 'int16' },
-  };
+describe('persistence — source validation', () => {
+  function withVar(v: Variable, model: AppState['dataModel'] = 'array'): unknown {
+    return { ...base({ dataModel: model }), variables: [v], fieldPipelines: { [v.id]: [] } };
+  }
 
-  it('SET_SHAPE is still a no-op (dataset owns shape)', () => {
-    const s = applied();
-    expect(reducer(s, { type: 'SET_SHAPE', shape: [9] })).toBe(s);
+  it('keeps a valid, model-matching source ref', () => {
+    const s = validateExternalState(withVar({ ...CUSTOM, source: ELEV_REF }), 'array');
+    expect(s?.variables[0].source).toEqual(ELEV_REF);
   });
 
-  it('ADD_VARIABLE appends a custom variable (with an empty pipeline)', () => {
-    const s = applied();
-    const out = reducer(s, { type: 'ADD_VARIABLE', variable: CUSTOM_VAR });
-    expect(out.variables.map((v) => v.id)).toEqual(['ghcn-daily-date', 'x']);
-    expect(out.fieldPipelines['x']).toEqual([]);
+  it('drops a source whose dataModel does not match (row degrades to custom, keeps everything else)', () => {
+    // etopo-dem is an array dataset; a tabular state referencing it must drop it.
+    const s = validateExternalState(withVar({ ...CUSTOM, source: ELEV_REF }, 'tabular'), 'tabular');
+    expect(s?.variables[0].source).toBeUndefined();
+    expect(s?.variables[0].name).toBe('noise'); // rest intact
   });
 
-  it('REMOVE_VARIABLE removes a dataset-backed variable', () => {
-    const s = applied();
-    const out = reducer(s, { type: 'REMOVE_VARIABLE', id: 'ghcn-daily-date' });
-    expect(out.variables).toHaveLength(0);
+  it('drops a source that names no curated variable', () => {
+    const s = validateExternalState(withVar({ ...CUSTOM, source: { datasetId: 'etopo-dem', variableName: 'nope' } }), 'array');
+    expect(s?.variables[0].source).toBeUndefined();
   });
 
-  it('UPDATE_VARIABLE strips name/logicalType on a dataset-backed row, keeps typeAssignment', () => {
-    const s = applied();
-    const out = reducer(s, {
-      type: 'UPDATE_VARIABLE', id: 'ghcn-daily-date',
-      changes: { name: 'hax', typeAssignment: { storageDtype: 'int16' } },
-    });
-    expect(out.variables[0].name).toBe('date');
-    expect(out.variables[0].typeAssignment.storageDtype).toBe('int16');
-  });
-
-  it('UPDATE_VARIABLE renames a CUSTOM variable added alongside the dataset', () => {
-    const s = reducer(applied(), { type: 'ADD_VARIABLE', variable: CUSTOM_VAR });
-    const out = reducer(s, {
-      type: 'UPDATE_VARIABLE', id: 'x',
-      changes: { name: 'renamed', logicalType: { type: 'text', min: 0, max: 0, generation: 'random' } },
-    });
-    const custom = out.variables.find((v) => v.id === 'x')!;
-    expect(custom.name).toBe('renamed');
-    expect(custom.logicalType.type).toBe('text');
-  });
-});
-
-describe('SET_DATASET_CUSTOM — deselect', () => {
-  it('clears dataset, removes seeded entries, keeps schema as starting point', () => {
-    const s = reducer(applied(), { type: 'SET_DATASET_CUSTOM' });
-    expect(s.dataset).toBeNull();
-    expect(s.shape).toEqual([4]);
-    expect(s.variables).toHaveLength(1);
-    // Seeded entries removed on deselect.
-    expect(s.metadata.customEntries).toEqual([]);
-    // unlocked again
-    expect(reducer(s, { type: 'SET_SHAPE', shape: [9] }).shape).toEqual([9]);
-  });
-
-  it('keeps a modified seeded entry and the user\'s own entries', () => {
-    const applied1 = applied(base({
-      metadata: { ...DEFAULT_STATE.metadata, customEntries: [{ key: 'mine', value: 'keep' }] },
-    }));
-    // Edit the source value; leave the rest seeded.
-    const edited = reducer(applied1, {
-      type: 'UPDATE_METADATA_ENTRY',
-      index: applied1.metadata.customEntries.findIndex((e) => e.key === 'source'),
-      value: 'user-edited',
-    });
-    const s = reducer(edited, { type: 'SET_DATASET_CUSTOM' });
-    expect(s.metadata.customEntries).toEqual([
-      { key: 'mine', value: 'keep' },
-      { key: 'source', value: 'user-edited' },
-    ]);
-  });
-});
-
-describe('persistence validation', () => {
-  it('passes a known, model-matching dataset through, defaulting seededEntries', () => {
-    const s = validateExternalState(base({ dataset: { id: 'ghcn-daily', attribution: 'a', seededEntries: SEEDED } }), 'tabular');
-    expect(s?.dataset).toEqual({ id: 'ghcn-daily', attribution: 'a', seededEntries: SEEDED });
-  });
-  it('tolerates a dataset ref with missing seededEntries (degrades to [])', () => {
-    const s = validateExternalState({ ...base(), dataset: { id: 'ghcn-daily', attribution: 'a' } }, 'tabular');
-    expect(s?.dataset).toEqual({ id: 'ghcn-daily', attribution: 'a', seededEntries: [] });
-  });
-  it('drops malformed seededEntries to [] without nulling the ref', () => {
-    const s = validateExternalState({
-      ...base(),
-      dataset: { id: 'ghcn-daily', attribution: 'a', seededEntries: [{ key: 'ok', value: 'v' }, { nope: 1 }, 'garbage'] },
-    }, 'tabular');
-    expect(s?.dataset).toEqual({ id: 'ghcn-daily', attribution: 'a', seededEntries: [{ key: 'ok', value: 'v' }] });
-  });
-  it.each([
-    ['unknown id', { id: 'nope', attribution: 'a', seededEntries: [] }],
-    ['wrong model', { id: 'etopo-dem', attribution: 'a', seededEntries: [] }], // array dataset in tabular state
-    ['malformed', { id: 42 }],
-    ['string', 'ghcn-daily'],
-  ])('drops %s to null', (_l, dataset) => {
-    const s = validateExternalState({ ...base(), dataset }, 'tabular');
-    expect(s?.dataset).toBeNull();
-  });
-  it('defaults missing dataset to null', () => {
-    const s = validateExternalState(base(), 'tabular');
-    expect(s?.dataset).toBeNull();
+  it('drops a structurally-malformed source without rejecting the variable', () => {
+    const s = validateExternalState(withVar({ ...CUSTOM, source: { datasetId: 'etopo-dem' } as never }), 'array');
+    expect(s?.variables[0].source).toBeUndefined();
+    expect(s?.variables[0].name).toBe('noise');
   });
 });

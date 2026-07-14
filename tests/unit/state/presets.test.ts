@@ -12,8 +12,8 @@
  * Covers:
  *  - each preset's checked-in JSON validates cleanly through the same loader
  *    pipeline as any persisted state, zero fields defaulted away;
- *  - each preset declares its dataset ref (id + seededEntries mirrored in
- *    customEntries), so deselect-removal works after a load;
+ *  - each dataset-backed preset variable carries its expected `source` ref, and
+ *    provenance keys live in customEntries;
  *  - resolvePreset / PRESET_OPTIONS shape;
  *  - the preset-load flow (custom snapshot saved, other-model slot preserved)
  *    via `useAppState`'s `loadPreset`.
@@ -82,12 +82,15 @@ const PRESET_MODEL: Record<PresetKey, AppState['dataModel']> = {
   'avroesque': 'tabular',
 };
 
-const PRESET_DATASET: Record<PresetKey, string> = {
-  'geotiffesque': 'etopo-dem',
-  'zarrish': 'sst-field',
-  'parquet-adjacent': 'ghcn-daily',
-  'avroesque': 'ghcn-daily',
+// Expected curated `source` refs per preset (variableName -> datasetId).
+const PRESET_SOURCES: Record<PresetKey, { name: string; datasetId: string }[]> = {
+  'geotiffesque': [{ name: 'elevation', datasetId: 'etopo-dem' }],
+  'zarrish': [{ name: 'sst', datasetId: 'sst-field' }],
+  'parquet-adjacent': ['date', 'tmax', 'tmin', 'prcp', 'station'].map((name) => ({ name, datasetId: 'ghcn-daily' })),
+  'avroesque': ['date', 'tmax', 'tmin', 'prcp', 'station'].map((name) => ({ name, datasetId: 'ghcn-daily' })),
 };
+
+const PRESET_PROVENANCE_KEYS = ['source', 'source_url', 'retrieved', 'license'];
 
 // ─── Preset JSON validates cleanly (zero fields defaulted away) ─────────
 
@@ -101,21 +104,23 @@ describe('preset JSON — validates cleanly through the loader pipeline', () => 
   }
 });
 
-// ─── Each preset resolves non-null with its declared dataset ──────────────
+// ─── Each dataset-backed variable carries its source ref; provenance baked ──
 
-describe('preset — dataset ref + seeded provenance mirrored in customEntries', () => {
+describe('preset — per-variable source refs + provenance in customEntries', () => {
   for (const key of Object.keys(PRESET_RAW) as PresetKey[]) {
-    it(`${key}: resolves non-null, dataset id = ${PRESET_DATASET[key]}, seededEntries mirrored in customEntries`, () => {
+    it(`${key}: each dataset-backed variable carries the expected source ref`, () => {
       const s = resolvePreset(key);
       expect(s).not.toBeNull();
-      expect(s!.dataset).not.toBeNull();
-      expect(s!.dataset!.id).toBe(PRESET_DATASET[key]);
-      expect(s!.dataset!.seededEntries.length).toBeGreaterThan(0);
-      // Every seeded entry is present in customEntries — so SET_DATASET_CUSTOM
-      // can remove exactly them after a preset load.
-      for (const e of s!.dataset!.seededEntries) {
-        expect(s!.metadata.customEntries).toContainEqual(e);
+      const byName = Object.fromEntries(s!.variables.map((v) => [v.name, v]));
+      for (const { name, datasetId } of PRESET_SOURCES[key]) {
+        expect(byName[name].source).toEqual({ datasetId, variableName: name });
       }
+    });
+
+    it(`${key}: provenance keys present in customEntries`, () => {
+      const s = resolvePreset(key);
+      const keys = new Set(s!.metadata.customEntries.map((e) => e.key));
+      for (const k of PRESET_PROVENANCE_KEYS) expect(keys.has(k)).toBe(true);
     });
   }
 });
@@ -138,15 +143,15 @@ describe('preset contents — format fidelity', () => {
 
     expect(s.variables.map((v) => v.name).sort()).toEqual(['elevation', 'hillshade', 'slope']);
     const elev = s.variables.find((v) => v.name === 'elevation')!;
-    expect(elev.id).toBe('etopo-dem-elevation');
+    expect(elev.source).toEqual({ datasetId: 'etopo-dem', variableName: 'elevation' });
     expect(elev.typeAssignment.storageDtype).toBe('int16');
 
-    // The two generated bands must NOT carry the dataset-id prefix (so they
-    // generate rather than bind to etopo-dem — Task 5's composition contract).
+    // The two generated bands must NOT carry a source (so they generate rather
+    // than bind to etopo-dem — the composition contract).
     const slope = s.variables.find((v) => v.name === 'slope')!;
     const hillshade = s.variables.find((v) => v.name === 'hillshade')!;
-    expect(slope.id.startsWith('etopo-dem-')).toBe(false);
-    expect(hillshade.id.startsWith('etopo-dem-')).toBe(false);
+    expect(slope.source).toBeUndefined();
+    expect(hillshade.source).toBeUndefined();
     expect(slope.logicalType.generation).toBe('smooth');
     expect(hillshade.logicalType.generation).toBe('smooth');
     expect(slope.color).not.toBe(elev.color);
@@ -275,14 +280,15 @@ function renderApp() {
 }
 
 describe('loadPreset — flow', () => {
-  it('loading a built-in preset replaces state with the preset contents (incl. dataset ref)', () => {
+  it('loading a built-in preset replaces state with the preset contents (incl. source refs)', () => {
     const { result } = renderApp();
     act(() => {
       result.current.loadPreset('parquet-adjacent');
     });
     expect(result.current.state.dataModel).toBe('tabular');
     expect(result.current.state.write.metadataPlacement).toBe('footer');
-    expect(result.current.state.dataset!.id).toBe('ghcn-daily');
+    const date = result.current.state.variables.find((v) => v.name === 'date')!;
+    expect(date.source).toEqual({ datasetId: 'ghcn-daily', variableName: 'date' });
   });
 
   it('loading a preset snapshots the PRE-LOAD state to its model\'s custom slot first', () => {
@@ -311,22 +317,6 @@ describe('loadPreset — flow', () => {
       result.current.loadPreset('custom');
     });
     expect(result.current.state.shape).toEqual([55]);
-  });
-
-  it('after loading a preset (dataset active), deselecting removes exactly the seeded entries', () => {
-    const { result } = renderApp();
-    act(() => {
-      result.current.loadPreset('parquet-adjacent');
-    });
-    const seeded = result.current.state.dataset!.seededEntries;
-    expect(seeded.length).toBeGreaterThan(0);
-    act(() => {
-      result.current.selectCustomDataset();
-    });
-    expect(result.current.state.dataset).toBeNull();
-    for (const e of seeded) {
-      expect(result.current.state.metadata.customEntries).not.toContainEqual(e);
-    }
   });
 
   it('loading a preset does NOT touch either model\'s saved state slot', () => {

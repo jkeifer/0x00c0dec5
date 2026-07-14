@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { isDatasetVariable, type Variable, type LogicalTypeConfig, type LogicalType, type WordSetKey } from '../../types/state.ts';
+import { type Variable, type VariableSource, type LogicalTypeConfig, type LogicalType, type WordSetKey } from '../../types/state.ts';
+import { CURATED_VARIABLES, curatedVariable, DATASETS } from '../../datasets/registry.ts';
 import { wordSetMaxLength } from '../../engine/generate.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
@@ -11,12 +12,8 @@ interface SchemaEditorProps {
   dataModel: 'tabular' | 'array';
   onAddVariable: () => void;
   onRemoveVariable: (id: string) => void;
-  onUpdateVariable: (id: string, changes: Partial<Pick<Variable, 'name' | 'logicalType' | 'typeAssignment' | 'color'>>) => void;
+  onUpdateVariable: (id: string, changes: Partial<Pick<Variable, 'name' | 'logicalType' | 'typeAssignment' | 'color'>> & { source?: VariableSource | null }) => void;
   onShapeChange: (shape: number[]) => void;
-  dataset: { id: string; attribution: string } | null;
-  datasetOptions: { id: string; label: string }[];
-  datasetStatus: { loading: boolean; error: string | null };
-  onSelectDataset: (id: string | 'custom') => void;
 }
 
 const LOGICAL_TYPES: { value: LogicalType; label: string }[] = [
@@ -66,11 +63,14 @@ export function SchemaEditor({
   onRemoveVariable,
   onUpdateVariable,
   onShapeChange,
-  dataset,
-  datasetOptions,
-  datasetStatus,
-  onSelectDataset,
 }: SchemaEditorProps) {
+  // Curated variables for the active model, grouped by dataset for the per-row
+  // source dropdown's optgroups.
+  const datasetsForModel = DATASETS.filter((d) => d.dataModel === dataModel);
+  const curatedByDataset = datasetsForModel.map((d) => ({
+    label: d.label,
+    variables: CURATED_VARIABLES.filter((c) => c.dataModel === dataModel && c.datasetId === d.id),
+  })).filter((g) => g.variables.length > 0);
   const duplicateNames = new Set<string>();
   const seen = new Set<string>();
   for (const v of variables) {
@@ -83,53 +83,9 @@ export function SchemaEditor({
     onUpdateVariable(v.id, { logicalType: newType });
   }
 
-  // Shape stays dataset-owned; variable add/remove/rename are now per-row
-  // (Task 5): a dataset-backed row (id `{datasetId}-name`) locks name/logical
-  // type, custom rows the user added alongside are fully editable, and add is
-  // always available while a dataset is active.
-  const datasetLocked = dataset !== null;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
-      {/* Dataset picker: real-data presets, Custom (generated) last */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm }}>
-        <span style={{ fontSize: fontSizes.sm, color: colors.textSecondary, minWidth: 40 }}>Data</span>
-        <select
-          value={dataset?.id ?? 'custom'}
-          disabled={datasetStatus.loading}
-          onChange={(e) => onSelectDataset(e.target.value)}
-          data-testid="dataset-select"
-          style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer', flex: 1, minWidth: 0 }}
-        >
-          {datasetOptions.map((d) => (
-            <option key={d.id} value={d.id}>{d.label}</option>
-          ))}
-          <option value="custom">Custom (generated)</option>
-        </select>
-      </div>
-      {datasetStatus.loading && (
-        <div data-testid="dataset-loading" style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
-          loading dataset…
-        </div>
-      )}
-      {datasetStatus.error && (
-        <div
-          data-testid="dataset-error"
-          style={{
-            background: colors.warningDim, borderLeft: `2px solid ${colors.warning}`,
-            borderRadius: radii.sm, padding: spacing.xs, fontSize: fontSizes.xs, color: colors.warning,
-          }}
-        >
-          {datasetStatus.error}
-        </div>
-      )}
-      {dataset && (
-        <div data-testid="dataset-attribution" style={{ fontSize: fontSizes.xs, color: colors.textTertiary, fontStyle: 'italic' }}>
-          {dataset.attribution} · schema fixed by dataset
-        </div>
-      )}
-
-      {/* Shape inputs */}
+      {/* Shape inputs — always editable (curated data tiles/crops to any shape) */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
         {dataModel === 'tabular' ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: spacing.sm }}>
@@ -140,7 +96,6 @@ export function SchemaEditor({
               min={1}
               value={shape[0]}
               onValue={(n) => onShapeChange([Math.max(1, Math.trunc(n))])}
-              disabled={datasetLocked}
               data-testid="shape-input"
               style={{ ...inputStyle(), width: 60 }}
             />
@@ -162,40 +117,37 @@ export function SchemaEditor({
                     newShape[d] = Math.max(1, Math.trunc(n));
                     onShapeChange(newShape);
                   }}
-                  disabled={datasetLocked}
                   data-testid={`shape-input-${d}`}
                   style={{ ...inputStyle(), width: 60 }}
                 />
               </div>
             ))}
-            {!datasetLocked && (
-              <div style={{ display: 'flex', gap: spacing.xs }}>
+            <div style={{ display: 'flex', gap: spacing.xs }}>
+              <button
+                onClick={() => onShapeChange([...shape, 4])}
+                style={{
+                  ...inputStyle(fontSizes.xs),
+                  cursor: 'pointer',
+                  color: colors.accent,
+                  background: 'transparent',
+                }}
+              >
+                + Dim
+              </button>
+              {shape.length > 1 && (
                 <button
-                  onClick={() => onShapeChange([...shape, 4])}
+                  onClick={() => onShapeChange(shape.slice(0, -1))}
                   style={{
                     ...inputStyle(fontSizes.xs),
                     cursor: 'pointer',
-                    color: colors.accent,
+                    color: colors.textSecondary,
                     background: 'transparent',
                   }}
                 >
-                  + Dim
+                  - Dim
                 </button>
-                {shape.length > 1 && (
-                  <button
-                    onClick={() => onShapeChange(shape.slice(0, -1))}
-                    style={{
-                      ...inputStyle(fontSizes.xs),
-                      cursor: 'pointer',
-                      color: colors.textSecondary,
-                      background: 'transparent',
-                    }}
-                  >
-                    - Dim
-                  </button>
-                )}
-              </div>
-            )}
+              )}
+            </div>
           </>
         )}
       </div>
@@ -237,9 +189,11 @@ export function SchemaEditor({
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
           {variables.map((v, varIdx) => {
             const hasWarning = !v.name || duplicateNames.has(v.name);
-            // Per-row lock: only a dataset-backed variable freezes name/logical
-            // type. Custom variables added alongside the dataset stay editable.
-            const rowLocked = isDatasetVariable(dataset?.id, v);
+            // Curated rows lock the logicalType-family controls only (name/color
+            // stay editable). Drive the existing `rowLocked` disabled wiring
+            // from Boolean(v.source).
+            const rowLocked = Boolean(v.source);
+            const catalog = v.source ? curatedVariable(v.source) : undefined;
             // For text, 'smooth' means drifting through the sorted word set
             // rather than a numeric random walk.
             const genDesc = v.logicalType.type === 'text' && v.logicalType.generation === 'smooth'
@@ -271,7 +225,6 @@ export function SchemaEditor({
                     value={v.name}
                     placeholder="name"
                     onChange={(e) => onUpdateVariable(v.id, { name: e.target.value })}
-                    disabled={rowLocked}
                     data-testid={`variable-name-${varIdx}`}
                     style={{
                       ...inputStyle(),
@@ -298,6 +251,46 @@ export function SchemaEditor({
                       x
                     </button>
                 </div>
+
+                {/* Source row: Custom (generated) or a curated variable,
+                    grouped by dataset. Selecting a source binds the row (locks
+                    logicalType); 'custom' clears it. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
+                  <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>src</span>
+                  <select
+                    value={v.source ? `${v.source.datasetId}/${v.source.variableName}` : 'custom'}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === 'custom') {
+                        onUpdateVariable(v.id, { source: null });
+                      } else {
+                        const [datasetId, variableName] = val.split('/');
+                        onUpdateVariable(v.id, { source: { datasetId: datasetId as VariableSource['datasetId'], variableName } });
+                      }
+                    }}
+                    data-testid={`variable-source-${varIdx}`}
+                    style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer', flex: 1, minWidth: 0 }}
+                  >
+                    <option value="custom">Custom (generated)</option>
+                    {curatedByDataset.map((g) => (
+                      <optgroup key={g.label} label={g.label}>
+                        {g.variables.map((c) => (
+                          <option key={`${c.datasetId}/${c.name}`} value={`${c.datasetId}/${c.name}`}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                </div>
+                {catalog && (
+                  <div
+                    data-testid={`variable-source-attribution-${varIdx}`}
+                    style={{ fontSize: fontSizes.xs, color: colors.textTertiary, fontStyle: 'italic' }}
+                  >
+                    {catalog.attribution}
+                  </div>
+                )}
 
                 {/* Logical type + params row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>

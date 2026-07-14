@@ -8,11 +8,11 @@
  * shape can never drift from what the app actually reads/writes) and writes it
  * to `src/presets/*.json`. Re-run this any time `AppState`'s shape changes.
  *
- * Each preset now carries a `dataset` ref (so loading it fetches real data)
- * with its seeded provenance entries mirrored in `metadata.customEntries` (so
- * SET_DATASET_CUSTOM's "remove unmodified seeded entries" works after a load).
- * The variable schema (name/logicalType/typeAssignment) mirrors each dataset's
- * manifest exactly — at runtime the worker overrides values by name.
+ * Each preset bakes curated data sources into its variable entries via
+ * `Variable.source = { datasetId, variableName }` (so loading it fetches real
+ * data) and carries provenance as ordinary `metadata.customEntries`. The
+ * variable schema (name/logicalType/typeAssignment) mirrors each dataset's
+ * manifest exactly — at runtime the worker binds values by the source ref.
  *
  * NOTE (round-trip validation): deflate, gzip, and zstd are Pyodide-backed
  * codecs (`runPyodideCodec`) that throw synchronously when the runtime isn't
@@ -22,18 +22,24 @@
  * the pipeline check for presets whose pipelines touch a Pyodide codec and
  * only type-checks + writes them; the real in-browser round-trip is pinned by
  * tests/ui/scenario-dataset-presets.mjs. Presets with no Pyodide codec still
- * get the full read-back assertion.
+ * get the full read-back assertion, fed a `sourceValues` map built from the
+ * fixture data exactly the way the worker builds it.
  */
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import type { AppState, Variable } from '../src/types/state.ts';
+import type { AppState, Variable, VariableSource } from '../src/types/state.ts';
 import type { CodecStep } from '../src/types/codecs.ts';
-import { computePipelineStages } from '../src/hooks/usePipeline.ts';
+import { computePipelineStages, type SourceValues } from '../src/hooks/usePipeline.ts';
+import { validateManifest, fetchDatasetVariable } from '../src/datasets/assets.ts';
 import { colors } from '../src/theme.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.join(__dirname, '..', 'src', 'presets');
+const fixtureRoot = path.join(__dirname, '..', 'tests', 'fixtures', 'datasets');
+// Hardcoded (rather than imported from registry.ts, which reads import.meta.env
+// and can't run under plain node/tsx).
+const KNOWN_IDS = ['etopo-dem', 'sst-field', 'ghcn-daily'];
 
 const PYODIDE_CODECS = new Set(['deflate', 'gzip', 'zstd']);
 
@@ -45,12 +51,47 @@ function usesPyodideCodec(state: AppState): boolean {
   return all.some((s) => PYODIDE_CODECS.has(s.codec));
 }
 
-function assertReads(name: string, state: AppState): void {
+/** Load the fixture manifest for a dataset id. */
+function loadFixtureManifest(id: string) {
+  return validateManifest(
+    JSON.parse(readFileSync(path.join(fixtureRoot, id, 'manifest.json'), 'utf-8')),
+    KNOWN_IDS,
+  );
+}
+
+/** Filesystem-backed fetch of a fixture asset (mirrors fixtures.test.ts). */
+function fsFetch(id: string): typeof fetch {
+  return (async (url: string | URL | Request) => {
+    const file = String(url).split('/').pop()!;
+    const buf = readFileSync(path.join(fixtureRoot, id, file));
+    return new Response(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+  }) as typeof fetch;
+}
+
+/** Build the worker-shaped sourceValues map for a state's `source` refs from
+ * fixture data. */
+async function buildSourceValues(state: AppState): Promise<SourceValues | undefined> {
+  const refs = new Map<string, VariableSource>();
+  for (const v of state.variables) {
+    if (v.source) refs.set(`${v.source.datasetId}/${v.source.variableName}`, v.source);
+  }
+  if (refs.size === 0) return undefined;
+  const out: SourceValues = new Map();
+  for (const [key, ref] of refs) {
+    const manifest = loadFixtureManifest(ref.datasetId);
+    const values = await fetchDatasetVariable(manifest, ref.variableName, (f) => `fixture://${ref.datasetId}/${f}`, fsFetch(ref.datasetId));
+    out.set(key, { values, naturalShape: manifest.shape });
+  }
+  return out;
+}
+
+async function assertReads(name: string, state: AppState): Promise<void> {
   if (usesPyodideCodec(state)) {
     console.log(`${name}: SKIP read-back (Pyodide-backed codec — validated in-browser by scenario-dataset-presets.mjs)`);
     return;
   }
-  const result = computePipelineStages(state);
+  const sourceValues = await buildSourceValues(state);
+  const result = computePipelineStages(state, undefined, sourceValues);
   if (!result.readResult.success) {
     const r = result.readResult;
     throw new Error(`Preset "${name}" failed to read back: ${r.reason} — ${r.message}`);
@@ -58,47 +99,35 @@ function assertReads(name: string, state: AppState): void {
   console.log(`${name}: read OK, ${result.files.length} file(s), reconstructed ${result.readResult.reconstructedValues.size} variable(s)`);
 }
 
-function write(name: string, state: AppState): void {
-  assertReads(name, state);
+async function write(name: string, state: AppState): Promise<void> {
+  await assertReads(name, state);
   const file = path.join(outDir, `${name}.json`);
   writeFileSync(file, JSON.stringify(state, null, 2) + '\n', 'utf-8');
   console.log(`wrote ${file}`);
 }
 
-// ─── Dataset refs (seeded provenance mirrors the data-branch manifests) ──────
+// ─── Provenance entries (baked into customEntries; no seeding machinery) ─────
 
-const ETOPO_DATASET: NonNullable<AppState['dataset']> = {
-  id: 'etopo-dem',
-  attribution: 'NOAA NCEI ETOPO Global Relief (via ERDDAP) · U.S. Government work — public domain',
-  seededEntries: [
-    { key: 'source', value: 'NOAA NCEI ETOPO Global Relief (via ERDDAP)' },
-    { key: 'source_url', value: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
-    { key: 'retrieved', value: '2026-07-13' },
-    { key: 'license', value: 'U.S. Government work — public domain' },
-  ],
-};
+const ETOPO_PROVENANCE = [
+  { key: 'source', value: 'NOAA NCEI ETOPO Global Relief (via ERDDAP)' },
+  { key: 'source_url', value: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
+  { key: 'retrieved', value: '2026-07-13' },
+  { key: 'license', value: 'U.S. Government work — public domain' },
+];
 
-const SST_DATASET: NonNullable<AppState['dataset']> = {
-  id: 'sst-field',
-  attribution: 'JPL MUR SST v4.1 (via NOAA CoastWatch ERDDAP) · Open data — NASA JPL PO.DAAC',
-  seededEntries: [
-    { key: 'source', value: 'JPL MUR SST v4.1 (via NOAA CoastWatch ERDDAP)' },
-    { key: 'source_url', value: 'https://podaac.jpl.nasa.gov/dataset/MUR-JPL-L4-GLOB-v4.1' },
-    { key: 'retrieved', value: '2026-07-13' },
-    { key: 'license', value: 'Open data — NASA JPL PO.DAAC' },
-  ],
-};
+const SST_PROVENANCE = [
+  { key: 'source', value: 'JPL MUR SST v4.1 (via NOAA CoastWatch ERDDAP)' },
+  { key: 'source_url', value: 'https://podaac.jpl.nasa.gov/dataset/MUR-JPL-L4-GLOB-v4.1' },
+  { key: 'retrieved', value: '2026-07-13' },
+  { key: 'license', value: 'Open data — NASA JPL PO.DAAC' },
+];
 
-const GHCN_DATASET: NonNullable<AppState['dataset']> = {
-  id: 'ghcn-daily',
-  attribution: 'NOAA NCEI GHCN-Daily (4 US stations) · U.S. Government work — public domain',
-  seededEntries: [
-    { key: 'source', value: 'NOAA NCEI GHCN-Daily (4 US stations)' },
-    { key: 'source_url', value: 'https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily' },
-    { key: 'retrieved', value: '2026-07-13' },
-    { key: 'license', value: 'U.S. Government work — public domain' },
-  ],
-};
+const GHCN_PROVENANCE = [
+  { key: 'source', value: 'NOAA NCEI GHCN-Daily (4 US stations)' },
+  { key: 'source_url', value: 'https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily' },
+  { key: 'retrieved', value: '2026-07-13' },
+  { key: 'license', value: 'U.S. Government work — public domain' },
+];
 
 const DEFAULT_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
 
@@ -120,6 +149,7 @@ const DEFAULT_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: 
 const geotiffVariables: Variable[] = [
   {
     id: 'etopo-dem-elevation', name: 'elevation', color: colors.palette[0],
+    source: { datasetId: 'etopo-dem', variableName: 'elevation' },
     logicalType: { type: 'integer', min: -1485, max: 8271, generation: 'smooth' },
     typeAssignment: { storageDtype: 'int16' },
   },
@@ -142,7 +172,6 @@ const geotiffesque: AppState = {
   interleaving: 'row',
   linearization: 'c',
   byteOrder: 'little',
-  dataset: ETOPO_DATASET,
   variables: geotiffVariables,
   // Row mode: per-field pipelines are inactive; the shared chunk pipeline runs.
   fieldPipelines: {
@@ -152,7 +181,7 @@ const geotiffesque: AppState = {
   },
   chunkPipeline: [{ codec: 'deflate', params: {} }],
   metadata: {
-    customEntries: [...ETOPO_DATASET.seededEntries],
+    customEntries: [...ETOPO_PROVENANCE],
     serialization: 'binary',
     include: DEFAULT_INCLUDE,
   },
@@ -183,6 +212,7 @@ const geotiffesque: AppState = {
 const zarrVariables: Variable[] = [
   {
     id: 'sst-field-sst', name: 'sst', color: colors.palette[0],
+    source: { datasetId: 'sst-field', variableName: 'sst' },
     logicalType: { type: 'continuous', min: 27.64, max: 30.54, significantFigures: 6, generation: 'smooth' },
     typeAssignment: { storageDtype: 'float32' },
   },
@@ -195,7 +225,6 @@ const zarrish: AppState = {
   interleaving: 'column',
   linearization: 'c',
   byteOrder: 'little',
-  dataset: SST_DATASET,
   variables: zarrVariables,
   fieldPipelines: {
     'sst-field-sst': [
@@ -205,7 +234,7 @@ const zarrish: AppState = {
   },
   chunkPipeline: [],
   metadata: {
-    customEntries: [...SST_DATASET.seededEntries],
+    customEntries: [...SST_PROVENANCE],
     serialization: 'json',
     include: DEFAULT_INCLUDE,
   },
@@ -238,26 +267,31 @@ const zarrish: AppState = {
 const parquetVariables: Variable[] = [
   {
     id: 'ghcn-daily-date', name: 'date', color: colors.palette[0],
+    source: { datasetId: 'ghcn-daily', variableName: 'date' },
     logicalType: { type: 'integer', min: 18690101, max: 20260709, generation: 'sorted' },
     typeAssignment: { storageDtype: 'int32' },
   },
   {
     id: 'ghcn-daily-tmax', name: 'tmax', color: colors.palette[1],
+    source: { datasetId: 'ghcn-daily', variableName: 'tmax' },
     logicalType: { type: 'integer', min: -167, max: 433, generation: 'smooth' },
     typeAssignment: { storageDtype: 'int16' },
   },
   {
     id: 'ghcn-daily-tmin', name: 'tmin', color: colors.palette[2],
+    source: { datasetId: 'ghcn-daily', variableName: 'tmin' },
     logicalType: { type: 'integer', min: -261, max: 289, generation: 'smooth' },
     typeAssignment: { storageDtype: 'int16' },
   },
   {
     id: 'ghcn-daily-prcp', name: 'prcp', color: colors.palette[3],
+    source: { datasetId: 'ghcn-daily', variableName: 'prcp' },
     logicalType: { type: 'integer', min: 0, max: 3772, generation: 'stepped' },
     typeAssignment: { storageDtype: 'int16' },
   },
   {
     id: 'ghcn-daily-station', name: 'station', color: colors.palette[4],
+    source: { datasetId: 'ghcn-daily', variableName: 'station' },
     logicalType: { type: 'text', min: 0, max: 0, wordSet: 'stations', generation: 'stepped' },
     typeAssignment: { storageDtype: 'char16' },
   },
@@ -270,7 +304,6 @@ const parquetAdjacent: AppState = {
   interleaving: 'column',
   linearization: 'c',
   byteOrder: 'little',
-  dataset: GHCN_DATASET,
   variables: parquetVariables,
   fieldPipelines: {
     'ghcn-daily-date': [{ codec: 'delta', params: {} }, { codec: 'deflate', params: {} }],
@@ -281,7 +314,7 @@ const parquetAdjacent: AppState = {
   },
   chunkPipeline: [],
   metadata: {
-    customEntries: [...GHCN_DATASET.seededEntries],
+    customEntries: [...GHCN_PROVENANCE],
     serialization: 'binary',
     include: DEFAULT_INCLUDE,
   },
@@ -319,7 +352,6 @@ const avroesque: AppState = {
   interleaving: 'row',
   linearization: 'c',
   byteOrder: 'little',
-  dataset: GHCN_DATASET,
   variables: avroVariables,
   // Row mode: per-field pipelines are inactive; the shared chunk pipeline runs.
   fieldPipelines: {
@@ -331,7 +363,7 @@ const avroesque: AppState = {
   },
   chunkPipeline: [{ codec: 'deflate', params: {} }],
   metadata: {
-    customEntries: [...GHCN_DATASET.seededEntries],
+    customEntries: [...GHCN_PROVENANCE],
     serialization: 'json',
     include: DEFAULT_INCLUDE,
   },

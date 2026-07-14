@@ -102,30 +102,45 @@ async function fetchBuf(url: string, label: string, fetchFn: typeof fetch): Prom
   return res.arrayBuffer();
 }
 
-/** Fetch + decode every variable's values for a manifest. `urlFor` maps a
- * manifest-relative file name to an absolute URL (registry provides it). */
+/** Fetch + decode ONE manifest variable's values (numeric bin, or string
+ * dict+codes). `urlFor` maps a manifest-relative file name to an absolute URL
+ * (registry provides it). This is the per-variable path the worker uses to
+ * bind a `Variable.source` ref to real data. */
+export async function fetchDatasetVariable(
+  manifest: DatasetManifest,
+  variableName: string,
+  urlFor: (file: string) => string,
+  fetchFn: typeof fetch = fetch,
+): Promise<ValueArray> {
+  const v = (manifest.variables as ManifestVariable[]).find((mv) => mv.name === variableName);
+  if (!v) throw new Error(`dataset "${manifest.id}": no variable named "${variableName}"`);
+  const n = manifest.shape.reduce((a, b) => a * b, 1);
+  if (v.kind === 'number') {
+    return decodeNumericBin(await fetchBuf(urlFor(v.file), v.file, fetchFn), v.dtype, n, v.file);
+  }
+  // Fetch a string column's dict + codes in parallel.
+  const [dict, codes] = await Promise.all([
+    (async () => {
+      const dictRes = await fetchFn(urlFor(v.dictFile));
+      if (!dictRes.ok) throw new Error(`dataset asset ${v.dictFile}: fetch failed (${dictRes.status})`);
+      return dictRes.json();
+    })(),
+    fetchBuf(urlFor(v.codesFile), v.codesFile, fetchFn),
+  ]);
+  return decodeStringColumn(dict, codes, v.codesDtype, n, v.name);
+}
+
+/** Fetch + decode every variable's values for a manifest, keyed by name.
+ * Still used by the fixture round-trip test; the worker now fetches
+ * per-variable via `fetchDatasetVariable`. */
 export async function fetchDatasetValues(
   manifest: DatasetManifest,
   urlFor: (file: string) => string,
   fetchFn: typeof fetch = fetch,
 ): Promise<Map<string, ValueArray>> {
-  const n = manifest.shape.reduce((a, b) => a * b, 1);
   const out = new Map<string, ValueArray>();
   await Promise.all((manifest.variables as ManifestVariable[]).map(async (v) => {
-    if (v.kind === 'number') {
-      out.set(v.name, decodeNumericBin(await fetchBuf(urlFor(v.file), v.file, fetchFn), v.dtype, n, v.file));
-    } else {
-      // Fetch a string column's dict + codes in parallel.
-      const [dict, codes] = await Promise.all([
-        (async () => {
-          const dictRes = await fetchFn(urlFor(v.dictFile));
-          if (!dictRes.ok) throw new Error(`dataset asset ${v.dictFile}: fetch failed (${dictRes.status})`);
-          return dictRes.json();
-        })(),
-        fetchBuf(urlFor(v.codesFile), v.codesFile, fetchFn),
-      ]);
-      out.set(v.name, decodeStringColumn(dict, codes, v.codesDtype, n, v.name));
-    }
+    out.set(v.name, await fetchDatasetVariable(manifest, v.name, urlFor, fetchFn));
   }));
   return out;
 }

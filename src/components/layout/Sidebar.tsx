@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef } from 'react';
 import { useAppState } from '../../state/useAppState.ts';
 import { usePipelineContext } from '../../state/PipelineContext.tsx';
 import { useGuide } from '../../state/GuideContext.tsx';
@@ -12,7 +12,6 @@ import { WriteConfig } from '../config/WriteConfig.tsx';
 import { ReadStatus } from '../config/ReadStatus.tsx';
 import { FileExplorer } from '../files/FileExplorer.tsx';
 import { colors, fontSizes, radii, spacing, collapseButtonStyle } from '../../theme.ts';
-import { DATASETS } from '../../datasets/registry.ts';
 
 const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Type Assignment', 'Codecs', 'Metadata', 'Write', 'Read'] as const;
 
@@ -58,13 +57,12 @@ const dividerStyle: React.CSSProperties = {
 // precedent — MainLayout owns collapsed state (driven by the Panel's
 // panelRef/onResize), Sidebar just renders the rail when collapsed.
 export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; onToggleCollapse: () => void }) {
-  const { state, dispatch, applyDataset, selectCustomDataset } = useAppState();
+  const { state, dispatch } = useAppState();
   const { files, readResult, variableStats, runtimeStatus } = usePipelineContext();
   // Guide highlight (plan Phase 5): the section matching the guide's active
   // step gets an accent outline and is scrolled into view.
   const { activeSection } = useGuide();
   const sectionRefs = useRef(new Map<string, HTMLDivElement>());
-  const [datasetStatus, setDatasetStatus] = useState<{ loading: boolean; error: string | null }>({ loading: false, error: null });
 
   useEffect(() => {
     if (!activeSection) return;
@@ -72,23 +70,6 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
       .get(activeSection)
       ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [activeSection]);
-
-  // No stale-response guard here: concurrent calls are impossible today only
-  // because dataset-select is disabled while datasetStatus.loading — any new
-  // caller that bypasses that disabled control must add a request-id/abort
-  // check or two in-flight applyDataset results can clobber each other.
-  async function handleSelectDataset(id: string | 'custom') {
-    if (id === 'custom') {
-      setDatasetStatus({ loading: false, error: null });
-      selectCustomDataset();
-      return;
-    }
-    setDatasetStatus({ loading: true, error: null });
-    const ok = await applyDataset(id);
-    setDatasetStatus(ok
-      ? { loading: false, error: null }
-      : { loading: false, error: 'dataset failed to load — check your connection and try again' });
-  }
 
   function renderSection(section: (typeof SECTIONS)[number]) {
     switch (section) {
@@ -117,10 +98,6 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
               dispatch({ type: 'UPDATE_VARIABLE', id, changes })
             }
             onShapeChange={(shape) => dispatch({ type: 'SET_SHAPE', shape })}
-            dataset={state.dataset}
-            datasetOptions={DATASETS.filter((d) => d.dataModel === state.dataModel).map((d) => ({ id: d.id, label: d.label }))}
-            datasetStatus={datasetStatus}
-            onSelectDataset={handleSelectDataset}
           />
         );
       case 'Chunk':

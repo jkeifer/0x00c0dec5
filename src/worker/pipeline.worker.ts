@@ -3,13 +3,13 @@
 // the engine module directly keeps this worker's dependency graph visibly
 // react-free; see CLAUDE.md/Task 13 brief's react-free-bundle requirement,
 // verified by inspecting the built worker chunk for `react`/`useMemo`).
-import { createPipelineComputer } from '../engine/pipelineCompute.ts';
+import { createPipelineComputer, type SourceValues } from '../engine/pipelineCompute.ts';
 import { collectTransferables } from './protocol.ts';
 import type { WorkerRequest, WorkerResponse, StageTimings } from './protocol.ts';
 import { initPyodideRuntime } from '../engine/pyodideRuntime.ts';
 import { stateUsesPyodideCodec } from '../engine/codecs.ts';
 import { loadManifest, datasetUrl, datasetById } from '../datasets/registry.ts';
-import { fetchDatasetValues } from '../datasets/assets.ts';
+import { fetchDatasetVariable } from '../datasets/assets.ts';
 import type { ValueArray } from '../engine/layout.ts';
 import type { DatasetId } from '../datasets/types.ts';
 
@@ -18,23 +18,42 @@ import type { DatasetId } from '../datasets/types.ts';
 // keystroke does not re-run generation/typing/chunking/encoding.
 const computeDelta = createPipelineComputer();
 
-// Dataset presets: values fetched+decoded once per dataset id and cached in
-// worker memory for its lifetime. Promise-cached so concurrent computes share
-// one fetch; failures evict for retry.
-const datasetValuesCache = new Map<string, Promise<Map<string, ValueArray>>>();
+// Curated variable values: fetched+decoded once per `${datasetId}/${name}` ref
+// and cached in worker memory for its lifetime, carrying the dataset's natural
+// shape. Promise-cached so concurrent computes share one fetch; failures evict
+// for retry.
+type SourceEntry = { values: ValueArray; naturalShape: number[] };
+const sourceValuesCache = new Map<string, Promise<SourceEntry>>();
 
-function ensureDatasetValues(id: string): Promise<Map<string, ValueArray>> {
-  let p = datasetValuesCache.get(id);
+function ensureSourceValues(datasetId: string, variableName: string): Promise<SourceEntry> {
+  const key = `${datasetId}/${variableName}`;
+  let p = sourceValuesCache.get(key);
   if (!p) {
     p = (async () => {
-      if (!datasetById(id)) throw new Error(`unknown dataset "${id}"`);
-      const manifest = await loadManifest(id as DatasetId);
-      return fetchDatasetValues(manifest, (file) => datasetUrl(id as DatasetId, file));
+      if (!datasetById(datasetId)) throw new Error(`unknown dataset "${datasetId}"`);
+      const manifest = await loadManifest(datasetId as DatasetId);
+      const values = await fetchDatasetVariable(manifest, variableName, (file) => datasetUrl(datasetId as DatasetId, file));
+      return { values, naturalShape: manifest.shape };
     })();
-    p.catch(() => datasetValuesCache.delete(id));
-    datasetValuesCache.set(id, p);
+    p.catch(() => sourceValuesCache.delete(key));
+    sourceValuesCache.set(key, p);
   }
   return p;
+}
+
+/** Resolve every distinct `source` ref in the state's variables to its cached
+ * values. Returns undefined when no variable has a source (all generated). */
+async function resolveSourceValues(state: WorkerRequest & { kind: 'compute' }): Promise<SourceValues | undefined> {
+  const refs = new Map<string, { datasetId: DatasetId; variableName: string }>();
+  for (const v of state.state.variables) {
+    if (v.source) refs.set(`${v.source.datasetId}/${v.source.variableName}`, v.source);
+  }
+  if (refs.size === 0) return undefined;
+  const out: SourceValues = new Map();
+  await Promise.all([...refs].map(async ([key, ref]) => {
+    out.set(key, await ensureSourceValues(ref.datasetId, ref.variableName));
+  }));
+  return out;
 }
 
 const post = (msg: WorkerResponse) => (self as unknown as Worker).postMessage(msg);
@@ -76,11 +95,11 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const t0 = performance.now();
   try {
     if (stateUsesPyodideCodec(msg.state)) await runtimeReady;
-    const presetValues = msg.state.dataset ? await ensureDatasetValues(msg.state.dataset.id) : undefined;
+    const sourceValues = await resolveSourceValues(msg);
     const delta = computeDelta(msg.state, msg.knownKeys, (stage, ms) => {
       timings[stage] = ms;
       post({ kind: 'progress', id: msg.id, stage } satisfies WorkerResponse);
-    }, presetValues);
+    }, sourceValues);
     (self as unknown as Worker).postMessage(
       { kind: 'result', id: msg.id, ok: true, delta, timings, totalMs: performance.now() - t0 } satisfies WorkerResponse,
       collectTransferables(delta),

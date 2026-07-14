@@ -9,33 +9,15 @@
   "interleaving": "column",
   "linearization": "c",
   "byteOrder": "little",
-  "dataset": {
-    "id": "ghcn-daily",
-    "attribution": "NOAA NCEI GHCN-Daily (4 US stations) · U.S. Government work — public domain",
-    "seededEntries": [
-      {
-        "key": "source",
-        "value": "NOAA NCEI GHCN-Daily (4 US stations)"
-      },
-      {
-        "key": "source_url",
-        "value": "https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily"
-      },
-      {
-        "key": "retrieved",
-        "value": "2026-07-13"
-      },
-      {
-        "key": "license",
-        "value": "U.S. Government work — public domain"
-      }
-    ]
-  },
   "variables": [
     {
       "id": "ghcn-daily-date",
       "name": "date",
       "color": "#e06c75",
+      "source": {
+        "datasetId": "ghcn-daily",
+        "variableName": "date"
+      },
       "logicalType": {
         "type": "integer",
         "min": 18690101,
@@ -50,6 +32,10 @@
       "id": "ghcn-daily-tmax",
       "name": "tmax",
       "color": "#61afef",
+      "source": {
+        "datasetId": "ghcn-daily",
+        "variableName": "tmax"
+      },
       "logicalType": {
         "type": "integer",
         "min": -167,
@@ -64,6 +50,10 @@
       "id": "ghcn-daily-tmin",
       "name": "tmin",
       "color": "#98c379",
+      "source": {
+        "datasetId": "ghcn-daily",
+        "variableName": "tmin"
+      },
       "logicalType": {
         "type": "integer",
         "min": -261,
@@ -78,6 +68,10 @@
       "id": "ghcn-daily-prcp",
       "name": "prcp",
       "color": "#e5c07b",
+      "source": {
+        "datasetId": "ghcn-daily",
+        "variableName": "prcp"
+      },
       "logicalType": {
         "type": "integer",
         "min": 0,
@@ -92,6 +86,10 @@
       "id": "ghcn-daily-station",
       "name": "station",
       "color": "#c678dd",
+      "source": {
+        "datasetId": "ghcn-daily",
+        "variableName": "station"
+      },
       "logicalType": {
         "type": "text",
         "min": 0,

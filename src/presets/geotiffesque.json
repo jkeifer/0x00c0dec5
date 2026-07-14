@@ -11,33 +11,15 @@
   "interleaving": "row",
   "linearization": "c",
   "byteOrder": "little",
-  "dataset": {
-    "id": "etopo-dem",
-    "attribution": "NOAA NCEI ETOPO Global Relief (via ERDDAP) · U.S. Government work — public domain",
-    "seededEntries": [
-      {
-        "key": "source",
-        "value": "NOAA NCEI ETOPO Global Relief (via ERDDAP)"
-      },
-      {
-        "key": "source_url",
-        "value": "https://www.ncei.noaa.gov/products/etopo-global-relief-model"
-      },
-      {
-        "key": "retrieved",
-        "value": "2026-07-13"
-      },
-      {
-        "key": "license",
-        "value": "U.S. Government work — public domain"
-      }
-    ]
-  },
   "variables": [
     {
       "id": "etopo-dem-elevation",
       "name": "elevation",
       "color": "#e06c75",
+      "source": {
+        "datasetId": "etopo-dem",
+        "variableName": "elevation"
+      },
       "logicalType": {
         "type": "integer",
         "min": -1485,

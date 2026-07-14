@@ -68,16 +68,15 @@ export function useWorkerPipeline(
   // Chunk section's Order/Byte order controls silently show stale results —
   // any new AppState field that reaches pipelineCompute must be added here.
   //
-  // `dataset` (dataset-presets project) selects which real values the worker
-  // fetches and injects into the Values stage — a change must trigger a
-  // recompute, and it keys the values memo (state.dataset?.id), so it belongs
-  // here for the same CL-10 reason as the fields above.
-  const { dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write, dataset } = state;
+  // Curated data sources live on `variables[].source` now (no schema-wide
+  // `dataset` field): a source change is a `variables`-identity change, already
+  // in this list, so the worker refetches + recomputes on it.
+  const { dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write } = state;
   useEffect(() => {
     setComputing(true);
     clientRef.current!.compute(state);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: `state` is posted whole, but only pipeline slices trigger
-  }, [dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write, dataset]);
+  }, [dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write]);
 
   useEffect(() => () => clientRef.current!.dispose(), []);
 

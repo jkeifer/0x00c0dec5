@@ -5,7 +5,8 @@ import { getDtype, DTYPE_KEYS, isCharDtype } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import type { StageName } from '../types/pipeline.ts';
 import { STAGE_ORDER } from '../types/pipeline.ts';
-import { datasetById } from '../datasets/registry.ts';
+import { curatedVariable } from '../datasets/registry.ts';
+import type { DatasetId } from '../datasets/types.ts';
 
 const STORAGE_KEYS: Record<AppState['dataModel'], string> = {
   tabular: '0x00c0dec5-state-tabular',
@@ -124,6 +125,23 @@ function migrateState(raw: Record<string, unknown>): AppState | null {
       delete legacyMeta.includeChunkIndex;
     }
 
+    // Curated-variables migration: pre-change states carry a schema-wide
+    // `dataset: { id, ... }` and bind values by id prefix. Convert each
+    // prefixed variable to an explicit per-variable `source` ref, then drop
+    // `dataset`. Seeded metadata entries need no handling — they already live
+    // in `customEntries` as ordinary entries.
+    const rawDataset = (state as unknown as Record<string, unknown>).dataset;
+    if (isPlainObject(rawDataset) && typeof rawDataset.id === 'string' && Array.isArray(state.variables)) {
+      const datasetId = rawDataset.id;
+      const prefix = `${datasetId}-`;
+      for (const v of state.variables as unknown as Array<Record<string, unknown>>) {
+        if (typeof v.id === 'string' && v.id.startsWith(prefix) && typeof v.name === 'string') {
+          v.source = { datasetId, variableName: v.name };
+        }
+      }
+    }
+    delete (state as unknown as Record<string, unknown>).dataset;
+
     return state;
   } catch {
     return null;
@@ -192,6 +210,13 @@ function isValidVariable(v: unknown): v is Variable {
   if (typeof storageDtype !== 'string' || !DTYPE_KEYS.includes(storageDtype as DtypeKey)) {
     return false;
   }
+  // `source` is optional; when present it must be the {datasetId, variableName}
+  // shape. A structurally-wrong source doesn't reject the whole variable —
+  // validateState drops it (row degrades to custom). Only reject if it's a
+  // non-object truthy value (clearly corrupt).
+  if (v.source !== undefined && v.source !== null && !isPlainObject(v.source)) {
+    return false;
+  }
   return true;
 }
 
@@ -239,15 +264,41 @@ function normalizeText(variables: Variable[]): Variable[] {
 }
 
 /**
+ * Drop a variable's `source` ref (degrading the row to custom, keeping
+ * everything else) unless it resolves to a known curated variable AND that
+ * catalog entry's dataModel matches the state's. Curated rows keep their
+ * persisted logicalType/typeAssignment as-is (the catalog is the values'
+ * source of truth, not the schema copy — see the catalog test).
+ */
+function normalizeSource(variables: Variable[], dataModel: AppState['dataModel']): Variable[] {
+  return variables.map((v) => {
+    if (v.source === undefined) return v;
+    const src = v.source as unknown as Record<string, unknown>;
+    const ok =
+      isPlainObject(src) &&
+      typeof src.datasetId === 'string' &&
+      typeof src.variableName === 'string' &&
+      (() => {
+        const c = curatedVariable({ datasetId: src.datasetId as DatasetId, variableName: src.variableName as string });
+        return c !== undefined && c.dataModel === dataModel;
+      })();
+    if (ok) return v;
+    const { source: _drop, ...rest } = v;
+    void _drop;
+    return rest as Variable;
+  });
+}
+
+/**
  * Validate structural invariants on an already-merged state, dropping/clamping/resetting
  * anything malformed. Mutates and returns `state` in place.
  */
 function validateState(state: AppState): AppState {
-  // variables: drop invalid entries
+  // variables: drop invalid entries; normalize source refs
   if (!Array.isArray(state.variables)) {
     state.variables = structuredClone(DEFAULT_STATE.variables);
   } else {
-    state.variables = normalizeText(normalizeGeneration(state.variables.filter(isValidVariable)));
+    state.variables = normalizeSource(normalizeText(normalizeGeneration(state.variables.filter(isValidVariable))), state.dataModel);
   }
 
   // shape: must be an array of positive integers, else fall back to defaults entirely
@@ -309,32 +360,6 @@ function validateState(state: AppState): AppState {
   // chunkPipeline: array
   if (!Array.isArray(state.chunkPipeline)) {
     state.chunkPipeline = [];
-  }
-
-  // Dataset presets: a persisted dataset ref must name a known dataset whose
-  // model matches this state, else it degrades to generated (null) — same
-  // graceful-degrade as every other field. (Values are never persisted; the
-  // worker refetches by id.) `seededEntries` (the provenance entries apply
-  // appended, tracked so deselect can remove exactly them) is tolerated:
-  // malformed/missing entries degrade to [] rather than nulling the whole ref.
-  const ds = state.dataset as unknown;
-  if (
-    !isPlainObject(ds) ||
-    typeof ds.id !== 'string' ||
-    typeof ds.attribution !== 'string' ||
-    datasetById(ds.id)?.dataModel !== state.dataModel
-  ) {
-    state.dataset = null;
-  } else {
-    const raw = Array.isArray(ds.seededEntries) ? ds.seededEntries : [];
-    state.dataset = {
-      id: ds.id,
-      attribution: ds.attribution,
-      seededEntries: raw.filter(
-        (e): e is { key: string; value: string } =>
-          isPlainObject(e) && typeof e.key === 'string' && typeof e.value === 'string',
-      ),
-    };
   }
 
   return state;
