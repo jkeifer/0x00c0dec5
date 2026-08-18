@@ -7,7 +7,7 @@ import {
 import {
   buildLinearizedLayout, buildEncodedLayout, buildValueBlocksLayout, encodedChunkMeta, traceAt,
   byteRangesForTrace, chunkRegionsOf, elementInChunk, chunkIdForElement,
-  type StageLayout, type ValueSources,
+  type StageLayout, type ValueSources, type ChunkTraceMode,
 } from '../../../src/engine/layout.ts';
 import { buildChunkRegions } from '../../../src/components/viewers/viewerUtils.ts';
 import { referenceStageTraces, referenceFileTraces } from '../helpers/referenceTraces.ts';
@@ -71,8 +71,8 @@ function buildStages(c: MatrixCase) {
   const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linLayout);
 
   const nameToId = new Map(state.variables.map((v) => [v.name, v.id]));
-  const outputDtypes: string[] = [];
-  const hasEntropy: boolean[] = [];
+  const slotDtypes: string[] = [];
+  const traceModes: ChunkTraceMode[] = [];
   lin.chunks.forEach((chunk) => {
     const steps = state.interleaving === 'column'
       ? (state.fieldPipelines[nameToId.get(chunk.variables[0].variableName)!] ?? [])
@@ -84,10 +84,10 @@ function buildStages(c: MatrixCase) {
         ? 'uint8'
         : chunk.variables[0].dtype) as DtypeKey;
     const meta = encodedChunkMeta(steps, inputDtype);
-    outputDtypes.push(meta.outputDtype);
-    hasEntropy.push(meta.hasEntropy);
+    slotDtypes.push(meta.slotDtype);
+    traceModes.push(meta.traceMode);
   });
-  const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, outputDtypes, hasEntropy);
+  const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, slotDtypes, traceModes);
 
   const files = computeFilesStage(state, enc.encodedChunks, typed.variableStats, encLayout);
 

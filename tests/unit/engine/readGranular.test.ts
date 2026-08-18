@@ -173,7 +173,7 @@ describe('readFile — assume-identity codec semantics (read plan Task 3)', () =
         shape: [4, 4],
         chunkShape: [2, 2],
         variables: [uintVar('humidity')],
-        fieldPipelines: { humidity: [{ codec: 'delta', params: { order: 1 } }] },
+        fieldPipelines: { humidity: [{ codec: 'delta', params: {} }] },
         ...placementState(serialization, placement),
         metadata: {
           ...DEFAULT_STATE.metadata,

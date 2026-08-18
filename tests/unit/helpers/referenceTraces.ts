@@ -35,7 +35,7 @@ import { CODEC_REGISTRY } from '../../../src/engine/codecs.ts';
 import { collectMetadata, serializeMetadata, type ChunkIndexEntry } from '../../../src/engine/metadata.ts';
 import { orderChunks } from '../../../src/engine/write.ts';
 import { hexToBytes, concatBytes } from '../../../src/engine/bytes.ts';
-import { makeTraceId, makeChunkTraceId } from '../../../src/engine/trace.ts';
+import { makeTraceId, makeChunkTraceId, makeSlotTraceId } from '../../../src/engine/trace.ts';
 import { readFile } from '../../../src/engine/read.ts';
 
 // ─── trace.ts's propagate/degrade (pre-Task-10 copies) ─────────────────────
@@ -67,6 +67,20 @@ export function propagateTracesValuePreserving(
     i += inputValueByteCount;
   }
   return outputTraces;
+}
+
+/**
+ * Degrade traces to positional slots after a codec that moves bytes within
+ * the chunk (byte shuffle). Slot geometry is unchanged — these codecs preserve
+ * byte size — so every trace keeps its coords/field/byteInValue, which now
+ * describe the *position* rather than the element; only the traceId changes,
+ * to one that deliberately can't cross-match a real value (see
+ * makeSlotTraceId). Mirrors traceAt's `slotStart = byteIndex - byteInValue`.
+ */
+export function degradeTracesToPositional(inputTraces: ByteTrace[], baseOffset = 0): ByteTrace[] {
+  return inputTraces.map((t, i) => ({
+    ...t, traceId: makeSlotTraceId(baseOffset + i - t.byteInValue, t.byteCount),
+  }));
 }
 
 /** Degrade traces to chunk-level after entropy coding. */
@@ -281,6 +295,9 @@ function runCodecPipelineWithTraces(
   inputTraces: ByteTrace[],
   steps: CodecStep[],
   inputDtype: DtypeKey,
+  // Slot traceIds are stage-absolute byte offsets (see makeSlotTraceId), so
+  // positional degradation needs this chunk's offset within the Encoded stage.
+  baseOffset = 0,
 ): { bytes: Uint8Array; traces: ByteTrace[]; outputDtype: DtypeKey } {
   let currentBytes = inputBytes;
   let currentTraces = inputTraces;
@@ -293,10 +310,17 @@ function runCodecPipelineWithTraces(
     const result = codec.encode(currentBytes, currentDtype, step.params);
     const outputDtype = result.outputDtype as DtypeKey;
 
-    if (codec.category === 'entropy') {
+    // Same rule encodedChunkMeta applies, per step instead of folded: entropy
+    // is always chunk-level, otherwise the codec's declared traceMode. Applying
+    // it sequentially is equivalent to encodedChunkMeta's worst-mode fold
+    // because degradation is monotone — a later value-preserving step only
+    // relabels dtype, so it can't restore a slot id to a value id.
+    const mode = codec.category === 'entropy' ? 'chunk-level' : codec.traceMode ?? 'value-preserving';
+    if (mode === 'chunk-level') {
       currentTraces = degradeTracesToChunkLevel(currentTraces, result.bytes.length);
     } else {
       currentTraces = propagateTracesValuePreserving(currentTraces, currentDtype, outputDtype);
+      if (mode === 'positional') currentTraces = degradeTracesToPositional(currentTraces, baseOffset);
     }
 
     currentBytes = result.bytes;
@@ -375,6 +399,7 @@ function referenceEncode(
 ): { encodedChunks: (EncodedChunk & { traces: ByteTrace[] })[] } {
   const nameToId = new Map(variables.map((v) => [v.name, v.id]));
 
+  let encodedCursor = 0;   // this chunk's offset within the Encoded stage
   const encodedChunks = lin.chunks.map((chunk, idx) => {
     let steps: CodecStep[];
     let inputDtype: DtypeKey;
@@ -393,7 +418,10 @@ function referenceEncode(
           : chunk.variables[0].dtype as DtypeKey;
     }
 
-    const result = runCodecPipelineWithTraces(lin.linearizedBytes[idx], lin.linearizedTraces[idx], steps, inputDtype);
+    const result = runCodecPipelineWithTraces(
+      lin.linearizedBytes[idx], lin.linearizedTraces[idx], steps, inputDtype, encodedCursor,
+    );
+    encodedCursor += result.bytes.length;
     return interleaving === 'column'
       ? {
         chunkId: lin.chunkIds[idx],

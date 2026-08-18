@@ -70,11 +70,15 @@ async function main() {
   // ── SchemaEditor: wordSet select shown, min/max hidden for the text row ──
   const wordsetValue = await page.locator('[data-testid="wordset-select-0"]').inputValue().catch(() => null);
   h.check('wordSet select renders for the text variable with the seeded value', wordsetValue === 'cities', `value=${wordsetValue}`);
-  const row0Text = (await page.locator('[data-testid="variable-row-0"]').innerText()).toLowerCase();
+  const row0 = page.locator('[data-testid="variable-row-0"]');
+  const row0Text = (await row0.innerText()).toLowerCase();
+  // Count number inputs rather than grep the row text for "min"/"max": the
+  // source select's option labels (…› tmax) are part of innerText.
+  const row0NumberInputs = await row0.locator('input[type="number"]').count();
   h.check(
     'text variable row shows the longest-word hint and no min/max inputs',
-    row0Text.includes('longest word') && !row0Text.includes('min') && !row0Text.includes('max'),
-    JSON.stringify(row0Text.slice(0, 120)),
+    row0Text.includes('longest word') && row0NumberInputs === 0,
+    `numberInputs=${row0NumberInputs} ${JSON.stringify(row0Text.slice(0, 120))}`,
   );
 
   // ── TypeAssignConfig: char-only dtype select + lossy/lossless badge ──

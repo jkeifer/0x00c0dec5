@@ -41,7 +41,7 @@ describe('real codec registry entries (no runtime needed)', () => {
 
   it('stateUsesPyodideCodec truth table', () => {
     const zstdStep: CodecStep = { codec: 'zstd', params: { level: 3 } };
-    const deltaStep: CodecStep = { codec: 'delta', params: { order: 1 } };
+    const deltaStep: CodecStep = { codec: 'delta', params: {} };
     expect(stateUsesPyodideCodec({ fieldPipelines: {}, chunkPipeline: [] })).toBe(false);
     expect(stateUsesPyodideCodec({ fieldPipelines: {}, chunkPipeline: [deltaStep] })).toBe(false);
     expect(stateUsesPyodideCodec({ fieldPipelines: {}, chunkPipeline: [zstdStep] })).toBe(true);
@@ -81,7 +81,7 @@ describe.skipIf(!!process.env.SKIP_PYODIDE)('real codecs through the engine pipe
   it('composes with educational codecs (delta -> zstd) and reverses', () => {
     const input = sampleBytes('int16');
     const steps: CodecStep[] = [
-      { codec: 'delta', params: { order: 1 } },
+      { codec: 'delta', params: {} },
       { codec: 'zstd', params: { level: 3 } },
     ];
     const encoded = runCodecPipeline(input, steps, 'int16');

@@ -2,8 +2,8 @@
  * Targeted engine gap tests — codec edge cases.
  *
  * Covers remediation-plan.md Phase 1 task 1.2 / §1.7 gaps for:
- *  - Delta codec: unsigned dtypes, decreasing values, near-range values, order 2/3,
- *    empty input, single element (DC-2: clamping broke round-trip on unsigned dtypes;
+ *  - Delta codec: unsigned dtypes, decreasing values, near-range values, repeated
+ *    application, empty input, single element (DC-2: clamping broke round-trip on unsigned dtypes;
  *    fixed by Phase 2 task 2.5 — the clamp is removed, typed-array writes wrap
  *    mod 2^N instead).
  *  - Byte shuffle with elementSize != dtype size (garbled-but-reversible round-trip).
@@ -34,8 +34,8 @@ describe('delta codec — edge cases', () => {
   it('round-trips decreasing values on uint16 exactly', () => {
     const original = [57, 12, 90, 3];
     const input = valuesToBytes(original, 'uint16');
-    const encoded = delta.encode(input, 'uint16', { order: 1 });
-    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
+    const encoded = delta.encode(input, 'uint16', { elementSize: 2 });
+    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { elementSize: 2 });
     const values = bytesToValues(decoded.bytes, 'uint16');
     expect(Array.from(values)).toEqual(original);
   });
@@ -45,38 +45,29 @@ describe('delta codec — edge cases', () => {
   it('round-trips near-range values on uint8 exactly', () => {
     const original = [250, 5, 255, 0, 128];
     const input = valuesToBytes(original, 'uint8');
-    const encoded = delta.encode(input, 'uint8', { order: 1 });
-    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
+    const encoded = delta.encode(input, 'uint8', { elementSize: 1 });
+    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { elementSize: 1 });
     const values = bytesToValues(decoded.bytes, 'uint8');
     expect(Array.from(values)).toEqual(original);
   });
 
-  // FIXED DC-2 (task 2.5) — order=2 compounds first-differences, so the former
-  // clamping corrupted even faster; now wraps and reverses exactly.
-  it('round-trips decreasing values on uint16 with order=2', () => {
-    const original = [57, 12, 90, 3, 40];
-    const input = valuesToBytes(original, 'uint16');
-    const encoded = delta.encode(input, 'uint16', { order: 2 });
-    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 2 });
-    const values = bytesToValues(decoded.bytes, 'uint16');
-    expect(Array.from(values)).toEqual(original);
-  });
-
-  // FIXED DC-2 (task 2.5) — order=3 on an unsigned dtype with decreasing values.
-  it('round-trips decreasing values on uint16 with order=3', () => {
-    const original = [5, 20, 8, 40, 1];
-    const input = valuesToBytes(original, 'uint16');
-    const encoded = delta.encode(input, 'uint16', { order: 3 });
-    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 3 });
-    const values = bytesToValues(decoded.bytes, 'uint16');
-    expect(Array.from(values)).toEqual(original);
+  // FIXED DC-2 (task 2.5) — repeated application compounds first-differences, so
+  // the former clamping corrupted even faster; now wraps and reverses exactly.
+  // (This is what the deleted `order` param did: N passes = N steps.)
+  it('round-trips decreasing values on uint16 through 2 and 3 delta passes', () => {
+    for (const [original, passes] of [[[57, 12, 90, 3, 40], 2], [[5, 20, 8, 40, 1], 3]] as const) {
+      let bytes = valuesToBytes([...original], 'uint16');
+      for (let i = 0; i < passes; i++) bytes = delta.encode(bytes, 'uint16', { elementSize: 2 }).bytes;
+      for (let i = 0; i < passes; i++) bytes = delta.decode(bytes, 'uint16', { elementSize: 2 }).bytes;
+      expect(Array.from(bytesToValues(bytes, 'uint16'))).toEqual([...original]);
+    }
   });
 
   it('round-trips empty input', () => {
     const input = valuesToBytes([], 'uint16');
-    const encoded = delta.encode(input, 'uint16', { order: 1 });
+    const encoded = delta.encode(input, 'uint16', { elementSize: 2 });
     expect(encoded.bytes.length).toBe(0);
-    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
+    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { elementSize: 2 });
     expect(decoded.bytes.length).toBe(0);
     const values = bytesToValues(decoded.bytes, 'uint16');
     expect(Array.from(values)).toEqual([]);
@@ -85,19 +76,17 @@ describe('delta codec — edge cases', () => {
   it('round-trips a single element (no diff to take)', () => {
     const original = [42];
     const input = valuesToBytes(original, 'uint16');
-    const encoded = delta.encode(input, 'uint16', { order: 1 });
-    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
+    const encoded = delta.encode(input, 'uint16', { elementSize: 2 });
+    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { elementSize: 2 });
     const values = bytesToValues(decoded.bytes, 'uint16');
     expect(Array.from(values)).toEqual(original);
   });
 
-  it('round-trips a single element at order=3', () => {
-    const original = [7];
-    const input = valuesToBytes(original, 'uint16');
-    const encoded = delta.encode(input, 'uint16', { order: 3 });
-    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 3 });
-    const values = bytesToValues(decoded.bytes, 'uint16');
-    expect(Array.from(values)).toEqual(original);
+  it('round-trips a single element through 3 delta passes', () => {
+    let bytes = valuesToBytes([7], 'uint16');
+    for (let i = 0; i < 3; i++) bytes = delta.encode(bytes, 'uint16', { elementSize: 2 }).bytes;
+    for (let i = 0; i < 3; i++) bytes = delta.decode(bytes, 'uint16', { elementSize: 2 }).bytes;
+    expect(Array.from(bytesToValues(bytes, 'uint16'))).toEqual([7]);
   });
 
   // Signed dtypes are not subject to DC-2 for this particular data (no wraparound
@@ -105,10 +94,40 @@ describe('delta codec — edge cases', () => {
   it('round-trips decreasing values on int16 exactly (signed dtype, no wraparound needed)', () => {
     const original = [57, 12, 90, 3];
     const input = valuesToBytes(original, 'int16');
-    const encoded = delta.encode(input, 'int16', { order: 1 });
-    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
+    const encoded = delta.encode(input, 'int16', { elementSize: 2 });
+    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { elementSize: 2 });
     const values = bytesToValues(decoded.bytes, 'int16');
     expect(Array.from(values)).toEqual(original);
+  });
+});
+
+describe('delta codec — elementSize', () => {
+  // The borrow/carry chain is what makes delta exact at sizes no JS unsigned
+  // view can hold, and at sizes that match no dtype at all.
+  it('round-trips at every element size 1..16, including sizes that divide nothing evenly', () => {
+    const input = new Uint8Array(37);
+    for (let i = 0; i < input.length; i++) input[i] = (i * 37 + 11) & 0xff;
+    for (let elementSize = 1; elementSize <= 16; elementSize++) {
+      const encoded = delta.encode(input, 'uint8', { elementSize });
+      const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { elementSize });
+      expect(Array.from(decoded.bytes), `elementSize=${elementSize}`).toEqual(Array.from(input));
+    }
+  });
+
+  it('borrows across the whole element, not per byte', () => {
+    // Two 2-byte LE elements: 0x0100 (256) and 0x0001 (1). 1 - 256 = -255,
+    // which mod 2^16 is 0xFF01 — only right if the borrow crosses into byte 1.
+    const input = new Uint8Array([0x00, 0x01, 0x01, 0x00]);
+    const encoded = delta.encode(input, 'uint16', { elementSize: 2 });
+    expect(Array.from(encoded.bytes.slice(2))).toEqual([0x01, 0xff]);
+  });
+
+  it('a mis-set element size is still reversible (the same lesson byte shuffle teaches)', () => {
+    const input = valuesToBytes([1000, 2000, 3000, 4000], 'uint16');
+    const encoded = delta.encode(input, 'uint16', { elementSize: 3 });
+    expect(Array.from(encoded.bytes)).not.toEqual(Array.from(input));
+    const decoded = delta.decode(encoded.bytes, encoded.outputDtype, { elementSize: 3 });
+    expect(Array.from(bytesToValues(decoded.bytes, 'uint16'))).toEqual([1000, 2000, 3000, 4000]);
   });
 });
 

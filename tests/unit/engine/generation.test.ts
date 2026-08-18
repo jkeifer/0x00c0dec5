@@ -40,7 +40,7 @@ describe('generation modes — compressibility signatures', () => {
     const { bytes: typedBytes } = assignType(values, logicalType, { storageDtype: 'uint8' });
 
     const steps: CodecStep[] = [
-      { codec: 'delta', params: { order: 1 } },
+      { codec: 'delta', params: {} },
       { codec: 'rle', params: {} },
     ];
     const finalLength = encodedLength(typedBytes, 'uint8', steps);
@@ -87,7 +87,7 @@ describe('generation modes — compressibility signatures', () => {
     const values = generateValues('smooth-var', logicalType, COUNT);
     const { bytes: typedBytes } = assignType(values, logicalType, { storageDtype: 'uint32' });
 
-    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    const steps: CodecStep[] = [{ codec: 'delta', params: {} }];
     const result = runCodecPipeline(typedBytes, steps, 'uint32');
 
     const rawEntropy = shannonEntropy(typedBytes);

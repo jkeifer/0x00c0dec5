@@ -97,7 +97,7 @@ describe('createPipelineComputer delta protocol', () => {
       ...withEmptyPipeline,
       fieldPipelines: {
         ...withEmptyPipeline.fieldPipelines,
-        temperature: [{ codec: 'delta', params: { order: 1 } }],
+        temperature: [{ codec: 'delta', params: {} }],
       },
     };
     const second = compute(withDelta, knownKeysOf(first));

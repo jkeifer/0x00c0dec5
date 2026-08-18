@@ -5,7 +5,7 @@ import {
   computeMetadataStage, computeFilesStage, computeReadStage,
 } from '../../../src/hooks/usePipeline.ts';
 import {
-  buildValueBlocksLayout, buildLinearizedLayout, buildEncodedLayout, encodedChunkMeta, traceAt,
+  buildValueBlocksLayout, buildLinearizedLayout, buildEncodedLayout, encodedChunkMeta, traceAt, type ChunkTraceMode,
   buildMetadataLayout,
 } from '../../../src/engine/layout.ts';
 import { expectTraceEquivalence } from '../helpers/equivalence.ts';
@@ -108,11 +108,11 @@ describe('traceAt bounds', () => {
 
 const ENCODED_CASES: { name: string; interleaving: 'row' | 'column'; fieldSteps?: CodecStep[]; chunkSteps?: CodecStep[]; variables?: typeof DEFAULT_STATE.variables; chunkShape?: number[] }[] = [
   { name: 'no codecs', interleaving: 'column', fieldSteps: [] },
-  { name: 'delta', interleaving: 'column', fieldSteps: [{ codec: 'delta', params: { order: 1 } }] },
+  { name: 'delta', interleaving: 'column', fieldSteps: [{ codec: 'delta', params: {} }] },
   { name: 'byte-shuffle', interleaving: 'column', fieldSteps: [{ codec: 'byte-shuffle', params: { elementSize: 4 } }] },
   {
     name: 'delta+byte-shuffle', interleaving: 'column',
-    fieldSteps: [{ codec: 'delta', params: { order: 1 } }, { codec: 'byte-shuffle', params: { elementSize: 4 } }],
+    fieldSteps: [{ codec: 'delta', params: {} }, { codec: 'byte-shuffle', params: { elementSize: 4 } }],
   },
   { name: 'rle (entropy)', interleaving: 'column', fieldSteps: [{ codec: 'rle', params: {} }] },
   {
@@ -149,8 +149,8 @@ describe('encoded-stage layout equivalence', () => {
       const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linLayout);
 
       const nameToId = new Map(state.variables.map((v) => [v.name, v.id]));
-      const outputDtypes: string[] = [];
-      const hasEntropy: boolean[] = [];
+      const slotDtypes: string[] = [];
+      const traceModes: ChunkTraceMode[] = [];
       lin.chunks.forEach((chunk) => {
         const steps = state.interleaving === 'column'
           ? (state.fieldPipelines[nameToId.get(chunk.variables[0].variableName)!] ?? [])
@@ -162,11 +162,11 @@ describe('encoded-stage layout equivalence', () => {
             ? 'uint8'
             : chunk.variables[0].dtype) as DtypeKey;
         const meta = encodedChunkMeta(steps, inputDtype);
-        outputDtypes.push(meta.outputDtype);
-        hasEntropy.push(meta.hasEntropy);
+        slotDtypes.push(meta.slotDtype);
+        traceModes.push(meta.traceMode);
       });
 
-      const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, outputDtypes, hasEntropy);
+      const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, slotDtypes, traceModes);
       const reference = referenceStageTraces(state).get('encoded')!;
       expectTraceEquivalence(encLayout, { values: typed.typedVariableValues, format: 'typed' }, reference);
     });

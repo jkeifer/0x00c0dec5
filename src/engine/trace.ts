@@ -38,9 +38,31 @@ export function makeChunkTraceId(chunkId: string): string {
   return chunkId.startsWith('chunk:') ? chunkId : `chunk:${chunkId}`;
 }
 
+/**
+ * Build a *positional* traceId for one fixed-width slot of a stage's bytes —
+ * the unit a reader that ignored a byte-moving codec would decode (see
+ * CodecDefinition.traceMode 'positional').
+ *
+ * Deliberately NOT `${variableName}:${coords}`: the slot's bytes are not that
+ * element's bytes, so it must never cross-match a real value trace in another
+ * pane. Hovering one highlights exactly its own bytes here and degrades to
+ * the chunk wash everywhere else — which is the truth.
+ *
+ * Identity is the byte offset, which is unique within a stage but means
+ * something different in every other stage's layout. `byteRangesForTrace`
+ * (engine/layout.ts) therefore validates a slot id against the layout it's
+ * given — it only resolves if that offset really is a positional chunk region
+ * — so a slot id leaking into another stage's lookup yields no ranges rather
+ * than an arbitrary byte range.
+ */
+export function makeSlotTraceId(startByte: number, byteCount: number): string {
+  return `slot:${startByte}:${byteCount}`;
+}
+
 export type ParsedTraceId =
   | { kind: 'value'; variableName: string; coords: number[] }
-  | { kind: 'chunk'; chunkId: string };
+  | { kind: 'chunk'; chunkId: string }
+  | { kind: 'slot'; startByte: number; byteCount: number };
 
 /**
  * Parse a traceId produced by `makeTraceId`/`makeChunkTraceId` (or any
@@ -57,6 +79,14 @@ export function parseTraceId(id: string): ParsedTraceId {
   if (id.startsWith('chunk:')) {
     return { kind: 'chunk', chunkId: id };
   }
+  if (id.startsWith('slot:')) {
+    const [start, count] = id.slice('slot:'.length).split(':').map(Number);
+    if (Number.isInteger(start) && Number.isInteger(count)) {
+      return { kind: 'slot', startByte: start, byteCount: count };
+    }
+    // Malformed (or a variable literally named 'slot' — see the module doc's
+    // ':'-in-names caveat): fall through to value parsing.
+  }
   // Split on the FIRST ':' only — see the module doc comment above for why
   // variable names containing ':' are out of scope.
   const colonIdx = id.indexOf(':');
@@ -72,4 +102,10 @@ export function parseTraceId(id: string): ParsedTraceId {
 /** Check if a traceId indicates chunk-level (degraded) tracing. */
 export function isChunkLevelTrace(traceId: string): boolean {
   return parseTraceId(traceId).kind === 'chunk';
+}
+
+/** Check if a traceId is a positional slot — a byte range that decodes as one
+ *  value but is not one element's bytes (post byte-shuffle). */
+export function isPositionalTrace(traceId: string): boolean {
+  return parseTraceId(traceId).kind === 'slot';
 }

@@ -51,12 +51,14 @@ function dir(id: string): string {
   writeManifest(d, m);
 }
 
-// ghcn-daily: 96 rows, 2 stations with long runs, zero-heavy prcp
+// ghcn-daily: 96 rows, 2 stations with long runs, zero-heavy prcp.
+// Mirrors the real extraction: date is days-since-epoch, and the temperature
+// bins hold tenths with manifest `scale: 10`.
 {
   const N = 96;
   const date: number[] = [], tmax: number[] = [], tmin: number[] = [], prcp: number[] = [], station: string[] = [];
   for (let i = 0; i < N; i++) {
-    date.push(20200101 + Math.floor(i / 2));
+    date.push(18262 + Math.floor(i / 2)); // 18262 = 2020-01-01
     tmax.push(150 + Math.round(30 * Math.sin(i / 10)));
     tmin.push(50 + Math.round(30 * Math.sin(i / 10)));
     prcp.push(i % 7 === 0 ? 25 : 0);
@@ -71,14 +73,14 @@ function dir(id: string): string {
   const m: DatasetManifest = {
     id: 'ghcn-daily', shape: [N], attribution: ATT,
     variables: [
-      { name: 'date', kind: 'number', dtype: 'int32', file: 'date.bin', min: 20200101, max: 20200148,
-        logicalType: { type: 'integer', min: 20200101, max: 20200148, generation: 'sorted' } },
-      { name: 'tmax', kind: 'number', dtype: 'int16', file: 'tmax.bin', min: 120, max: 180,
-        logicalType: { type: 'integer', min: 120, max: 180, generation: 'smooth' } },
-      { name: 'tmin', kind: 'number', dtype: 'int16', file: 'tmin.bin', min: 20, max: 80,
-        logicalType: { type: 'integer', min: 20, max: 80, generation: 'smooth' } },
-      { name: 'prcp', kind: 'number', dtype: 'int16', file: 'prcp.bin', min: 0, max: 25,
-        logicalType: { type: 'integer', min: 0, max: 25, generation: 'stepped' } },
+      { name: 'date', kind: 'number', dtype: 'int32', file: 'date.bin', min: 18262, max: 18309,
+        logicalType: { type: 'integer', min: 18262, max: 18309, generation: 'sorted' } },
+      { name: 'tmax', kind: 'number', dtype: 'int16', file: 'tmax.bin', scale: 10, min: 12, max: 18,
+        logicalType: { type: 'decimal', min: 12, max: 18, decimalPlaces: 1, generation: 'smooth' } },
+      { name: 'tmin', kind: 'number', dtype: 'int16', file: 'tmin.bin', scale: 10, min: 2, max: 8,
+        logicalType: { type: 'decimal', min: 2, max: 8, decimalPlaces: 1, generation: 'smooth' } },
+      { name: 'prcp', kind: 'number', dtype: 'int16', file: 'prcp.bin', scale: 10, min: 0, max: 2.5,
+        logicalType: { type: 'decimal', min: 0, max: 2.5, decimalPlaces: 1, generation: 'stepped' } },
       { name: 'station', kind: 'string', ...stationFiles,
         logicalType: { type: 'text', min: 0, max: 0, wordSet: 'stations', generation: 'stepped' } },
     ],

@@ -323,12 +323,12 @@ describe('roundtrip matrix — codec pipelines (1-D single chunk, lossless dtype
 
   const pipelines: { label: string; steps: CodecStep[] }[] = [
     { label: 'empty', steps: [] },
-    { label: '[delta]', steps: [{ codec: 'delta', params: { order: 1 } }] },
+    { label: '[delta]', steps: [{ codec: 'delta', params: {} }] },
     { label: '[byte-shuffle]', steps: [{ codec: 'byte-shuffle', params: { elementSize: 2 } }] },
     {
       label: '[delta, byte-shuffle, rle]',
       steps: [
-        { codec: 'delta', params: { order: 1 } },
+        { codec: 'delta', params: {} },
         { codec: 'byte-shuffle', params: { elementSize: 2 } },
         { codec: 'rle', params: {} },
       ],
@@ -356,7 +356,7 @@ describe('roundtrip matrix — codec pipelines (1-D single chunk, lossless dtype
       interleaving: 'row',
       variables: [signedVar],
       chunkPipeline: [
-        { codec: 'delta', params: { order: 1 } },
+        { codec: 'delta', params: {} },
         { codec: 'byte-shuffle', params: { elementSize: 2 } },
         { codec: 'rle', params: {} },
       ],
@@ -378,7 +378,7 @@ describe('roundtrip matrix — delta codec on unsigned dtype (DC-2)', () => {
       shape: [7],
       chunkShape: [7],
       variables: [uintVar('humidity')],
-      fieldPipelines: { humidity: [{ codec: 'delta', params: { order: 1 } }] },
+      fieldPipelines: { humidity: [{ codec: 'delta', params: {} }] },
     });
     const result = runRoundTrip(state);
     expectExactRoundTrip(result, ['humidity']);
@@ -394,7 +394,7 @@ describe('roundtrip matrix — delta codec on unsigned dtype (DC-2)', () => {
       variables: [uintVar('humidity')],
       fieldPipelines: {
         humidity: [
-          { codec: 'delta', params: { order: 1 } },
+          { codec: 'delta', params: {} },
           { codec: 'byte-shuffle', params: { elementSize: 2 } },
           { codec: 'rle', params: {} },
         ],
@@ -413,7 +413,7 @@ describe('roundtrip matrix — delta codec on unsigned dtype (DC-2)', () => {
       fieldPipelines: {
         temperature: [],
         pressure: [],
-        humidity: [{ codec: 'delta', params: { order: 1 } }],
+        humidity: [{ codec: 'delta', params: {} }],
       },
     });
     const result = runRoundTrip(state);
@@ -829,7 +829,7 @@ describe('roundtrip matrix — D3 metadata.include.chunkIndex', () => {
         shape: [4, 4],
         chunkShape: [2, 2],
         variables: [uintVar('humidity')],
-        fieldPipelines: { humidity: [{ codec: 'delta', params: { order: 1 } }] },
+        fieldPipelines: { humidity: [{ codec: 'delta', params: {} }] },
         metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
       });
       expectExactRoundTrip(runRoundTrip(deltaState), ['humidity']);
@@ -881,7 +881,7 @@ describe('roundtrip matrix — codec lossiness surfaced in lossyVariables (task 
       shape: [7],
       chunkShape: [7],
       variables: [float32Var],
-      fieldPipelines: { reading: [{ codec: 'delta', params: { order: 1 } }] },
+      fieldPipelines: { reading: [{ codec: 'delta', params: {} }] },
     });
     const { readResult } = computePipelineStages(state);
     expect(readResult.success).toBe(true);
@@ -895,7 +895,7 @@ describe('roundtrip matrix — codec lossiness surfaced in lossyVariables (task 
       shape: [7],
       chunkShape: [7],
       variables: [uintVar('humidity')],
-      fieldPipelines: { humidity: [{ codec: 'delta', params: { order: 1 } }] },
+      fieldPipelines: { humidity: [{ codec: 'delta', params: {} }] },
     });
     const { readResult } = computePipelineStages(state);
     expect(readResult.success).toBe(true);
@@ -910,7 +910,7 @@ describe('roundtrip matrix — codec lossiness surfaced in lossyVariables (task 
       chunkShape: [7],
       interleaving: 'row',
       variables: [float32Var, uintVar('humidity')],
-      chunkPipeline: [{ codec: 'delta', params: { order: 1 } }],
+      chunkPipeline: [{ codec: 'delta', params: {} }],
     });
     const { readResult } = computePipelineStages(state);
     expect(readResult.success).toBe(true);
@@ -926,7 +926,7 @@ describe('roundtrip matrix — codec lossiness surfaced in lossyVariables (task 
         chunkShape: [7],
         interleaving: 'row',
         variables: [float32Var],
-        chunkPipeline: [{ codec: 'delta', params: { order: 1 } }],
+        chunkPipeline: [{ codec: 'delta', params: {} }],
       });
       const { readResult: soloResult } = computePipelineStages(soloState);
       expect(soloResult.success).toBe(true);

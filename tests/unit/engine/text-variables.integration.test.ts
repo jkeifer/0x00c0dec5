@@ -68,7 +68,7 @@ describe('text variables — write/read roundtrip', () => {
       fieldPipelines: {},
       // Delta on the shared row pipeline: mixed dtypes force uint8 input
       // (existing rule), so this is byte-wise delta — prove it roundtrips.
-      chunkPipeline: [{ codec: 'delta', params: { order: 1 } } as CodecStep],
+      chunkPipeline: [{ codec: 'delta', params: {} } as CodecStep],
     });
     const totalElements = 16;
     const { readResult } = computePipelineStages(state);

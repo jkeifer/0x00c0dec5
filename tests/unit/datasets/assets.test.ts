@@ -36,6 +36,8 @@ describe('validateManifest', () => {
     ['duplicate names', { ...MANIFEST, variables: [MANIFEST.variables[0], MANIFEST.variables[0]] }],
     ['bad dtype', { ...MANIFEST, variables: [{ ...MANIFEST.variables[0], dtype: 'int64' }] }],
     ['missing attribution', { ...MANIFEST, attribution: undefined }],
+    ['zero scale', { ...MANIFEST, variables: [{ ...MANIFEST.variables[0], scale: 0 }] }],
+    ['non-finite scale', { ...MANIFEST, variables: [{ ...MANIFEST.variables[0], scale: 'ten' }] }],
   ])('throws on %s', (_label, raw) => {
     expect(() => validateManifest(raw, KNOWN_IDS)).toThrow(/dataset manifest/i);
   });
@@ -52,6 +54,13 @@ describe('decodeNumericBin', () => {
     const dv = new DataView(buf);
     dv.setFloat32(0, 1.5, true); dv.setFloat32(4, -2.25, true);
     expect(Array.from(decodeNumericBin(buf, 'float32', 2, 'x.bin'))).toEqual([1.5, -2.25]);
+  });
+  it('undoes a fixed-precision int encoding via scale, exactly', () => {
+    // GHCN's tenths-of-a-degree bin: 156 → 15.6, and the scale/offset lesson
+    // depends on that surviving a round trip back to int16 unchanged.
+    const out = decodeNumericBin(le16([156, -261, 0, 3772]), 'int16', 4, 'tmax.bin', 10);
+    expect(Array.from(out)).toEqual([15.6, -26.1, 0, 377.2]);
+    expect(Array.from(out, (v) => Math.round(v * 10))).toEqual([156, -261, 0, 3772]);
   });
   it('throws on byte-length mismatch, naming the file', () => {
     expect(() => decodeNumericBin(le16([1, 2, 3]), 'int16', 4, 'elevation.bin'))

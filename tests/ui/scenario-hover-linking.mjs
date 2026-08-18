@@ -134,6 +134,72 @@ async function main() {
     `leftHighlighted=${leftHighlighted}`,
   );
 
+  // ── Byte Shuffle: positional (not value-preserving) tracing ─────────────
+  // The bug this pins: byte shuffle transposes bytes within the chunk, but
+  // the Encoded layout used to re-base the Linearized region unchanged — so
+  // hovering an element highlighted the byte range it occupied BEFORE the
+  // shuffle, and the Encoded pane displayed the pre-codec values. Now a
+  // shuffled chunk's slots are positional: a value hover finds no matching
+  // bytes and degrades to the chunk wash, exactly like an entropy codec.
+  await page.mouse.move(10, 10);
+  await page.locator('[data-testid="sidebar-section-codecs"] select').first().selectOption('byte-shuffle');
+  await page.waitForTimeout(600);
+  await setPaneStage(page, 'right', 'encoded');
+
+  const cellAfterShuffle = page.locator('[data-testid="pane-left"] [data-testid^="table-cell-temperature-"]').first();
+  await cellAfterShuffle.hover();
+  await page.waitForTimeout(400);
+  await shot(page, 'hover-linking-byte-shuffle-positional');
+
+  const shuffleHighlights = await highlightCounts(page, '[data-testid="pane-right"]');
+  h.check(
+    'after byte shuffle, hovering a table cell no longer strong-highlights a (now wrong) byte range in the Encoded pane',
+    shuffleHighlights.valueLevel === 0 && shuffleHighlights.chunkLevel > 1,
+    `valueLevel=${shuffleHighlights.valueLevel} chunkLevel=${shuffleHighlights.chunkLevel}`,
+  );
+
+  // Hovering a shuffled byte highlights exactly its own slot (one dtype's
+  // worth of bytes), and the hover bar says the value is positional only.
+  await page.mouse.move(10, 10);
+  const shuffledByte = page.locator('[data-testid="pane-right"] [data-testid^="hex-byte-"]').nth(9);
+  await shuffledByte.hover();
+  await page.waitForTimeout(400);
+  await shot(page, 'hover-linking-byte-shuffle-slot');
+
+  const slotHighlights = await highlightCounts(page, '[data-testid="pane-right"]');
+  h.check(
+    'hovering a shuffled byte strong-highlights only its own positional slot',
+    slotHighlights.valueLevel > 0 && slotHighlights.valueLevel <= 8,
+    `valueLevel=${slotHighlights.valueLevel} chunkLevel=${slotHighlights.chunkLevel}`,
+  );
+  h.check(
+    'hover bar flags a shuffled slot as byte-position-only, not this element\'s data',
+    await page.locator('[data-testid="hover-bar-positional"]').count() > 0,
+    (await page.locator('[data-testid="hover-bar"]').innerText()).replace(/\n/g, ' | ').slice(0, 220),
+  );
+
+  // The Encoded pane's Flat view must show what the shuffled bytes decode to,
+  // not the pre-codec values the Linearized pane shows.
+  await page.mouse.move(10, 10);
+  await setPaneViewMode(page, 'right', 'Flat');
+  await page.waitForTimeout(300);
+  const encodedFlat = await page.locator('[data-testid="pane-right"] [data-testid="flat-view"]').innerText();
+  await shot(page, 'hover-linking-byte-shuffle-flat-encoded');
+  await setPaneStage(page, 'right', 'linearized');
+  await page.waitForTimeout(300);
+  const linearizedFlat = await page.locator('[data-testid="pane-right"] [data-testid="flat-view"]').innerText();
+  await shot(page, 'hover-linking-byte-shuffle-flat');
+  h.check(
+    'Encoded flat view shows the shuffled bytes\' values, not the Linearized stage\'s values',
+    encodedFlat.length > 0 && encodedFlat !== linearizedFlat,
+    `encoded[0:80]=${encodedFlat.replace(/\n/g, ' | ').slice(0, 80)}`,
+  );
+
+  // Drop the shuffle step so the RLE block below starts from a clean pipeline.
+  await page.locator('[data-testid="sidebar-section-codecs"] button[aria-label="Remove Byte Shuffle"]').click();
+  await page.waitForTimeout(500);
+  await setPaneViewMode(page, 'right', 'Hex');
+
   // ── Add RLE to temperature (column mode default codec pipeline), then hover ──
   // an Encoded-stage byte and confirm chunk-level (multi-cell) highlighting.
   await page.mouse.move(10, 10);

@@ -1,10 +1,14 @@
 /**
  * GHCN-Daily station rows → data-branch-work/datasets/ghcn-daily/.
  * Source: NOAA NCEI GHCN-Daily by-station CSVs (public domain).
- * Columns kept: DATE (int yyyymmdd, sorted per station), TMAX/TMIN/PRCP
- * (tenths, int16), station NAME (categorical — long runs across the
- * concatenated stations: the dictionary/RLE payoff). Rows missing any kept
- * value are dropped (spec: no missingness modeling in v1).
+ * Columns kept: DATE (int32 days since 1970-01-01, sorted per station — what
+ * Parquet/Arrow DATE actually is; yyyymmdd is a string pretending to be a
+ * number, and deltas across a month boundary jump by 70), TMAX/TMIN/PRCP
+ * (int16 tenths with manifest `scale: 10`, so the app sees °C / mm at one
+ * decimal and the user gets to rediscover scale/offset), station NAME
+ * (categorical — long runs across the concatenated stations: the
+ * dictionary/RLE payoff). Rows missing any kept value are dropped (spec: no
+ * missingness modeling in v1).
  */
 import { assert, fetchText, outDir, parseCsvLine, today, writeInt16Bin, writeInt32Bin, writeManifest, writeStringColumn } from './lib.ts';
 import type { DatasetManifest } from '../../src/datasets/types.ts';
@@ -37,7 +41,8 @@ for (const id of STATIONS) {
     const f = parseCsvLine(line);
     const [dt, tx, tn, pr] = [f[cDate], f[cTmax], f[cTmin], f[cPrcp]];
     if (!dt || tx === '' || tn === '' || pr === '') continue;
-    const d = Number(dt.replaceAll('-', ''));
+    // GHCN DATE is YYYY-MM-DD; store days since the Unix epoch (Parquet DATE).
+    const d = Math.round(Date.parse(`${dt}T00:00:00Z`) / 86_400_000);
     const [txN, tnN, prN] = [Number(tx), Number(tn), Number(pr)];
     if (![d, txN, tnN, prN].every(Number.isFinite)) continue;
     if (Math.abs(txN) > 32767 || Math.abs(tnN) > 32767 || prN < 0 || prN > 32767) continue;
@@ -67,6 +72,11 @@ function range(a: number[]): { min: number; max: number } {
 }
 const rDate = range(date), rTmax = range(tmax), rTmin = range(tmin), rPrcp = range(prcp);
 
+/** Manifest bounds are LOGICAL (post-scale): the bins hold tenths. */
+const SCALE = 10;
+const lo = (r: { min: number }) => r.min / SCALE;
+const hi = (r: { max: number }) => r.max / SCALE;
+
 const manifest: DatasetManifest = {
   id: 'ghcn-daily',
   shape: [n],
@@ -79,12 +89,12 @@ const manifest: DatasetManifest = {
   variables: [
     { name: 'date', kind: 'number', dtype: 'int32', file: 'date.bin', min: rDate.min, max: rDate.max,
       logicalType: { type: 'integer', min: rDate.min, max: rDate.max, generation: 'sorted' } },
-    { name: 'tmax', kind: 'number', dtype: 'int16', file: 'tmax.bin', min: rTmax.min, max: rTmax.max,
-      logicalType: { type: 'integer', min: rTmax.min, max: rTmax.max, generation: 'smooth' } },
-    { name: 'tmin', kind: 'number', dtype: 'int16', file: 'tmin.bin', min: rTmin.min, max: rTmin.max,
-      logicalType: { type: 'integer', min: rTmin.min, max: rTmin.max, generation: 'smooth' } },
-    { name: 'prcp', kind: 'number', dtype: 'int16', file: 'prcp.bin', min: rPrcp.min, max: rPrcp.max,
-      logicalType: { type: 'integer', min: rPrcp.min, max: rPrcp.max, generation: 'stepped' } },
+    { name: 'tmax', kind: 'number', dtype: 'int16', file: 'tmax.bin', scale: SCALE, min: lo(rTmax), max: hi(rTmax),
+      logicalType: { type: 'decimal', min: lo(rTmax), max: hi(rTmax), decimalPlaces: 1, generation: 'smooth' } },
+    { name: 'tmin', kind: 'number', dtype: 'int16', file: 'tmin.bin', scale: SCALE, min: lo(rTmin), max: hi(rTmin),
+      logicalType: { type: 'decimal', min: lo(rTmin), max: hi(rTmin), decimalPlaces: 1, generation: 'smooth' } },
+    { name: 'prcp', kind: 'number', dtype: 'int16', file: 'prcp.bin', scale: SCALE, min: lo(rPrcp), max: hi(rPrcp),
+      logicalType: { type: 'decimal', min: lo(rPrcp), max: hi(rPrcp), decimalPlaces: 1, generation: 'stepped' } },
     { name: 'station', kind: 'string', ...stationFiles,
       logicalType: { type: 'text', min: 0, max: 0, wordSet: 'stations', generation: 'stepped' } },
   ],

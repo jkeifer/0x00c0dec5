@@ -24,7 +24,9 @@ describe('CURATED_VARIABLES pinned against fixture manifests', () => {
         expect(entry, `no catalog entry for ${dataset.id}/${mv.name}`).toBeDefined();
         expect(entry!.kind).toBe(mv.kind);
         if (mv.kind === 'number') {
-          expect(entry!.dtype).toBe(mv.dtype);
+          // A scaled bin decodes to floats, so the catalog's drop-in dtype is
+          // float32 rather than the bin's int (see CuratedVariable.dtype).
+          expect(entry!.dtype).toBe(mv.scale ? 'float32' : mv.dtype);
         } else {
           expect(entry!.dtype).toBeUndefined();
         }

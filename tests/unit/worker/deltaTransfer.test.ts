@@ -73,7 +73,7 @@ describe('delta transfer with real buffer detaching', () => {
     // Codec change on top: encoded+ resent.
     const codecChanged: AppState = {
       ...chunkChanged,
-      fieldPipelines: { ...chunkChanged.fieldPipelines, temperature: [{ codec: 'delta', params: { order: 1 } }] },
+      fieldPipelines: { ...chunkChanged.fieldPipelines, temperature: [{ codec: 'delta', params: {} }] },
     };
     keys = apply(store, computeAndPost(compute, codecChanged, keys));
     expectMatchesReference(store, codecChanged);

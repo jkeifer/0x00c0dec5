@@ -48,6 +48,9 @@ export function validateManifest(raw: unknown, knownIds: readonly string[]): Dat
       if (typeof v.dtype !== 'string' || !NUMERIC_DTYPES.includes(v.dtype)) fail(`${v.name}: bad dtype`);
       if (typeof v.file !== 'string') fail(`${v.name}: missing file`);
       if (typeof v.min !== 'number' || typeof v.max !== 'number') fail(`${v.name}: missing min/max`);
+      if (v.scale !== undefined && (typeof v.scale !== 'number' || !Number.isFinite(v.scale) || v.scale === 0)) {
+        fail(`${v.name}: scale must be a finite non-zero number`);
+      }
     } else if (v.kind === 'string') {
       if (typeof v.dictFile !== 'string' || typeof v.codesFile !== 'string') fail(`${v.name}: missing dict/codes file`);
       if (typeof v.codesDtype !== 'string' || !CODES_DTYPES.includes(v.codesDtype)) fail(`${v.name}: bad codesDtype`);
@@ -59,9 +62,12 @@ export function validateManifest(raw: unknown, knownIds: readonly string[]): Dat
 }
 
 /** Decode a little-endian numeric bin into logical (float64) values.
- * Explicit-LE DataView reads, not typed-array views (platform endianness). */
+ * Explicit-LE DataView reads, not typed-array views (platform endianness).
+ * `scale` undoes a fixed-precision integer encoding (see
+ * ManifestNumericVariable.scale): stored 156, scale 10 → logical 15.6. */
 export function decodeNumericBin(
   buf: ArrayBuffer, dtype: NumericBinDtype, expectedLength: number, label: string,
+  scale = 1,
 ): Float64Array {
   const { size, read } = READERS[dtype];
   const expectedBytes = expectedLength * size;
@@ -70,7 +76,7 @@ export function decodeNumericBin(
   }
   const dv = new DataView(buf);
   const out = new Float64Array(expectedLength);
-  for (let i = 0; i < expectedLength; i++) out[i] = read(dv, i * size);
+  for (let i = 0; i < expectedLength; i++) out[i] = read(dv, i * size) / scale;
   return out;
 }
 
@@ -116,7 +122,7 @@ export async function fetchDatasetVariable(
   if (!v) throw new Error(`dataset "${manifest.id}": no variable named "${variableName}"`);
   const n = manifest.shape.reduce((a, b) => a * b, 1);
   if (v.kind === 'number') {
-    return decodeNumericBin(await fetchBuf(urlFor(v.file), v.file, fetchFn), v.dtype, n, v.file);
+    return decodeNumericBin(await fetchBuf(urlFor(v.file), v.file, fetchFn), v.dtype, n, v.file, v.scale ?? 1);
   }
   // Fetch a string column's dict + codes in parallel.
   const [dict, codes] = await Promise.all([

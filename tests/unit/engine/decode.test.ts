@@ -15,7 +15,7 @@ describe('reverseCodecPipeline', () => {
   it('reverses single delta codec exactly', () => {
     const originalValues = [10, 20, 30, 40];
     const input = valuesToBytes(originalValues, 'int32');
-    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    const steps: CodecStep[] = [{ codec: 'delta', params: {} }];
     const encoded = runCodecPipeline(input, steps, 'int32');
 
     const decoded = reverseCodecPipeline(encoded.bytes, steps, 'int32');
@@ -45,7 +45,7 @@ describe('reverseCodecPipeline', () => {
     const originalValues = [10, 20, 30, 40, 50, 60, 70, 80];
     const input = valuesToBytes(originalValues, 'int32');
     const steps: CodecStep[] = [
-      { codec: 'delta', params: { order: 1 } },
+      { codec: 'delta', params: {} },
       { codec: 'byte-shuffle', params: { elementSize: 4 } },
       { codec: 'rle', params: {} },
     ];
@@ -62,4 +62,42 @@ describe('reverseCodecPipeline', () => {
     const result = reverseCodecPipeline(input, steps, 'int32');
     expect(Array.from(bytesToValues(result.bytes, 'int32'))).toEqual([1, 2, 3]);
   });
+});
+
+// The dtype flow across a shuffle is uint8, and `reverseCodecPipeline` builds
+// its chain from `outputDtypeFor`. These pin the two ways that could break:
+// a codec that reads its geometry off the declared dtype (Bit Shuffle used to),
+// and a chain whose backward dtypes must match the forward ones step for step.
+describe('reverseCodecPipeline across structure-destroying codecs', () => {
+  const original = valuesToBytes([1000, -2000, 3000, -4000, 5000, 6000], 'int16');
+
+  const pipelines: [string, CodecStep[]][] = [
+    ['[byte-shuffle]', [{ codec: 'byte-shuffle', params: { elementSize: 2 } }]],
+    ['[bit-shuffle]', [{ codec: 'bit-shuffle', params: { elementSize: 2 } }]],
+    // Delta AFTER a shuffle is the arrangement the whole dtype fix is about:
+    // the bytes are byte planes, so the honest element size is 1.
+    ['[byte-shuffle, delta@1]', [
+      { codec: 'byte-shuffle', params: { elementSize: 2 } },
+      { codec: 'delta', params: { elementSize: 1 } },
+    ]],
+    ['[delta@2, byte-shuffle, rle]', [
+      { codec: 'delta', params: { elementSize: 2 } },
+      { codec: 'byte-shuffle', params: { elementSize: 2 } },
+      { codec: 'rle', params: {} },
+    ]],
+    ['[bit-shuffle, delta@1, zstd-less chain]', [
+      { codec: 'bit-shuffle', params: { elementSize: 2 } },
+      { codec: 'delta', params: { elementSize: 1 } },
+      { codec: 'dictionary', params: {} },
+    ]],
+  ];
+
+  for (const [label, steps] of pipelines) {
+    it(`round-trips ${label} back to int16 bytes`, () => {
+      const encoded = runCodecPipeline(original, steps, 'int16');
+      const reversed = reverseCodecPipeline(encoded.bytes, steps, 'int16');
+      expect(Array.from(reversed.bytes), label).toEqual(Array.from(original));
+      expect(reversed.outputDtype, label).toBe('int16');
+    });
+  }
 });

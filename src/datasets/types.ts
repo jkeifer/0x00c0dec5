@@ -22,7 +22,13 @@ export interface ManifestNumericVariable {
   kind: 'number';
   dtype: NumericBinDtype;
   file: string;        // relative to the dataset's directory on the data branch
-  min: number;         // observed at extraction (display/logicalType bounds)
+  /** The bin is a fixed-precision integer encoding: logical = stored / scale
+   * (GHCN stores tenths of a degree → scale 10 → 15.6 °C). Same direction as
+   * TypeAssignment.scale, so the bin holds exactly what assignType would have
+   * written. Absent means 1 — the bin holds logical values directly.
+   * ponytail: no `offset` until a dataset needs one. */
+  scale?: number;
+  min: number;         // observed at extraction, in LOGICAL units (post-scale)
   max: number;
   logicalType: LogicalTypeConfig;
 }

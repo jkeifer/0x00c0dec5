@@ -27,9 +27,11 @@ export interface TraceGroup {
  *    produce zero ByteTrace entries upstream, per chunkRegionsOf's zero-width
  *    guard — see layout.ts's values branch comment).
  *  - values (fixed-width): one group per element.
- *  - chunk, value-preserving: one group per (element × field) — this is the
- *    per-value trace count within the chunk, matching linearizeChunk's byte
- *    order (column: field blocks sequential; row: records interleaved).
+ *  - chunk, value-preserving / positional: one group per (element × field) —
+ *    the fixed-width slot count within the chunk, matching linearizeChunk's
+ *    byte order (column: field blocks sequential; row: records interleaved).
+ *    Positional regions have the same slot geometry; only what a slot *means*
+ *    differs (see ChunkBlockRegion.mode).
  *  - chunk, chunk-level / structural: the whole region is one trace. */
 function regionGroupCount(r: LayoutRegion): number {
   if (r.kind === 'values') {
@@ -42,7 +44,7 @@ function regionGroupCount(r: LayoutRegion): number {
     }
     return r.elementCount;
   }
-  if (r.kind === 'chunk' && r.mode === 'value-preserving') {
+  if (r.kind === 'chunk' && r.mode !== 'chunk-level') {
     const elementCount = r.elementDims.reduce((a, b) => a * b, 1);
     return elementCount * r.fields.length;
   }
@@ -104,7 +106,7 @@ export function flatGroupAt(
         isChunkLevel: false,
       };
     }
-    if (r.kind === 'chunk' && r.mode === 'value-preserving') {
+    if (r.kind === 'chunk' && r.mode !== 'chunk-level') {
       const fieldCount = r.fields.length;
       let elemFlat: number;
       let field: ChunkFieldLayout;
@@ -175,7 +177,7 @@ export function flatGroupIndexOf(layout: StageLayout, id: string): number | unde
     const stride = target.stride!;
     return base + Math.floor(rel / stride);
   }
-  if (target.kind === 'chunk' && target.mode === 'value-preserving') {
+  if (target.kind === 'chunk' && target.mode !== 'chunk-level') {
     const rel = byteIndex - target.start;
     const elementCount = target.elementDims.reduce((a, b) => a * b, 1);
     if (target.interleaving === 'column') {

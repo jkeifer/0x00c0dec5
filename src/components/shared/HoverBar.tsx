@@ -4,7 +4,7 @@ import { STAGE_ORDER } from '../../types/pipeline.ts';
 import type { ValueSources } from '../../engine/layout.ts';
 import { byteRangesForTrace, traceAt } from '../../engine/layout.ts';
 import { useHover } from '../../hooks/useHover.ts';
-import { isChunkLevelTrace } from '../../engine/trace.ts';
+import { isChunkLevelTrace, isPositionalTrace } from '../../engine/trace.ts';
 import { colors, displayColor, fontSizes, spacing, fonts } from '../../theme.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
 
@@ -101,6 +101,10 @@ export function HoverBar({ stages, stageSources }: HoverBarProps) {
   }
 
   const isChunk = isChunkLevelTrace(hoveredTraceId);
+  // Positional slot (post byte-shuffle): the label and value are what a
+  // reader ignoring the codec would decode here, NOT this element's data —
+  // say so, or "temperature[3] = -24415" reads as a real (wrong) value.
+  const isPositional = isPositionalTrace(hoveredTraceId);
   // Structural traces (write-stage magic bytes and the metadata block) carry
   // no variable identity — `variableName`/`variableColor` are both `''`
   // (see makeMagicTraces/makeMetadataTraces in src/engine/write.ts, traceIds
@@ -144,6 +148,13 @@ export function HoverBar({ stages, stageSources }: HoverBarProps) {
       {isChunk && (
         <span style={{ color: colors.textSecondary, fontStyle: 'italic' }}>
           (chunk-level, value detail lost)
+        </span>
+      )}
+
+      {isPositional && (
+        <span data-testid="hover-bar-positional" style={{ color: colors.textSecondary, fontStyle: 'italic' }}>
+          (byte position only — the codec moved these bytes, so this is what a
+          reader ignoring it would decode here, not this element's data)
         </span>
       )}
 

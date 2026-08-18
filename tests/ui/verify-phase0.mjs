@@ -109,7 +109,7 @@ async function main() {
       fieldPipelines: {
         a: [
           { codec: 'scale-offset', params: {} },
-          { codec: 'delta', params: { order: 1 } },
+          { codec: 'delta', params: {} },
         ],
       },
       chunkPipeline: [],

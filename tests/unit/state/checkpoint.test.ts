@@ -137,7 +137,7 @@ describe('restoreCheckpoint — flow', () => {
       result.current.dispatch({
         type: 'SET_FIELD_PIPELINE',
         variableId,
-        steps: [{ codec: 'delta', params: { order: 1 } }],
+        steps: [{ codec: 'delta', params: {} }],
       });
     });
     expect(result.current.state.shape).toEqual([16]);

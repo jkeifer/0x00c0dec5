@@ -71,3 +71,38 @@ describe('codec picker flat list', () => {
     ]);
   });
 });
+
+// The `elementSize` seed (SW-7, generalized to Delta): a step is added with the
+// element size the bytes will actually have at that point in the pipeline, so
+// the field shows a concrete number and never a magic "auto".
+describe('elementSize seeding on add', () => {
+  function addAfter(steps: { codec: string; params: Record<string, number | string> }[], inputDtype: 'float32' | 'int16', codecKey: string) {
+    const onChange = vi.fn();
+    const { container } = render(
+      <CodecPipelineEditor steps={steps} inputDtype={inputDtype} onChange={onChange} />,
+    );
+    const select = Array.from(container.querySelectorAll('select')).at(-1)!;
+    fireEvent.change(select, { target: { value: codecKey } });
+    const added = onChange.mock.calls[0][0].at(-1);
+    return added.params.elementSize;
+  }
+
+  it('seeds from the input dtype size on an empty pipeline', () => {
+    expect(addAfter([], 'float32', 'delta')).toBe(4);
+    expect(addAfter([], 'int16', 'delta')).toBe(2);
+    expect(addAfter([], 'int16', 'byte-shuffle')).toBe(2);
+  });
+
+  it('seeds 1 after a byte shuffle, whose declared dtype is stale', () => {
+    const shuffled = [{ codec: 'byte-shuffle', params: { elementSize: 4 } }];
+    // The dtype flow still says float32/int32 here — only traceMode knows the
+    // bytes are byte planes now. Both must seed 1, which is why "not an int"
+    // would not have been enough.
+    expect(addAfter(shuffled, 'float32', 'delta')).toBe(1);
+    expect(addAfter(shuffled, 'int16', 'delta')).toBe(1);
+  });
+
+  it('seeds 1 after an entropy codec, whose output really is uint8', () => {
+    expect(addAfter([{ codec: 'rle', params: {} }], 'float32', 'delta')).toBe(1);
+  });
+});

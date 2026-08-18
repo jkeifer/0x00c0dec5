@@ -3,7 +3,7 @@ import type { DtypeKey } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
 import type { TypeAssignment } from '../types/state.ts';
 import { type MetadataEntry, METADATA_KEY_GROUPS, type ChunkIndexEntry } from './metadata.ts';
-import { CODEC_REGISTRY } from './codecs.ts';
+import { CODEC_REGISTRY, outputDtypeFor } from './codecs.ts';
 import { LINEARIZATION_ORDERS, type LinearizationOrder } from './order.ts';
 import { locateMetadata, verifyMagic, describeMagicMismatch } from './readLocate.ts';
 import {
@@ -474,8 +474,7 @@ export function isPipelineLossy(steps: CodecStep[], startDtype: DtypeKey): boole
     if (codec.isLossy(currentDtype)) {
       return true;
     }
-    // Dtype flow: reordering codecs preserve dtype, entropy codecs output uint8.
-    currentDtype = codec.category === 'entropy' ? 'uint8' : currentDtype;
+    currentDtype = outputDtypeFor(codec, currentDtype);
   }
   return false;
 }
