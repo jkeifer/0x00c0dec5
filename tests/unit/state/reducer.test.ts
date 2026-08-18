@@ -124,6 +124,23 @@ describe('ADD_VARIABLE', () => {
     expect(result.fieldPipelines['v1']).toEqual(existingSteps);
     expect(result.fieldPipelines['v2']).toEqual([]);
   });
+
+  // S3: id collisions (e.g. rapid double-click of add-variable minting the
+  // same var_${Date.now()} id) must not silently duplicate the row or
+  // clobber its field pipeline.
+  it('rejects a variable whose id collides with an existing one', () => {
+    const existingSteps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    const v1 = makeVariable({ id: 'v1', name: 'temp' });
+    const state = makeState({
+      variables: [v1],
+      fieldPipelines: { v1: existingSteps },
+    });
+    const dupe = makeVariable({ id: 'v1', name: 'pressure', color: '#61afef' });
+    const result = reducer(state, { type: 'ADD_VARIABLE', variable: dupe });
+    expect(result.variables).toHaveLength(1);
+    expect(result.variables[0]).toEqual(v1);
+    expect(result.fieldPipelines['v1']).toEqual(existingSteps);
+  });
 });
 
 // ─── REMOVE_VARIABLE ───────────────────────────────────────────────

@@ -95,6 +95,7 @@ export function reducer(state: AppState, action: AppAction): AppState {
 
     case 'ADD_VARIABLE':
       return produce(state, (draft) => {
+        if (draft.variables.some((v) => v.id === action.variable.id)) return;
         draft.variables.push(action.variable);
         draft.fieldPipelines[action.variable.id] = [];
       });
@@ -257,9 +258,10 @@ interface AppStateContextValue {
    * Unlike the preset custom slot, restoring does NOT clear or re-snapshot
    * the checkpoint — it's meant to be restored repeatedly during a live
    * talk. A no-op (does not dispatch) if no checkpoint exists or it fails
-   * validation.
+   * validation, in which case this returns `false` so the caller (Header)
+   * can surface the failure instead of clicking the button into silence.
    */
-  restoreCheckpoint: () => void;
+  restoreCheckpoint: () => boolean;
   /**
    * Clear the ACTIVE data model's configuration to a *blank* state (zero
    * variables — `makeEmptyState`, not DEFAULT_STATE's starter variables).
@@ -427,11 +429,12 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     if (!restored) {
       // Part C: the user clicked Restore; say why nothing happened.
       console.error('restoreCheckpoint: no valid checkpoint to restore (none saved, or it failed validation)');
-      return;
+      return false;
     }
     saveActiveModel(restored.dataModel);
     saveState(restored);
     dispatch({ type: 'REPLACE_STATE', state: restored });
+    return true;
   }, []);
 
   const clearConfig = useCallback(() => {

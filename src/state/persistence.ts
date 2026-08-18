@@ -7,8 +7,9 @@ import type { StageName } from '../types/pipeline.ts';
 import { STAGE_ORDER } from '../types/pipeline.ts';
 import { curatedVariable } from '../datasets/registry.ts';
 import type { DatasetId } from '../datasets/types.ts';
+import { pipelineCapError } from '../engine/pipelineCompute.ts';
 
-const STORAGE_KEYS: Record<AppState['dataModel'], string> = {
+export const STORAGE_KEYS: Record<AppState['dataModel'], string> = {
   tabular: '0x00c0dec5-state-tabular',
   array: '0x00c0dec5-state-array',
 };
@@ -295,6 +296,18 @@ function validateState(state: AppState): AppState {
     state.variables = normalizeSource(normalizeText(normalizeGeneration(state.variables.filter(isValidVariable))), state.dataModel);
   }
 
+  // Drop rows with a duplicate id (e.g. a hand-merged save), keeping the
+  // first occurrence — everything downstream (fieldPipelines keying, React
+  // list keys, hover trace ids) assumes Variable.id is unique (S3).
+  {
+    const seenIds = new Set<string>();
+    state.variables = state.variables.filter((v) => {
+      if (seenIds.has(v.id)) return false;
+      seenIds.add(v.id);
+      return true;
+    });
+  }
+
   // shape: must be an array of positive integers, else fall back to defaults entirely
   if (!isPositiveIntArray(state.shape)) {
     return { ...structuredClone(DEFAULT_STATE), dataModel: state.dataModel };
@@ -315,6 +328,14 @@ function validateState(state: AppState): AppState {
       }
     }
     state.chunkShape = newChunkShape;
+  }
+
+  // A save whose shape/variables would OOM the compute (the crash-loop bug:
+  // an oversized shape gets persisted mid-typing, then every reload crashes
+  // until storage is cleared by hand) degrades to defaults instead of
+  // loading. Dropping beats migrating here, same as the dataset-era saves.
+  if (pipelineCapError(state) !== null) {
+    return { ...structuredClone(DEFAULT_STATE), dataModel: state.dataModel };
   }
 
   // ui.leftPaneStage / ui.rightPaneStage (D5, Phase 3.8): StageName, not a
@@ -354,6 +375,19 @@ function validateState(state: AppState): AppState {
   // chunkPipeline: array
   if (!Array.isArray(state.chunkPipeline)) {
     state.chunkPipeline = [];
+  }
+
+  // metadata.customEntries: array of {key, value} strings (F16) — every
+  // other collection here is guarded; this one wasn't, so a corrupt/hand-
+  // edited non-array value reached metadata.ts's iteration unchecked and
+  // threw inside the worker instead of degrading cleanly.
+  if (!Array.isArray(state.metadata.customEntries)) {
+    state.metadata.customEntries = [];
+  } else {
+    state.metadata.customEntries = state.metadata.customEntries.filter(
+      (e): e is { key: string; value: string } =>
+        isPlainObject(e) && typeof e.key === 'string' && typeof e.value === 'string',
+    );
   }
 
   return state;

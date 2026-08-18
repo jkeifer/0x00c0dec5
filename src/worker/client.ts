@@ -33,6 +33,14 @@ export interface WorkerLike { // structural subset of Worker, for test fakes
 
 interface InFlight { id: number; state: AppState }
 
+// F18: a worker that keeps crashing on the same reposted state is a silent
+// crash-loop (each respawn re-streams ~12MB of Pyodide, only visible two
+// clicks deep in the About modal's Respawns counter). Once respawns cross
+// this small threshold, the crash-loop itself — not just the latest crash's
+// raw message — becomes the banner's error so it reads as "this keeps
+// happening" rather than one more one-off failure.
+const RESPAWN_LOOP_THRESHOLD = 3;
+
 export class PipelineWorkerClient {
   private readonly createWorker: () => WorkerLike;
   private readonly onResult: (result: PipelineResult, diag: WorkerDiagnostics) => void;
@@ -114,10 +122,11 @@ export class PipelineWorkerClient {
   private armWatchdog(): void {
     this.clearWatchdog();
     this.watchdogTimer = setTimeout(() => {
-      // Per the brief: watchdog only fires the crash path when a NEWER state
-      // is queued behind the stuck compute — an in-flight compute with
-      // nothing queued is left alone (no substitute state to repost).
-      if (this.queued !== null) this.handleCrash('watchdog timeout');
+      // F5: fire the crash/respawn path on timeout regardless of whether a
+      // newer state is queued — an in-flight compute with nothing queued
+      // must not hang forever. handleCrash's repost fallback
+      // (queued ?? inFlight?.state) reposts the stuck state itself here.
+      this.handleCrash('watchdog timeout');
     }, this.watchdogMs);
   }
 
@@ -146,12 +155,21 @@ export class PipelineWorkerClient {
     if (!this.inFlight || msg.id !== this.inFlight.id) return; // stale, ignore
 
     this.clearWatchdog();
+    const computedState = this.inFlight.state;
     this.inFlight = null;
     this.status = 'idle';
 
     if (msg.ok) {
       const result = this.applyDelta(msg.delta);
       if (result !== null) {
+        // Attach the config this result was computed from so the stale-view
+        // UX can lay it out consistently (see PipelineResult.computedFrom).
+        result.computedFrom = {
+          shape: computedState.shape,
+          chunkShape: computedState.chunkShape,
+          variables: computedState.variables,
+          interleaving: computedState.interleaving,
+        };
         this.lastTimings = msg.timings;
         this.lastTotalMs = msg.totalMs;
         this.lastError = null;
@@ -196,7 +214,10 @@ export class PipelineWorkerClient {
     this.queued = null;
     this.respawnCount++;
     this.status = 'crashed';
-    this.lastError = error;
+    this.lastError =
+      this.respawnCount >= RESPAWN_LOOP_THRESHOLD
+        ? `worker keeps crashing (${this.respawnCount} restarts so far, latest: ${error})`
+        : error;
     this.runtime = INITIAL_RUNTIME_STATE; // respawned worker re-streams the load sequence from scratch
     this.onStatus?.(this.diagnostics());
     if (repost !== null) this.post(repost);

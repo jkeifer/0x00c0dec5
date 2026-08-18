@@ -91,6 +91,29 @@ describe('loadState — v1 dtype-variable migration', () => {
   });
 });
 
+describe('loadState — F31 CodecStep.enabled round-trip', () => {
+  it('preserves enabled:false (and absent = enabled) through save/load', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      variables: [makeVariable({ id: 'v1', name: 'temp' })],
+      fieldPipelines: {
+        v1: [
+          { codec: 'delta', params: {} },
+          { codec: 'byte-shuffle', params: { elementSize: 4 }, enabled: false },
+        ],
+      },
+      chunkPipeline: [{ codec: 'rle', params: {}, enabled: true }],
+    };
+    saveState(state);
+    const result = loadState('tabular');
+    expect(result!.fieldPipelines.v1).toEqual([
+      { codec: 'delta', params: {} },
+      { codec: 'byte-shuffle', params: { elementSize: 4 }, enabled: false },
+    ]);
+    expect(result!.chunkPipeline).toEqual([{ codec: 'rle', params: {}, enabled: true }]);
+  });
+});
+
 describe('loadState — default-merge for missing fields', () => {
   it('fills in missing write.includeMetadata and ui.showDiff with defaults', () => {
     const partial = {
@@ -255,6 +278,25 @@ describe('loadState — variable validation', () => {
     const result = loadState('tabular');
     expect(result).not.toBeNull();
     expect(result!.variables).toEqual(DEFAULT_STATE.variables);
+  });
+
+  // S3: a hand-merged save can duplicate a Variable.id; everything downstream
+  // (fieldPipelines keying, React list keys, hover trace ids) assumes
+  // uniqueness, so validateState self-heals by keeping the first occurrence.
+  it('drops variables with a duplicate id, keeping the first occurrence', () => {
+    const v1 = makeVariable({ id: 'v1', name: 'temp' });
+    const dupe = makeVariable({ id: 'v1', name: 'pressure', color: '#61afef' });
+    const state = {
+      ...DEFAULT_STATE,
+      variables: [v1, dupe],
+      fieldPipelines: { v1: [{ codec: 'delta', params: { order: 1 } }] },
+    };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.variables).toHaveLength(1);
+    expect(result!.variables[0].name).toBe('temp');
+    expect(result!.fieldPipelines['v1']).toEqual([{ codec: 'delta', params: { order: 1 } }]);
   });
 });
 
@@ -523,6 +565,39 @@ describe('loadState — fieldPipelines/chunkPipeline defaults', () => {
     const result = loadState('tabular');
     expect(result).not.toBeNull();
     expect(result!.chunkPipeline).toEqual([]);
+  });
+
+  it('defaults metadata.customEntries to an empty array when it is not an array (F16)', () => {
+    const state: Record<string, unknown> = {
+      ...DEFAULT_STATE,
+      metadata: { ...DEFAULT_STATE.metadata, customEntries: 'not-an-array' },
+    };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.metadata.customEntries).toEqual([]);
+  });
+
+  it('drops malformed entries from metadata.customEntries but keeps well-formed ones (F16)', () => {
+    const state: Record<string, unknown> = {
+      ...DEFAULT_STATE,
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        customEntries: [
+          { key: 'good', value: 'ok' },
+          { key: 'no-value' },
+          { value: 'no-key' },
+          null,
+          'a string',
+          42,
+          { key: 1, value: 2 },
+        ],
+      },
+    };
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(state));
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.metadata.customEntries).toEqual([{ key: 'good', value: 'ok' }]);
   });
 });
 

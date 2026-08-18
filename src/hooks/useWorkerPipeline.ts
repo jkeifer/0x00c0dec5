@@ -19,6 +19,26 @@ export interface UseWorkerPipelineResult {
 }
 
 /**
+ * The AppState keys treated as pipeline inputs (i.e. everything except
+ * `ui`). Exported so a test can assert this list stays exhaustive over
+ * `AppState`'s keys — see F15 (overhaul-plan.md) and the comment below on
+ * the effect that consumes it.
+ */
+export const PIPELINE_INPUT_KEYS = [
+  'dataModel',
+  'shape',
+  'chunkShape',
+  'interleaving',
+  'linearization',
+  'byteOrder',
+  'variables',
+  'fieldPipelines',
+  'chunkPipeline',
+  'metadata',
+  'write',
+] as const satisfies readonly (keyof AppState)[];
+
+/**
  * Task 13 (perf plan): worker-backed replacement for the old chained-useMemo
  * `usePipeline` hook (deleted; its pure compute code lives on in
  * src/engine/pipelineCompute.ts). Every state change posts to
@@ -75,7 +95,7 @@ export function useWorkerPipeline(
   useEffect(() => {
     setComputing(true);
     clientRef.current!.compute(state);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: `state` is posted whole, but only pipeline slices trigger
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberate: `state` is posted whole, but only pipeline slices trigger (PIPELINE_INPUT_KEYS below)
   }, [dataModel, shape, chunkShape, interleaving, linearization, byteOrder, variables, fieldPipelines, chunkPipeline, metadata, write]);
 
   useEffect(() => () => clientRef.current!.dispose(), []);

@@ -60,6 +60,28 @@ describe('PipelineWorkerClient coalescing', () => {
     expect(workers).toHaveLength(2);                                 // respawned + reposted
     expect(workers[1].posted).toHaveLength(1);
   });
+  it('F18: below the respawn threshold, lastError is just the crash message', () => {
+    const workers: FakeWorker[] = [];
+    const c = new PipelineWorkerClient({ createWorker: () => { const w = new FakeWorker(); workers.push(w); return w; }, onResult: () => {} });
+    c.compute(DEFAULT_STATE);
+    workers[0].emitError('boom');
+    expect(c.diagnostics().respawnCount).toBe(1);
+    expect(c.diagnostics().lastError).toBe('boom');
+    workers[1].emitError('boom again');
+    expect(c.diagnostics().respawnCount).toBe(2);
+    expect(c.diagnostics().lastError).toBe('boom again');
+  });
+  it('F18: once respawnCount crosses the threshold, lastError names the crash-loop itself', () => {
+    const workers: FakeWorker[] = [];
+    const c = new PipelineWorkerClient({ createWorker: () => { const w = new FakeWorker(); workers.push(w); return w; }, onResult: () => {} });
+    c.compute(DEFAULT_STATE);
+    workers[0].emitError('boom');   // respawn 1
+    workers[1].emitError('boom');   // respawn 2
+    workers[2].emitError('boom');   // respawn 3 — crosses the threshold
+    expect(c.diagnostics().respawnCount).toBe(3);
+    expect(c.diagnostics().lastError).toContain('keeps crashing');
+    expect(c.diagnostics().lastError).toContain('3 restarts');
+  });
   it('watchdog terminates a stuck compute when newer state is queued', () => {
     vi.useFakeTimers();
     const workers: FakeWorker[] = [];
@@ -69,6 +91,18 @@ describe('PipelineWorkerClient coalescing', () => {
     vi.advanceTimersByTime(1001);
     expect(workers[0].terminated).toBe(true);
     expect(workers[1].posted[0].state.interleaving).toBe('row');
+    vi.useRealTimers();
+  });
+  it('watchdog terminates a stuck compute and reposts it even with nothing queued (F5)', () => {
+    vi.useFakeTimers();
+    const workers: FakeWorker[] = [];
+    const c = new PipelineWorkerClient({ createWorker: () => { const w = new FakeWorker(); workers.push(w); return w; }, onResult: () => {}, watchdogMs: 1000 });
+    c.compute(DEFAULT_STATE);                                        // in flight, nothing queued
+    vi.advanceTimersByTime(1001);
+    expect(workers[0].terminated).toBe(true);
+    expect(c.diagnostics().respawnCount).toBe(1);
+    expect(workers).toHaveLength(2);                                 // respawned + reposted
+    expect(workers[1].posted[0].state).toBe(DEFAULT_STATE);           // stuck state reposted, not dropped
     vi.useRealTimers();
   });
   it('ignores stale results (id mismatch after respawn)', () => {
@@ -139,6 +173,27 @@ describe('PipelineWorkerClient stage-delta protocol (PERF-1)', () => {
     w.emitResult(w.posted[0].id, broken);
     expect(onResult).not.toHaveBeenCalled();
     expect(c.diagnostics().lastError).toContain('values');
+  });
+  it('records lastError for a MID-SESSION failure (after a prior success) and clears it on the next success', () => {
+    // overhaul-plan.md F4: the case ComputeErrorBanner depends on — a later
+    // ok:false reply after `result` is already non-null must still surface
+    // via diagnostics().lastError, and a subsequent success must clear it.
+    const w = new FakeWorker();
+    const onResult = vi.fn();
+    const c = new PipelineWorkerClient({ createWorker: () => w, onResult });
+    c.compute(DEFAULT_STATE);
+    w.emitResult(w.posted[0].id); // first success
+    expect(c.diagnostics().lastError).toBeNull();
+
+    c.compute({ ...DEFAULT_STATE, interleaving: 'row' });
+    w.emitFailure(w.posted[1].id, 'mid-session boom');
+    expect(onResult).toHaveBeenCalledTimes(1); // no second result published
+    expect(c.diagnostics().lastError).toBe('mid-session boom');
+
+    c.compute({ ...DEFAULT_STATE, interleaving: 'column' });
+    w.emitResult(w.posted[2].id);
+    expect(onResult).toHaveBeenCalledTimes(2);
+    expect(c.diagnostics().lastError).toBeNull();
   });
 });
 
