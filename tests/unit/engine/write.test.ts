@@ -114,13 +114,14 @@ describe('orderChunks', () => {
   });
 });
 
-describe('includeMetadata toggle', () => {
+describe('metadata.enabled toggle', () => {
   const chunk = makeEncodedChunk([0], [0x01, 0x02, 0x03]);
 
-  it('includeMetadata: false produces no metadata in single file', () => {
+  it('metadata.enabled: false produces no metadata in single file', () => {
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: false, metadataPlacement: 'header' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: false },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' as const },
     };
     const files = assembleFiles(state, [chunk], [1]);
     expect(files).toHaveLength(1);
@@ -130,10 +131,11 @@ describe('includeMetadata toggle', () => {
     expect(files[0].bytes.length).toBe(expectedSize);
   });
 
-  it('includeMetadata: true preserves existing metadata behavior', () => {
+  it('metadata.enabled: true preserves existing metadata behavior', () => {
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' as const },
     };
     const files = assembleFiles(state, [chunk], [1]);
     expect(files).toHaveLength(1);
@@ -143,14 +145,15 @@ describe('includeMetadata toggle', () => {
     expect(files[0].bytes.length).toBeGreaterThan(minSize);
   });
 
-  it('includeMetadata: false produces no sidecar in per-chunk mode', () => {
+  it('metadata.enabled: false produces no sidecar in per-chunk mode', () => {
     const chunks = [
       makeEncodedChunk([0], [0x01, 0x02]),
       makeEncodedChunk([1], [0x03, 0x04]),
     ];
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: false, partitioning: 'per-chunk' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: false },
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
     };
     const files = assembleFiles(state, chunks, [2]);
     // Should have 2 chunk files, NO metadata sidecar
@@ -158,14 +161,15 @@ describe('includeMetadata toggle', () => {
     expect(files.every((f) => f.name !== 'metadata')).toBe(true);
   });
 
-  it('includeMetadata: true produces sidecar in per-chunk mode', () => {
+  it('metadata.enabled: true produces sidecar in per-chunk mode', () => {
     const chunks = [
       makeEncodedChunk([0], [0x01, 0x02]),
       makeEncodedChunk([1], [0x03, 0x04]),
     ];
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, partitioning: 'per-chunk' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
     };
     const files = assembleFiles(state, chunks, [2]);
     // Should have 2 chunk files + 1 metadata sidecar
@@ -202,7 +206,8 @@ describe('assembleFiles', () => {
   it('places metadata as header before chunks', () => {
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' as const },
     };
     const files = assembleFiles(state, [chunk], [1]);
     expect(files).toHaveLength(1);
@@ -213,7 +218,8 @@ describe('assembleFiles', () => {
   it('places metadata as footer after chunks', () => {
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'footer' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'footer' as const },
     };
     const files = assembleFiles(state, [chunk], [1]);
     expect(files).toHaveLength(1);
@@ -222,7 +228,8 @@ describe('assembleFiles', () => {
   it('places metadata as sidecar (separate file)', () => {
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'sidecar' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'sidecar' as const },
     };
     const files = assembleFiles(state, [chunk], [1]);
     expect(files).toHaveLength(2);
@@ -238,7 +245,8 @@ describe('assembleFiles', () => {
     const state = {
       ...DEFAULT_STATE,
       interleaving: 'row' as const,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, partitioning: 'per-chunk' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
     };
     const files = assembleFiles(state, chunks, [2]);
 
@@ -258,7 +266,8 @@ describe('assembleFiles', () => {
     ];
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, partitioning: 'per-chunk' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
     };
     const files = assembleFiles(state, chunks, [2]);
 
@@ -293,7 +302,8 @@ describe('assembleFiles', () => {
   it('sidecar metadata file layout matches byte count and is a single metadata region', () => {
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'sidecar' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'sidecar' as const },
     };
     const files = assembleFiles(state, [chunk], [1]);
     const sidecar = files.find((f) => f.name === 'metadata')!;
@@ -310,7 +320,8 @@ describe('assembleFiles', () => {
     ];
     const state = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, partitioning: 'per-chunk' as const },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
     };
     const files = assembleFiles(state, chunks, [2]);
     const sidecar = files.find((f) => f.name === 'metadata')!;
@@ -358,9 +369,13 @@ describe('header metadata offset convergence (task 2.8)', () => {
     );
     const state = {
       ...DEFAULT_STATE,
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
       write: {
         ...DEFAULT_STATE.write,
-        includeMetadata: true,
         metadataPlacement: 'header' as const,
       },
     };
@@ -411,9 +426,13 @@ describe('header metadata offset convergence (task 2.8)', () => {
     const chunks = Array.from({ length: 12 }, (_, i) => makeEncodedChunk([i], [i, i, i]));
     const state = {
       ...DEFAULT_STATE,
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
       write: {
         ...DEFAULT_STATE.write,
-        includeMetadata: true,
         metadataPlacement: 'header' as const,
       },
     };

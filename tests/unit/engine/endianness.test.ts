@@ -30,9 +30,9 @@ function baseState(overrides: Partial<AppState>): AppState {
     chunkPipeline: [],
     metadata: {
       ...DEFAULT_STATE.metadata,
-      include: { ...DEFAULT_STATE.metadata.include },
+      enabled: true,
+      include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
     },
-    write: { ...DEFAULT_STATE.write, includeMetadata: true },
     ...overrides,
   };
 }
@@ -88,7 +88,8 @@ describe('endianness full-pipeline roundtrip', () => {
       byteOrder: 'little',
       metadata: {
         ...DEFAULT_STATE.metadata,
-        include: { ...DEFAULT_STATE.metadata.include, endianness: false },
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: false },
       },
     });
     const result = computePipelineStages(state);
@@ -109,7 +110,8 @@ describe('endianness silent-corruption lesson', () => {
       byteOrder: 'big',
       metadata: {
         ...DEFAULT_STATE.metadata,
-        include: { ...DEFAULT_STATE.metadata.include, endianness: false },
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: false },
       },
     });
     const result = computePipelineStages(state);

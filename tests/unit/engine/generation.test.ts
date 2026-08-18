@@ -212,7 +212,11 @@ describe('generation modes — compressibility signatures', () => {
         chunkShape: [32],
         variables,
         fieldPipelines: { v1: [], v2: [] },
-        write: { ...DEFAULT_STATE.write, includeMetadata: true },
+        metadata: {
+          ...DEFAULT_STATE.metadata,
+          enabled: true,
+          include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+        },
       };
     }
 

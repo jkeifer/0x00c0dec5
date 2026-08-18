@@ -26,11 +26,12 @@ function stateWithCustomEntries(
     ...DEFAULT_STATE,
     metadata: {
       ...DEFAULT_STATE.metadata,
+      enabled: true,
+      include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
       customEntries,
     },
     write: {
       ...DEFAULT_STATE.write,
-      includeMetadata: true,
       metadataPlacement: 'header',
       ...overrides,
     },
@@ -152,9 +153,10 @@ describe('metadata adversarial — unicode keys and values', () => {
     const state: AppState = {
       ...stateWithCustomEntries([{ key: 'キー', value: 'значение' }]),
       metadata: {
+        enabled: true,
         customEntries: [{ key: 'キー', value: 'значение' }],
         serialization: 'binary',
-        include: DEFAULT_STATE.metadata.include,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
       },
     };
     const { files } = computePipelineStages(state);
@@ -172,7 +174,12 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
   it('handles an odd-length magic number ("0") without throwing', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header', magicNumber: '0' },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header', magicNumber: '0' },
     };
     expect(() => {
       const { files } = computePipelineStages(state);
@@ -183,7 +190,12 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
   it('handles a non-hex magic number ("GG") without throwing', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header', magicNumber: 'GG' },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header', magicNumber: 'GG' },
     };
     expect(() => {
       const { files } = computePipelineStages(state);
@@ -194,7 +206,12 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
   it('handles an empty magic number ("") without throwing', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header', magicNumber: '' },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header', magicNumber: '' },
     };
     expect(() => {
       const { files } = computePipelineStages(state);
@@ -205,7 +222,12 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
   it('assembles and reads successfully end-to-end with odd-length magic', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header', magicNumber: '0' },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header', magicNumber: '0' },
     };
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -215,7 +237,12 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
   it('assembles and reads successfully end-to-end with non-hex magic', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header', magicNumber: 'GG' },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header', magicNumber: 'GG' },
     };
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -225,7 +252,12 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
   it('assembles and reads successfully end-to-end with empty magic', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header', magicNumber: '' },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header', magicNumber: '' },
     };
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -235,7 +267,12 @@ describe('magic numbers through the pipeline — tolerant parsing (Phase 0)', ()
   it('handles mixed-case non-hex magic with footer placement without throwing', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'footer', magicNumber: 'zZ0c0deC5' },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'footer', magicNumber: 'zZ0c0deC5' },
     };
     expect(() => {
       const { files } = computePipelineStages(state);

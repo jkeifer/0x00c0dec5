@@ -91,7 +91,11 @@ describe('full pipeline with sourceValues', () => {
       variables: [VAR],
       fieldPipelines: { v1: [{ codec: 'delta', params: {} }, { codec: 'zigzag', params: {} }] },
       chunkPipeline: [],
-      write: { ...DEFAULT_STATE.write, includeMetadata: true },
+      metadata: {
+        ...structuredClone(DEFAULT_STATE).metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
     };
     const result = computePipelineStages(state, undefined, sv({ [KEY]: { values: vals, naturalShape: [32, 32] } }));
     expect(result.readResult.success).toBe(true);

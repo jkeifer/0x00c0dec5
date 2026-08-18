@@ -41,7 +41,14 @@ function sentStages(delta: PipelineDelta): StageName[] {
 
 const metadataChanged: AppState = {
   ...DEFAULT_STATE,
-  metadata: { ...DEFAULT_STATE.metadata, customEntries: [{ key: 'note', value: 'hello' }] },
+  metadata: {
+    ...DEFAULT_STATE.metadata,
+    // descriptive gates custom-entry collection in collectMetadata (metadata
+    // redesign Task 1: DEFAULT_STATE.metadata.include now defaults every
+    // group off) — must be on for the "hello" sanity check below.
+    include: { ...DEFAULT_STATE.metadata.include, descriptive: true },
+    customEntries: [{ key: 'note', value: 'hello' }],
+  },
 };
 
 describe('createPipelineComputer delta protocol', () => {

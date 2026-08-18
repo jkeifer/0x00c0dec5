@@ -147,9 +147,21 @@ describe('deserializeMetadata (auto-detect)', () => {
   });
 });
 
+// Metadata redesign Task 1: DEFAULT_STATE.metadata.include now defaults every
+// group off (collectMetadata itself has no `enabled` concept — it purely
+// reads `state.metadata.include` per key — so tests exercising which keys
+// get collected need a fixture with every group explicitly on).
+const FULL_STATE = {
+  ...DEFAULT_STATE,
+  metadata: {
+    ...DEFAULT_STATE.metadata,
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+  },
+};
+
 describe('collectMetadata', () => {
   it('includes all auto-collected keys', () => {
-    const entries = collectMetadata(DEFAULT_STATE, [], undefined);
+    const entries = collectMetadata(FULL_STATE, [], undefined);
     const keys = entries.map((e) => e.key);
     expect(keys).toContain('schema');
     expect(keys).toContain('shape');
@@ -165,7 +177,7 @@ describe('collectMetadata', () => {
 
   it('chunk_order reflects state.write.chunkOrder (task 2.2)', () => {
     const state = {
-      ...DEFAULT_STATE,
+      ...FULL_STATE,
       write: { ...DEFAULT_STATE.write, chunkOrder: 'column-major' as const },
     };
     const entries = collectMetadata(state, [], undefined);
@@ -175,7 +187,7 @@ describe('collectMetadata', () => {
 
   it('partitioning reflects state.write.partitioning (task 2.2)', () => {
     const state = {
-      ...DEFAULT_STATE,
+      ...FULL_STATE,
       write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const },
     };
     const entries = collectMetadata(state, [], undefined);
@@ -185,7 +197,7 @@ describe('collectMetadata', () => {
 
   it('chunk_index entries carry variableName when the chunk has one (task 2.1/2.2 schema)', () => {
     const offsets = [{ coords: [0], offset: 4, size: 128, variableName: 'temperature' }];
-    const entries = collectMetadata(DEFAULT_STATE, [], undefined, offsets);
+    const entries = collectMetadata(FULL_STATE, [], undefined, offsets);
     const entry = entries.find((e) => e.key === 'chunk_index');
     const parsed = JSON.parse(entry!.value);
     expect(parsed[0].variableName).toBe('temperature');
@@ -193,9 +205,9 @@ describe('collectMetadata', () => {
 
   it('includes custom entries', () => {
     const state = {
-      ...DEFAULT_STATE,
+      ...FULL_STATE,
       metadata: {
-        ...DEFAULT_STATE.metadata,
+        ...FULL_STATE.metadata,
         customEntries: [
           { key: 'crs', value: 'EPSG:4326' },
           { key: 'transform', value: '[1,0,0,0,-1,90]' },
@@ -210,27 +222,27 @@ describe('collectMetadata', () => {
 
   it('includes chunk index when provided', () => {
     const offsets = [{ coords: [0], offset: 4, size: 128 }];
-    const entries = collectMetadata(DEFAULT_STATE, [], undefined, offsets);
+    const entries = collectMetadata(FULL_STATE, [], undefined, offsets);
     const keys = entries.map((e) => e.key);
     expect(keys).toContain('chunk_index');
   });
 
   it('sets byte_order from state.byteOrder (default little)', () => {
-    const entries = collectMetadata(DEFAULT_STATE, [], undefined);
+    const entries = collectMetadata(FULL_STATE, [], undefined);
     expect(entries.find((e) => e.key === 'byte_order')?.value).toBe('little');
   });
 
   it('records byte_order: big when state.byteOrder is big (cl-8)', () => {
-    const state = { ...DEFAULT_STATE, byteOrder: 'big' as const };
+    const state = { ...FULL_STATE, byteOrder: 'big' as const };
     const entries = collectMetadata(state, [], undefined);
     expect(entries.find((e) => e.key === 'byte_order')?.value).toBe('big');
   });
 
   it('skips custom entries with empty keys', () => {
     const state = {
-      ...DEFAULT_STATE,
+      ...FULL_STATE,
       metadata: {
-        ...DEFAULT_STATE.metadata,
+        ...FULL_STATE.metadata,
         customEntries: [
           { key: '', value: 'should be skipped' },
           { key: 'valid', value: 'included' },

@@ -74,10 +74,10 @@
       "chunkIndex": true,
       "descriptive": true,
       "endianness": true
-    }
+    },
+    "enabled": true
   },
   "write": {
-    "includeMetadata": true,
     "magicNumber": "",
     "partitioning": "per-chunk",
     "metadataPlacement": "sidecar",

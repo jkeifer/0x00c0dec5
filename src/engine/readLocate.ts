@@ -64,7 +64,7 @@ export function locateMetadata(
   // D1: a best-effort scan found plausible-but-unparseable structure ->
   // metadata was written but the locator/scanner couldn't pin it down
   // exactly (the intended lesson for footerLocator='none'). Otherwise there
-  // is no evidence metadata was ever written (includeMetadata=false).
+  // is no evidence metadata was ever written (metadata.enabled=false).
   return {
     entries: null,
     reason: foundPlausibleButUnparseable ? 'metadata-not-found' : 'no-metadata',

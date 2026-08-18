@@ -66,6 +66,14 @@ function migrateState(raw: Record<string, unknown>): AppState | null {
   try {
     const state = raw as unknown as AppState;
 
+    // Metadata redesign Task 1: the metadata master switch moved from
+    // `write.includeMetadata` to `metadata.enabled`. Drop saves carrying the
+    // removed field rather than migrating it — the caller degrades to
+    // defaults, same policy as the removed schema-wide `dataset` field below.
+    if (isPlainObject(state.write) && 'includeMetadata' in state.write) {
+      return null;
+    }
+
     // Check if migration is needed: look for old-format variables with `dtype` and no `logicalType`
     if (Array.isArray(state.variables) && state.variables.length > 0) {
       const firstVar = state.variables[0] as unknown as Record<string, unknown>;

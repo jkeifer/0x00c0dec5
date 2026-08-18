@@ -142,7 +142,7 @@ export function MetadataEditor({
     [allEntries, metadata.serialization],
   );
   const chunkIndexIsEstimate = state.metadata.include.chunkIndex;
-  const metadataDisabled = !state.write.includeMetadata;
+  const metadataDisabled = !state.metadata.enabled;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>

@@ -155,7 +155,7 @@ export interface ReadSuccess {
  * its own educational message — `ReadStatus` and the pane failure display
  * render `message` verbatim rather than hardcoding pedagogical text.
  *
- * - 'no-metadata': metadata genuinely absent (includeMetadata = false).
+ * - 'no-metadata': metadata genuinely absent (metadata.enabled = false).
  * - 'metadata-not-found': metadata present but the locator/scanner failed
  *   (D1 footerLocator='none'). Wired up by a later agent (tasks 2.3/2.4).
  * - 'bad-magic': leading (or trailing, with a trailer) magic mismatch (D2).

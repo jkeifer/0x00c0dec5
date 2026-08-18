@@ -120,6 +120,13 @@ export interface AppState {
   fieldPipelines: Record<string, CodecStep[]>;
   chunkPipeline: CodecStep[];
   metadata: {
+    /**
+     * Metadata redesign Task 1: the assembly master switch. Off means the
+     * Metadata stage is zero-length, overriding every include group and the
+     * envelope key entirely — a strictly stronger off-switch than any
+     * individual `include` group. Default false (metadata is opt-in).
+     */
+    enabled: boolean;
     customEntries: { key: string; value: string }[];
     serialization: 'json' | 'binary';
     /**
@@ -132,14 +139,15 @@ export interface AppState {
      * possible only when every codec in play is size-preserving — see
      * `no-chunk-index` in `ReadFailureReason`). Legacy saves with
      * `includeChunkIndex` migrate via `migrateState` in `state/persistence.ts`.
+     * Metadata redesign Task 1: all groups now default false (previously
+     * true), following `metadata.enabled` itself defaulting off.
      */
     include: MetadataIncludeConfig;
   };
   write: {
-    includeMetadata: boolean;
     magicNumber: string;
     partitioning: 'single' | 'per-chunk';
-    metadataPlacement: 'header' | 'footer' | 'sidecar';
+    metadataPlacement: 'header' | 'footer' | 'sidecar' | 'omit';
     chunkOrder: 'row-major' | 'column-major';
     /**
      * D1 (remediation-plan.md): how a reader locates footer-placed metadata
@@ -208,12 +216,12 @@ export const DEFAULT_STATE: AppState = {
   },
   chunkPipeline: [],
   metadata: {
+    enabled: false,
     customEntries: [],
     serialization: 'json',
-    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+    include: { schema: false, layout: false, codecs: false, chunkIndex: false, descriptive: false, endianness: false },
   },
   write: {
-    includeMetadata: false,
     magicNumber: '00C0DEC5',
     partitioning: 'single',
     metadataPlacement: 'header',

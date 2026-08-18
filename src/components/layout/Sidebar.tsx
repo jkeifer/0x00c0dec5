@@ -183,6 +183,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
           <>
             <WriteConfig
               write={state.write}
+              metadataEnabled={state.metadata.enabled}
               onMagicChange={(magicNumber) =>
                 dispatch({ type: 'UPDATE_WRITE', changes: { magicNumber } })
               }
@@ -195,8 +196,8 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
               onChunkOrderChange={(chunkOrder) =>
                 dispatch({ type: 'UPDATE_WRITE', changes: { chunkOrder } })
               }
-              onIncludeMetadataChange={(includeMetadata) =>
-                dispatch({ type: 'UPDATE_WRITE', changes: { includeMetadata } })
+              onMetadataEnabledChange={(enabled) =>
+                dispatch({ type: 'UPDATE_METADATA_CONFIG', changes: { enabled } })
               }
               onFooterLocatorChange={(footerLocator) =>
                 dispatch({ type: 'UPDATE_WRITE', changes: { footerLocator } })

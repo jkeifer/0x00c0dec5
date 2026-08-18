@@ -11,7 +11,12 @@ import { DEFAULT_STATE } from '../../../src/types/state.ts';
  * still missing. Modern-shape saves round-trip unchanged.
  */
 describe('metadata.include migration', () => {
-  it('legacy includeChunkIndex: false -> include.chunkIndex false, all other groups true', () => {
+  // Metadata redesign Task 1: DEFAULT_STATE.metadata.include.endianness now
+  // defaults false (was true). The legacy synthesis path in migrateState only
+  // ever fills 5 of the 6 keys (schema/layout/codecs/chunkIndex/descriptive);
+  // `endianness` is deliberately left for the post-migration default-merge
+  // pass to fill from DEFAULT_STATE — so it now comes back false here too.
+  it('legacy includeChunkIndex: false -> include.chunkIndex false, all other groups true, endianness defaults false', () => {
     const raw = JSON.parse(JSON.stringify(DEFAULT_STATE));
     delete raw.metadata.include;
     raw.metadata.includeChunkIndex = false;
@@ -24,12 +29,12 @@ describe('metadata.include migration', () => {
       codecs: true,
       chunkIndex: false,
       descriptive: true,
-      endianness: true,
+      endianness: false,
     });
     expect('includeChunkIndex' in result!.metadata).toBe(false);
   });
 
-  it('legacy includeChunkIndex: true -> include.chunkIndex true, all other groups true', () => {
+  it('legacy includeChunkIndex: true -> include.chunkIndex true, all other groups true, endianness defaults false', () => {
     const raw = JSON.parse(JSON.stringify(DEFAULT_STATE));
     delete raw.metadata.include;
     raw.metadata.includeChunkIndex = true;
@@ -42,11 +47,11 @@ describe('metadata.include migration', () => {
       codecs: true,
       chunkIndex: true,
       descriptive: true,
-      endianness: true,
+      endianness: false,
     });
   });
 
-  it('includeChunkIndex absent entirely -> all five groups default true', () => {
+  it('includeChunkIndex absent entirely -> all five legacy groups default true, endianness defaults false', () => {
     const raw = JSON.parse(JSON.stringify(DEFAULT_STATE));
     delete raw.metadata.include;
     delete raw.metadata.includeChunkIndex;
@@ -59,7 +64,7 @@ describe('metadata.include migration', () => {
       codecs: true,
       chunkIndex: true,
       descriptive: true,
-      endianness: true,
+      endianness: false,
     });
   });
 
@@ -86,7 +91,12 @@ describe('metadata.include migration', () => {
     });
   });
 
-  it('pre-cl-8 five-group include (endianness absent) -> backfills endianness: true', () => {
+  // Metadata redesign Task 1: this save already carries a modern 5-key
+  // `include` object (migrateState's legacy-synthesis branch doesn't run),
+  // so the missing `endianness` key is filled by the post-migration
+  // default-merge pass from DEFAULT_STATE.metadata.include.endianness, which
+  // now defaults false (was true).
+  it('pre-cl-8 five-group include (endianness absent) -> backfills endianness: false', () => {
     const raw = JSON.parse(JSON.stringify(DEFAULT_STATE));
     raw.metadata.include = {
       schema: true,
@@ -105,7 +115,7 @@ describe('metadata.include migration', () => {
       codecs: true,
       chunkIndex: false,
       descriptive: true,
-      endianness: true,
+      endianness: false,
     });
   });
 });

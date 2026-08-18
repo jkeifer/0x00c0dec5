@@ -438,7 +438,7 @@ describe('UPDATE_METADATA_CONFIG', () => {
 
   it('sets serialization to json', () => {
     const state = makeState({
-      metadata: { customEntries: [], serialization: 'binary', include: DEFAULT_STATE.metadata.include },
+      metadata: { enabled: false, customEntries: [], serialization: 'binary', include: DEFAULT_STATE.metadata.include },
     });
     const result = reducer(state, {
       type: 'UPDATE_METADATA_CONFIG',
@@ -470,6 +470,7 @@ describe('UPDATE_METADATA_CONFIG', () => {
   it('merges a partial patch without touching customEntries', () => {
     const state = makeState({
       metadata: {
+        enabled: false,
         customEntries: [{ key: 'a', value: 'b' }],
         serialization: 'json',
         include: DEFAULT_STATE.metadata.include,
@@ -480,7 +481,7 @@ describe('UPDATE_METADATA_CONFIG', () => {
       changes: { serialization: 'binary' },
     });
     expect(result.metadata.serialization).toBe('binary');
-    expect(result.metadata.include.chunkIndex).toBe(true);
+    expect(result.metadata.include.chunkIndex).toBe(DEFAULT_STATE.metadata.include.chunkIndex);
     expect(result.metadata.customEntries).toEqual([{ key: 'a', value: 'b' }]);
   });
 
@@ -492,6 +493,23 @@ describe('UPDATE_METADATA_CONFIG', () => {
     });
     expect(result.metadata.serialization).toBe('binary');
     expect(result.metadata.include.chunkIndex).toBe(false);
+  });
+
+  // Metadata redesign Task 1 (controller ruling R1): WriteConfig's "Include
+  // Metadata" toggle now dispatches UPDATE_METADATA_CONFIG with `{ enabled }`
+  // instead of the removed UPDATE_WRITE `{ includeMetadata }`.
+  it('sets enabled to true', () => {
+    const state = makeState();
+    const result = reducer(state, { type: 'UPDATE_METADATA_CONFIG', changes: { enabled: true } });
+    expect(result.metadata.enabled).toBe(true);
+  });
+
+  it('sets enabled to false', () => {
+    const state = makeState({
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+    });
+    const result = reducer(state, { type: 'UPDATE_METADATA_CONFIG', changes: { enabled: false } });
+    expect(result.metadata.enabled).toBe(false);
   });
 });
 
@@ -506,6 +524,7 @@ describe('ADD_METADATA_ENTRY', () => {
   it('appends to existing entries', () => {
     const state = makeState({
       metadata: {
+        enabled: false,
         customEntries: [{ key: 'a', value: 'b' }],
         serialization: 'json',
         include: DEFAULT_STATE.metadata.include,
@@ -520,6 +539,7 @@ describe('REMOVE_METADATA_ENTRY', () => {
   it('removes entry at index', () => {
     const state = makeState({
       metadata: {
+        enabled: false,
         customEntries: [
           { key: 'a', value: '1' },
           { key: 'b', value: '2' },
@@ -538,6 +558,7 @@ describe('UPDATE_METADATA_ENTRY', () => {
   it('updates key only', () => {
     const state = makeState({
       metadata: {
+        enabled: false,
         customEntries: [{ key: '', value: 'v' }],
         serialization: 'json',
         include: DEFAULT_STATE.metadata.include,
@@ -551,6 +572,7 @@ describe('UPDATE_METADATA_ENTRY', () => {
   it('updates value only', () => {
     const state = makeState({
       metadata: {
+        enabled: false,
         customEntries: [{ key: 'k', value: '' }],
         serialization: 'json',
         include: DEFAULT_STATE.metadata.include,
@@ -564,6 +586,7 @@ describe('UPDATE_METADATA_ENTRY', () => {
   it('updates both key and value', () => {
     const state = makeState({
       metadata: {
+        enabled: false,
         customEntries: [{ key: '', value: '' }],
         serialization: 'json',
         include: DEFAULT_STATE.metadata.include,
@@ -641,20 +664,6 @@ describe('UPDATE_WRITE', () => {
     expect(result.write.footerLocator).toBe('trailer');
   });
 
-  it('sets includeMetadata to true', () => {
-    const state = makeState();
-    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { includeMetadata: true } });
-    expect(result.write.includeMetadata).toBe(true);
-  });
-
-  it('sets includeMetadata to false', () => {
-    const state = makeState({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true },
-    });
-    const result = reducer(state, { type: 'UPDATE_WRITE', changes: { includeMetadata: false } });
-    expect(result.write.includeMetadata).toBe(false);
-  });
-
   it('merges a partial patch without touching sibling fields', () => {
     const state = makeState();
     const result = reducer(state, { type: 'UPDATE_WRITE', changes: { magicNumber: 'CAFE' } });
@@ -667,11 +676,10 @@ describe('UPDATE_WRITE', () => {
     const state = makeState();
     const result = reducer(state, {
       type: 'UPDATE_WRITE',
-      changes: { magicNumber: 'CAFE', partitioning: 'per-chunk', includeMetadata: true },
+      changes: { magicNumber: 'CAFE', partitioning: 'per-chunk' },
     });
     expect(result.write.magicNumber).toBe('CAFE');
     expect(result.write.partitioning).toBe('per-chunk');
-    expect(result.write.includeMetadata).toBe(true);
   });
 });
 

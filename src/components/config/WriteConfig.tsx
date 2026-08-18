@@ -5,11 +5,16 @@ import { inputStyle } from '../shared/controlStyles.ts';
 
 interface WriteConfigProps {
   write: AppState['write'];
+  // Metadata redesign Task 1 (controller ruling R1): the "Include Metadata"
+  // toggle now reads/writes the metadata master switch (`state.metadata.enabled`)
+  // directly rather than the removed `write.includeMetadata`. A later task
+  // removes this toggle from WriteConfig entirely.
+  metadataEnabled: boolean;
   onMagicChange: (magicNumber: string) => void;
   onPartitioningChange: (partitioning: 'single' | 'per-chunk') => void;
   onMetadataPlacementChange: (placement: 'header' | 'footer' | 'sidecar') => void;
   onChunkOrderChange: (order: 'row-major' | 'column-major') => void;
-  onIncludeMetadataChange: (includeMetadata: boolean) => void;
+  onMetadataEnabledChange: (enabled: boolean) => void;
   onFooterLocatorChange: (footerLocator: 'trailer' | 'none') => void;
 }
 
@@ -24,11 +29,12 @@ const warningTextStyle: React.CSSProperties = {
 
 export function WriteConfig({
   write,
+  metadataEnabled,
   onMagicChange,
   onPartitioningChange,
   onMetadataPlacementChange,
   onChunkOrderChange,
-  onIncludeMetadataChange,
+  onMetadataEnabledChange,
   onFooterLocatorChange,
 }: WriteConfigProps) {
   const hexValid = isValidHex(write.magicNumber);
@@ -43,8 +49,8 @@ export function WriteConfig({
             { value: 'yes', label: 'Yes' },
             { value: 'no', label: 'No' },
           ]}
-          value={write.includeMetadata ? 'yes' : 'no'}
-          onChange={(v) => onIncludeMetadataChange(v === 'yes')}
+          value={metadataEnabled ? 'yes' : 'no'}
+          onChange={(v) => onMetadataEnabledChange(v === 'yes')}
           size="sm"
         />
       </div>

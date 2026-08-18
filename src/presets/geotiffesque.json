@@ -67,10 +67,10 @@
       "chunkIndex": true,
       "descriptive": true,
       "endianness": true
-    }
+    },
+    "enabled": true
   },
   "write": {
-    "includeMetadata": true,
     "magicNumber": "49492A00",
     "partitioning": "single",
     "metadataPlacement": "header",

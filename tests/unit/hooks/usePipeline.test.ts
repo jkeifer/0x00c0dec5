@@ -297,7 +297,7 @@ describe('Write stage includes all files', () => {
 describe('metadata stage', () => {
   it('produces metadata bytes with json serialization', () => {
     const state = stateWith({
-      metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'json', include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
+      metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'json', enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
     });
     const { stages } = computePipelineStages(state);
     const metaStage = stages[4]; // Metadata is index 4
@@ -307,7 +307,7 @@ describe('metadata stage', () => {
 
   it('produces metadata bytes with binary serialization', () => {
     const state = stateWith({
-      metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'binary', include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
+      metadata: { customEntries: [{ key: 'test', value: 'val' }], serialization: 'binary', enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
     });
     const { stages } = computePipelineStages(state);
     const metaStage = stages[4];
@@ -317,9 +317,7 @@ describe('metadata stage', () => {
 
 describe('Read stage', () => {
   it('Read stage is empty (0 bytes) when metadata not included', () => {
-    const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: false },
-    });
+    const state = stateWith({}); // metadata.enabled defaults false
     const { stages, readResult } = computePipelineStages(state);
     const readStage = stages[6]; // Read is stage index 6
     expect(readStage.name).toBe('Read');
@@ -329,7 +327,8 @@ describe('Read stage', () => {
 
   it('Read stage has reconstructed values when metadata included', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     });
     const { stages, readResult } = computePipelineStages(state);
     const readStage = stages[6];
@@ -340,7 +339,8 @@ describe('Read stage', () => {
 
   it('Read stage layout byteLength matches bytes length', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     });
     const { stages } = computePipelineStages(state);
     const readStage = stages[6];
@@ -349,7 +349,8 @@ describe('Read stage', () => {
 
   it('Read stage traceIds use same format as Values stage', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     });
     const reference = referenceStageTraces(state);
     const valuesTraceIds = new Set(reference.get('values')!.map((t) => t.traceId));
@@ -364,9 +365,13 @@ describe('Read stage', () => {
 describe('sidecar files have non-empty bytes with matching layouts', () => {
   it('sidecar metadata file layout byteLength matches bytes length', () => {
     const state = stateWith({
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
       write: {
         ...DEFAULT_STATE.write,
-        includeMetadata: true,
         metadataPlacement: 'sidecar',
       },
     });
@@ -378,9 +383,13 @@ describe('sidecar files have non-empty bytes with matching layouts', () => {
 
   it('per-chunk sidecar metadata file layout byteLength matches bytes length', () => {
     const state = stateWith({
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
       write: {
         ...DEFAULT_STATE.write,
-        includeMetadata: true,
         partitioning: 'per-chunk',
       },
     });

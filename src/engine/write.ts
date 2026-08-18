@@ -120,7 +120,10 @@ function assembleSingleFile(
   variableStats?: Map<string, VariableStats>,
 ): VirtualFile[] {
   // If metadata is not included, produce file with only magic + chunks + magic
-  if (state.write.includeMetadata === false) {
+  // ponytail: temporary shim (metadata redesign Task 1) — reads the new
+  // master switch directly; Task 3 gives this call site real omit/placement
+  // semantics.
+  if (state.metadata.enabled === false) {
     return buildNoMetadataFile(magic, orderedChunks, chunkLookup, state.shape);
   }
 
@@ -282,8 +285,9 @@ function assemblePerChunkFiles(
     files.push({ name, bytes, layout: { byteLength: totalLength, shape: state.shape, regions } });
   }
 
-  // Only include metadata sidecar when includeMetadata is true
-  if (state.write.includeMetadata !== false) {
+  // Only include metadata sidecar when metadata.enabled is true.
+  // ponytail: temporary shim (metadata redesign Task 1), see above.
+  if (state.metadata.enabled !== false) {
     // Per-chunk mode: each chunk is its own file, so "offset" is always the
     // position right after that file's own leading magic (not a position
     // within a combined stream). The reader matches these entries to files

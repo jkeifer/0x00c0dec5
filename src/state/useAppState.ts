@@ -52,7 +52,7 @@ export type AppAction =
   | { type: 'ADD_METADATA_ENTRY' }
   | { type: 'REMOVE_METADATA_ENTRY'; index: number }
   | { type: 'UPDATE_METADATA_ENTRY'; index: number; key?: string; value?: string }
-  | { type: 'UPDATE_METADATA_CONFIG'; changes: Partial<Pick<AppState['metadata'], 'serialization' | 'include'>> }
+  | { type: 'UPDATE_METADATA_CONFIG'; changes: Partial<Pick<AppState['metadata'], 'serialization' | 'include' | 'enabled'>> }
   // Write — one patch action replaces the six SET_WRITE_* setters
   | { type: 'UPDATE_WRITE'; changes: Partial<AppState['write']> }
   // UI — one patch action replaces the pane stage/view setters and SET_SHOW_DIFF

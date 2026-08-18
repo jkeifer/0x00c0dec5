@@ -582,7 +582,7 @@ function referenceAssembleSingleFile(
   magic: Uint8Array,
   variableStats: Map<string, TypeAssignResult['stats']>,
 ): { name: string; bytes: Uint8Array; traces: ByteTrace[] }[] {
-  if (state.write.includeMetadata === false) {
+  if (state.metadata.enabled === false) {
     return referenceBuildSingleFile(magic, new Uint8Array(0), orderedChunks, 'none');
   }
 
@@ -644,7 +644,7 @@ function referenceAssemblePerChunkFiles(
     files.push({ name, bytes, traces });
   }
 
-  if (state.write.includeMetadata !== false) {
+  if (state.metadata.enabled !== false) {
     const chunkOffsets: ChunkIndexEntry[] = orderedChunks.map((c) => ({
       coords: c.coords,
       offset: magic.length,

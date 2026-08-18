@@ -234,13 +234,13 @@ describe('write-stage (VirtualFile.layout) equivalence', () => {
         chunkPipeline: useEntropy ? [{ codec: 'rle', params: {} }] : DEFAULT_STATE.chunkPipeline,
         metadata: {
           ...DEFAULT_STATE.metadata,
-          include: { ...DEFAULT_STATE.metadata.include, chunkIndex: c.includeChunkIndex },
+          enabled: c.includeMetadata,
+          include: { schema: true, layout: true, codecs: true, descriptive: true, endianness: true, chunkIndex: c.includeChunkIndex },
         },
         write: {
           ...DEFAULT_STATE.write,
           partitioning: c.partitioning,
           metadataPlacement: c.metadataPlacement,
-          includeMetadata: c.includeMetadata,
         },
       };
       const values = computeValuesStage(state.shape, state.variables);
@@ -262,7 +262,12 @@ describe('read-stage layout equivalence', () => {
   it('successful read (includeMetadata, header placement)', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     };
     const values = computeValuesStage(state.shape, state.variables);
     const typed = computeTypedStage(state.shape, state.variables, values.variableValues);
@@ -281,7 +286,7 @@ describe('read-stage layout equivalence', () => {
   });
 
   it('failed read produces an empty layout', () => {
-    // includeMetadata defaults to false in DEFAULT_STATE.write, so the reader
+    // metadata.enabled defaults to false in DEFAULT_STATE, so the reader
     // has nothing to reconstruct from -> read fails.
     const state = DEFAULT_STATE;
     const values = computeValuesStage(state.shape, state.variables);

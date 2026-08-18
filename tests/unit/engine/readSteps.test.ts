@@ -35,10 +35,16 @@ function uintVar(name: string): Variable {
   };
 }
 
+// Metadata redesign Task 1: DEFAULT_STATE.metadata.include now defaults every
+// group off, so tests wanting a fully self-describing file must spell out
+// the all-true baseline explicitly.
+const ALL_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
+
 describe('readFile — step log (read plan Task 2)', () => {
   it('success: all 8 steps ok, in READ_STEP_ORDER order', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     });
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -69,9 +75,7 @@ describe('readFile — step log (read plan Task 2)', () => {
   });
 
   it('no-metadata: verify-magic ok, locate-metadata failed, rest skipped', () => {
-    const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: false },
-    });
+    const state = stateWith({});
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
@@ -89,8 +93,8 @@ describe('readFile — step log (read plan Task 2)', () => {
 
   it('metadata-not-found (D1 footerLocator=none + binary + footer): locate-metadata failed', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'footer', footerLocator: 'none' },
-      metadata: { ...DEFAULT_STATE.metadata, serialization: 'binary' },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'footer', footerLocator: 'none' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, serialization: 'binary', include: { ...ALL_INCLUDE } },
     });
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -115,7 +119,8 @@ describe('readFile — step log (read plan Task 2)', () => {
     // roundtrip.matrix.test.ts's "corrupting header-embedded metadata bytes"
     // case.
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     });
     const { files } = computePipelineStages(state);
     const magicBytes = hexToBytes(state.write.magicNumber);
@@ -151,8 +156,7 @@ describe('readFile — step log (read plan Task 2)', () => {
       chunkShape: [2, 2],
       variables: [uintVar('humidity')],
       fieldPipelines: { humidity: [{ codec: 'rle', params: {} }] },
-      metadata: { ...DEFAULT_STATE.metadata, include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
-      write: { ...DEFAULT_STATE.write, includeMetadata: true },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE, chunkIndex: false } },
     });
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -180,7 +184,8 @@ describe('readFile — step log (read plan Task 2)', () => {
       chunkShape: [4],
       variables: [uintVar('humidity')],
       fieldPipelines: { humidity: [] },
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     });
     const { files } = computePipelineStages(state);
     const magicBytes = hexToBytes(state.write.magicNumber);

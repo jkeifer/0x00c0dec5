@@ -37,14 +37,19 @@ function uintVar(name: string): Variable {
 type Serialization = 'json' | 'binary';
 type Placement = 'header' | 'sidecar';
 
+// Metadata redesign Task 1: DEFAULT_STATE.metadata.include now defaults every
+// group off, so tests that want "only group X off, everything else on" must
+// spell out the full all-true baseline explicitly rather than spreading
+// DEFAULT_STATE.metadata.include (which is now all-false).
+const ALL_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
+
 function placementState(serialization: Serialization, placement: Placement): Partial<AppState> {
   return {
     write: {
       ...DEFAULT_STATE.write,
-      includeMetadata: true,
       metadataPlacement: placement,
     },
-    metadata: { ...DEFAULT_STATE.metadata, serialization },
+    metadata: { ...DEFAULT_STATE.metadata, serialization, enabled: true, include: { ...ALL_INCLUDE } },
   };
 }
 
@@ -63,7 +68,8 @@ describe('readFile — missing-schema / missing-layout (read plan Task 3)', () =
         metadata: {
           ...DEFAULT_STATE.metadata,
           serialization,
-          include: { ...DEFAULT_STATE.metadata.include, schema: false },
+          enabled: true,
+          include: { ...ALL_INCLUDE, schema: false },
         },
       });
       const { files } = computePipelineStages(state);
@@ -91,10 +97,11 @@ describe('readFile — missing-schema / missing-layout (read plan Task 3)', () =
 
   it('layout off: fails at read-layout with reason missing-layout, read-schema ok first', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
       metadata: {
         ...DEFAULT_STATE.metadata,
-        include: { ...DEFAULT_STATE.metadata.include, layout: false },
+        enabled: true,
+        include: { ...ALL_INCLUDE, layout: false },
       },
     });
     const { files } = computePipelineStages(state);
@@ -117,10 +124,11 @@ describe('readFile — missing-schema / missing-layout (read plan Task 3)', () =
 
   it('schema AND layout off: fails at read-schema (first check wins), not read-layout', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
       metadata: {
         ...DEFAULT_STATE.metadata,
-        include: { ...DEFAULT_STATE.metadata.include, schema: false, layout: false },
+        enabled: true,
+        include: { ...ALL_INCLUDE, schema: false, layout: false },
       },
     });
     const { files } = computePipelineStages(state);
@@ -149,7 +157,8 @@ describe('readFile — assume-identity codec semantics (read plan Task 3)', () =
         metadata: {
           ...DEFAULT_STATE.metadata,
           serialization,
-          include: { ...DEFAULT_STATE.metadata.include, codecs: false },
+          enabled: true,
+          include: { ...ALL_INCLUDE, codecs: false },
         },
       });
       const { files, logicalValues } = computePipelineStages(state);
@@ -178,7 +187,8 @@ describe('readFile — assume-identity codec semantics (read plan Task 3)', () =
         metadata: {
           ...DEFAULT_STATE.metadata,
           serialization,
-          include: { ...DEFAULT_STATE.metadata.include, codecs: false },
+          enabled: true,
+          include: { ...ALL_INCLUDE, codecs: false },
         },
       });
       const { files, logicalValues } = computePipelineStages(state);
@@ -209,10 +219,11 @@ describe('readFile — assume-identity codec semantics (read plan Task 3)', () =
       chunkShape: [2, 2],
       variables: [uintVar('humidity')],
       fieldPipelines: { humidity: [{ codec: 'rle', params: {} }] },
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
       metadata: {
         ...DEFAULT_STATE.metadata,
-        include: { ...DEFAULT_STATE.metadata.include, codecs: false },
+        enabled: true,
+        include: { ...ALL_INCLUDE, codecs: false },
       },
     });
     const { files } = computePipelineStages(state);
@@ -238,8 +249,7 @@ describe('readFile — chunkIndex off regression pin (D3, unaffected by Task 3)'
       chunkShape: [2, 2],
       variables: [uintVar('humidity')],
       fieldPipelines: { humidity: [{ codec: 'rle', params: {} }] },
-      metadata: { ...DEFAULT_STATE.metadata, include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
-      write: { ...DEFAULT_STATE.write, includeMetadata: true },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE, chunkIndex: false } },
     });
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -256,10 +266,11 @@ describe('readFile — chunkIndex off regression pin (D3, unaffected by Task 3)'
 describe('readFile — descriptive off (read plan Task 3)', () => {
   it('descriptive off: full success, 8x ok, read-schema found notes stats/custom entries absent and not needed', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
       metadata: {
         ...DEFAULT_STATE.metadata,
-        include: { ...DEFAULT_STATE.metadata.include, descriptive: false },
+        enabled: true,
+        include: { ...ALL_INCLUDE, descriptive: false },
       },
     });
     const { files } = computePipelineStages(state);

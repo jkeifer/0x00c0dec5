@@ -5,31 +5,44 @@
 // each with a one-line consequence hint. All five are driven off real
 // AppState via AppStateProvider + the same UPDATE_METADATA_CONFIG action the
 // existing chunk-index toggle already uses (Sidebar.tsx), and all five are
-// disabled with a note when write.includeMetadata is false (nothing is
+// disabled with a note when metadata.enabled is false (nothing is
 // written, so the toggles are moot).
 //
 // Task 9 (codec-curation plan): a 6th toggle, `include-endianness-toggle`,
 // wired to metadata.include.endianness the same way. Its failure mode is
 // unique — off doesn't fail a read step, it silently produces wrong values
 // on big-endian files (see the mini-lesson in MetadataEditor.tsx's hint).
+//
+// Metadata redesign Task 1 (controller ruling R1): the master switch moved
+// from write.includeMetadata to metadata.enabled — MetadataEditor's
+// `metadataDisabled` now reads `!state.metadata.enabled`.
 import { describe, it, expect } from 'vitest';
+import { useEffect } from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { AppStateProvider, useAppState } from '../../../src/state/useAppState.ts';
 import { MetadataEditor } from '../../../src/components/config/MetadataEditor.tsx';
 import { colors } from '../../../src/theme.ts';
 
+const ALL_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
+
 // Thin wrapper mirroring Sidebar.tsx's MetadataEditor wiring, so the test
 // exercises the real dispatch idiom rather than a mock callback. Default
-// AppState has write.includeMetadata: false, so this wrapper forces it true
-// for the "toggles enabled" scenarios — the disabled scenario below uses the
-// real default instead of forcing false.
+// AppState has metadata.enabled: false and every include group false, so
+// this wrapper dispatches once on mount to seed enabled + all include groups
+// true for the "toggles enabled" scenarios (a real UPDATE_METADATA_CONFIG
+// dispatch, not a forced render prop, so subsequent toggle clicks compose
+// correctly against real state) — the disabled scenario below uses the real
+// default instead of seeding anything.
 function Wrapper() {
   const { state, dispatch } = useAppState();
-  const withMetadataOn = { ...state, write: { ...state.write, includeMetadata: true } };
+  useEffect(() => {
+    dispatch({ type: 'UPDATE_METADATA_CONFIG', changes: { enabled: true, include: { ...ALL_INCLUDE } } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <MetadataEditor
-      metadata={withMetadataOn.metadata}
-      state={withMetadataOn}
+      metadata={state.metadata}
+      state={state}
       onSerializationChange={(serialization) =>
         dispatch({ type: 'UPDATE_METADATA_CONFIG', changes: { serialization } })
       }
@@ -69,17 +82,17 @@ describe('MetadataEditor include-group toggles', () => {
       expect(yesBtn).toBeTruthy();
       expect(noBtn).toBeTruthy();
 
-      // Default AppState has every include flag true, so "Yes" is active:
+      // Wrapper seeds every include flag true on mount, so "Yes" is active:
       // its color is the accent color, and it's visually distinct from "No".
       expect(yesBtn.style.color).toBe(colors.accent);
       expect(noBtn.style.color).not.toBe(colors.accent);
 
-      // Both options are enabled (write.includeMetadata forced true above).
+      // Both options are enabled (metadata.enabled seeded true above).
       expect(yesBtn.disabled).toBe(false);
       expect(noBtn.disabled).toBe(false);
     }
 
-    // No "metadata is not being written" note when includeMetadata is true (default).
+    // No "metadata is not being written" note when metadata.enabled is true.
     expect(screen.queryByText(/metadata is not being written/i)).toBeNull();
   });
 
@@ -89,7 +102,7 @@ describe('MetadataEditor include-group toggles', () => {
     const yesBtn = screen.getByTestId('include-schema-toggle-opt-yes') as HTMLButtonElement;
     const noBtn = screen.getByTestId('include-schema-toggle-opt-no') as HTMLButtonElement;
 
-    // Before the click, "Yes" is active (default state has schema: true).
+    // Before the click, "Yes" is active (Wrapper seeded schema: true on mount).
     expect(yesBtn.style.color).toBe(colors.accent);
     expect(noBtn.style.color).not.toBe(colors.accent);
 
@@ -101,7 +114,7 @@ describe('MetadataEditor include-group toggles', () => {
     expect(yesBtn.style.color).not.toBe(colors.accent);
   });
 
-  it('disables all five toggles and shows a note when write.includeMetadata is false', () => {
+  it('disables all five toggles and shows a note when metadata.enabled is false', () => {
     render(
       <AppStateProvider>
         <DisabledWrapper />
@@ -131,7 +144,7 @@ describe('MetadataEditor include-group toggles', () => {
 
 function DisabledWrapper() {
   const { state, dispatch } = useAppState();
-  // Default AppState already has write.includeMetadata: false — no forcing needed.
+  // Default AppState already has metadata.enabled: false — no seeding needed.
   return (
     <MetadataEditor
       metadata={state.metadata}

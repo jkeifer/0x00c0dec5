@@ -41,6 +41,11 @@ import type { CodecStep } from '../../../src/types/codecs.ts';
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
+// Metadata redesign Task 1: DEFAULT_STATE.metadata.include now defaults every
+// group off, so tests wanting "only group X varies" must spell out the
+// all-true baseline explicitly rather than spreading DEFAULT_STATE.metadata.include.
+const ALL_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
+
 /** Deep-enough merge for our nested AppState shape (shape/variables arrays replace, not merge). */
 function stateWith(overrides: {
   shape?: number[];
@@ -60,8 +65,13 @@ function stateWith(overrides: {
     ...(overrides.variables ? { variables: overrides.variables } : {}),
     ...(overrides.fieldPipelines ? { fieldPipelines: overrides.fieldPipelines } : {}),
     ...(overrides.chunkPipeline ? { chunkPipeline: overrides.chunkPipeline } : {}),
-    metadata: { ...DEFAULT_STATE.metadata, ...overrides.metadata },
-    write: { ...DEFAULT_STATE.write, includeMetadata: true, ...overrides.write },
+    metadata: {
+      ...DEFAULT_STATE.metadata,
+      enabled: true,
+      include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      ...overrides.metadata,
+    },
+    write: { ...DEFAULT_STATE.write, ...overrides.write },
   };
 }
 
@@ -598,11 +608,8 @@ describe('roundtrip matrix — partitioning single vs per-chunk', () => {
 // ─── No-metadata failure path (explicit negative test) ──────────────────
 
 describe('roundtrip matrix — no metadata means no read (explicit failure case)', () => {
-  it('includeMetadata=false fails with reason "no-metadata" and the pedagogical message', () => {
-    const state: AppState = {
-      ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: false },
-    };
+  it('metadata.enabled=false fails with reason "no-metadata" and the pedagogical message', () => {
+    const state: AppState = DEFAULT_STATE; // metadata.enabled defaults false
     const { readResult } = computePipelineStages(state);
     expect(readResult.success).toBe(false);
     if (!readResult.success) {
@@ -684,10 +691,7 @@ describe('roundtrip matrix — D4 read failure taxonomy', () => {
       'decode-error',
     ]);
 
-    const noMetaState: AppState = {
-      ...DEFAULT_STATE,
-      write: { ...DEFAULT_STATE.write, includeMetadata: false },
-    };
+    const noMetaState: AppState = DEFAULT_STATE; // metadata.enabled defaults false
     const { readResult: noMetaResult } = computePipelineStages(noMetaState);
     expect(noMetaResult.success).toBe(false);
     if (!noMetaResult.success) expect(validReasons.has(noMetaResult.reason)).toBe(true);
@@ -810,7 +814,7 @@ describe('roundtrip matrix — D3 metadata.include.chunkIndex', () => {
       chunkShape: [2, 2],
       variables: [uintVar('humidity')],
       fieldPipelines: { humidity: [] },
-      metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: true } },
+      metadata: { include: { ...ALL_INCLUDE, chunkIndex: true } },
     });
     expect(state.metadata.include.chunkIndex).toBe(true);
     const { files } = computePipelineStages(state);
@@ -830,7 +834,7 @@ describe('roundtrip matrix — D3 metadata.include.chunkIndex', () => {
         chunkShape: [2, 2],
         variables: [uintVar('humidity')],
         fieldPipelines: { humidity: [{ codec: 'delta', params: {} }] },
-        metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
+        metadata: { include: { ...ALL_INCLUDE, chunkIndex: false } },
       });
       expectExactRoundTrip(runRoundTrip(deltaState), ['humidity']);
 
@@ -839,7 +843,7 @@ describe('roundtrip matrix — D3 metadata.include.chunkIndex', () => {
         chunkShape: [2, 2],
         variables: [uintVar('humidity')],
         fieldPipelines: { humidity: [{ codec: 'byte-shuffle', params: { elementSize: 2 } }] },
-        metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
+        metadata: { include: { ...ALL_INCLUDE, chunkIndex: false } },
       });
       expectExactRoundTrip(runRoundTrip(shuffleState), ['humidity']);
     },
@@ -855,7 +859,7 @@ describe('roundtrip matrix — D3 metadata.include.chunkIndex', () => {
         chunkShape: [2, 2],
         variables: [uintVar('humidity')],
         fieldPipelines: { humidity: [{ codec: 'rle', params: {} }] },
-        metadata: { include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
+        metadata: { include: { ...ALL_INCLUDE, chunkIndex: false } },
       });
       const { readResult: rleResult } = computePipelineStages(rleState);
       expect(rleResult.success).toBe(false);

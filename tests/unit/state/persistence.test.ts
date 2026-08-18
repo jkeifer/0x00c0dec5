@@ -115,7 +115,7 @@ describe('loadState — F31 CodecStep.enabled round-trip', () => {
 });
 
 describe('loadState — default-merge for missing fields', () => {
-  it('fills in missing write.includeMetadata and ui.showDiff with defaults', () => {
+  it('fills in missing metadata.enabled and ui.showDiff with defaults', () => {
     const partial = {
       dataModel: 'tabular',
       shape: [16],
@@ -124,13 +124,12 @@ describe('loadState — default-merge for missing fields', () => {
       variables: DEFAULT_STATE.variables,
       fieldPipelines: DEFAULT_STATE.fieldPipelines,
       chunkPipeline: [],
-      metadata: { customEntries: [], serialization: 'json' },
+      metadata: { customEntries: [], serialization: 'json' }, // enabled intentionally omitted
       write: {
         magicNumber: 'DEADBEEF',
         partitioning: 'single',
         metadataPlacement: 'header',
         chunkOrder: 'row-major',
-        // includeMetadata intentionally omitted
       },
       ui: {
         leftPaneStage: 0,
@@ -144,7 +143,7 @@ describe('loadState — default-merge for missing fields', () => {
 
     const result = loadState('tabular');
     expect(result).not.toBeNull();
-    expect(result!.write.includeMetadata).toBe(DEFAULT_STATE.write.includeMetadata);
+    expect(result!.metadata.enabled).toBe(DEFAULT_STATE.metadata.enabled);
     expect(result!.write.magicNumber).toBe('DEADBEEF'); // preserved
     expect(result!.ui.showDiff).toBe(DEFAULT_STATE.ui.showDiff);
   });
@@ -175,8 +174,10 @@ describe('loadState — default-merge for missing fields', () => {
         partitioning: 'single',
         metadataPlacement: 'footer',
         chunkOrder: 'row-major',
-        includeMetadata: true,
-        // footerLocator intentionally omitted
+        // footerLocator intentionally omitted; includeMetadata removed
+        // (metadata redesign Task 1 — its presence now drops the whole save,
+        // see the dedicated 'drops saves carrying the removed
+        // write.includeMetadata field' test above).
       },
       ui: DEFAULT_STATE.ui,
     };
@@ -186,7 +187,12 @@ describe('loadState — default-merge for missing fields', () => {
     expect(result).not.toBeNull();
     expect(result!.write.footerLocator).toBe(DEFAULT_STATE.write.footerLocator);
     expect(result!.write.footerLocator).toBe('trailer');
-    expect(result!.metadata.include).toEqual(DEFAULT_STATE.metadata.include);
+    // Legacy pre-`include`-field saves synthesize all groups true (the
+    // pre-redesign default), independent of DEFAULT_STATE's now-off defaults
+    // — see migrateState's legacy `includeChunkIndex` -> `include` handling.
+    expect(result!.metadata.include).toEqual({
+      schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: false,
+    });
     expect(result!.metadata.include.chunkIndex).toBe(true);
     // Sibling fields still preserved through the merge.
     expect(result!.write.magicNumber).toBe('DEADBEEF');
@@ -598,6 +604,31 @@ describe('loadState — fieldPipelines/chunkPipeline defaults', () => {
     const result = loadState('tabular');
     expect(result).not.toBeNull();
     expect(result!.metadata.customEntries).toEqual([{ key: 'good', value: 'ok' }]);
+  });
+});
+
+describe('loadState — metadata.enabled / placement omit (metadata redesign Task 1)', () => {
+  it('drops saves carrying the removed write.includeMetadata field', () => {
+    const raw = JSON.parse(JSON.stringify(DEFAULT_STATE)) as Record<string, Record<string, unknown>>;
+    raw.write.includeMetadata = true; // old shape
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(raw));
+    expect(loadState('tabular')).toBeNull();
+  });
+
+  it('round-trips metadata.enabled and placement omit', () => {
+    const s = structuredClone(DEFAULT_STATE);
+    s.metadata.enabled = true;
+    s.write.metadataPlacement = 'omit';
+    saveState(s);
+    const result = loadState('tabular');
+    expect(result).not.toBeNull();
+    expect(result!.metadata.enabled).toBe(true);
+    expect(result!.write.metadataPlacement).toBe('omit');
+  });
+
+  it('defaults: metadata disabled, all include groups off', () => {
+    expect(DEFAULT_STATE.metadata.enabled).toBe(false);
+    expect(Object.values(DEFAULT_STATE.metadata.include).every((v) => v === false)).toBe(true);
   });
 });
 

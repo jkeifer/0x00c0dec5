@@ -27,7 +27,7 @@ function deepMerge(base: AppState, overrides: Record<string, unknown>): AppState
 describe('readFile — failure cases', () => {
   it('fails when no metadata is included (default state)', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: false },
+      write: { ...DEFAULT_STATE.write },
     });
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -41,7 +41,7 @@ describe('readFile — failure cases', () => {
 
   it('failure result includes byte count', () => {
     const state = stateWith({
-      write: { ...DEFAULT_STATE.write, includeMetadata: false },
+      write: { ...DEFAULT_STATE.write },
     });
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -55,7 +55,8 @@ describe('readFile — failure cases', () => {
 describe('readFile — lossless roundtrip (column mode, header metadata)', () => {
   it('reconstructs values within tolerance with no codecs', () => {
     const state = deepMerge(DEFAULT_STATE, {
-      write: { includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true }, enabled: true },
+      write: { metadataPlacement: 'header' },
     }) as AppState;
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -79,7 +80,8 @@ describe('readFile — lossless roundtrip (column mode, header metadata)', () =>
 describe('readFile — lossless roundtrip (column mode, footer metadata)', () => {
   it('reconstructs values with footer placement', () => {
     const state = deepMerge(DEFAULT_STATE, {
-      write: { includeMetadata: true, metadataPlacement: 'footer' },
+      metadata: { include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true }, enabled: true },
+      write: { metadataPlacement: 'footer' },
     }) as AppState;
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -103,7 +105,8 @@ describe('readFile — lossless roundtrip (column mode, footer metadata)', () =>
 describe('readFile — lossless roundtrip (column mode, sidecar metadata)', () => {
   it('reconstructs values with sidecar metadata', () => {
     const state = deepMerge(DEFAULT_STATE, {
-      write: { includeMetadata: true, metadataPlacement: 'sidecar' },
+      metadata: { include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true }, enabled: true },
+      write: { metadataPlacement: 'sidecar' },
     }) as AppState;
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -128,7 +131,8 @@ describe('readFile — row mode roundtrip', () => {
   it('reconstructs values in row mode with metadata', () => {
     const state = deepMerge(DEFAULT_STATE, {
       interleaving: 'row',
-      write: { includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true }, enabled: true },
+      write: { metadataPlacement: 'header' },
     }) as AppState;
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -161,7 +165,8 @@ describe('readFile — lossy roundtrip (type assignment with float32 storage)', 
         },
       ],
       fieldPipelines: { temperature: [] },
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     };
     const { files, variableStats } = computePipelineStages(state);
 
@@ -198,7 +203,8 @@ describe('readFile — lossless roundtrip with scale/offset type assignment', ()
         },
       ],
       fieldPipelines: { temperature: [] },
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     };
     const { files, variableStats } = computePipelineStages(state);
 
@@ -236,9 +242,13 @@ describe('readFile — per-chunk partitioning with sidecar', () => {
         },
       ],
       fieldPipelines: { temperature: [] },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
       write: {
         ...DEFAULT_STATE.write,
-        includeMetadata: true,
         partitioning: 'per-chunk',
       },
     };
@@ -263,7 +273,8 @@ describe('readFile — multiple chunks in single file', () => {
     const state = deepMerge(DEFAULT_STATE, {
       shape: [16],
       chunkShape: [8],
-      write: { includeMetadata: true, metadataPlacement: 'footer' },
+      metadata: { include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true }, enabled: true },
+      write: { metadataPlacement: 'footer' },
     }) as AppState;
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -297,7 +308,8 @@ describe('readFile — 2-D multi-chunk reassembly (task 2.1)', () => {
         },
       ],
       fieldPipelines: { humidity: [] },
-      write: { ...DEFAULT_STATE.write, includeMetadata: true, metadataPlacement: 'header' },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     };
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -323,9 +335,13 @@ describe('readFile — 2-D multi-chunk reassembly (task 2.1)', () => {
         },
       ],
       fieldPipelines: { humidity: [] },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
       write: {
         ...DEFAULT_STATE.write,
-        includeMetadata: true,
         partitioning: 'per-chunk',
       },
     };
@@ -344,8 +360,11 @@ describe('readFile — 2-D multi-chunk reassembly (task 2.1)', () => {
 describe('readFile — JSON and binary metadata formats', () => {
   it('reads JSON metadata successfully', () => {
     const state = deepMerge(DEFAULT_STATE, {
-      metadata: { customEntries: [], serialization: 'json' },
-      write: { includeMetadata: true, metadataPlacement: 'header' },
+      metadata: {
+        customEntries: [], serialization: 'json', enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { metadataPlacement: 'header' },
     }) as AppState;
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
@@ -354,8 +373,11 @@ describe('readFile — JSON and binary metadata formats', () => {
 
   it('reads binary metadata successfully', () => {
     const state = deepMerge(DEFAULT_STATE, {
-      metadata: { customEntries: [], serialization: 'binary' },
-      write: { includeMetadata: true, metadataPlacement: 'header' },
+      metadata: {
+        customEntries: [], serialization: 'binary', enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { metadataPlacement: 'header' },
     }) as AppState;
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });

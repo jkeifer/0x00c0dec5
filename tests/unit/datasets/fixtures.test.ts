@@ -61,7 +61,11 @@ describe.each(DATASETS.map((d) => [d.id] as const))('fixture %s', (id) => {
       variables,
       fieldPipelines: Object.fromEntries(variables.map((v) => [v.id, []])),
       chunkPipeline: [],
-      write: { ...structuredClone(DEFAULT_STATE).write, includeMetadata: true },
+      metadata: {
+        ...structuredClone(DEFAULT_STATE).metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
     };
     const result = computePipelineStages(state, undefined, sourceValues);
     expect(result.readResult.success).toBe(true);

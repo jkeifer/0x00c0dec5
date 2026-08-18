@@ -35,8 +35,13 @@ function makeState(overrides: Partial<AppState>): AppState {
   return {
     ...structuredClone(DEFAULT_STATE),
     ...overrides,
-    metadata: { ...DEFAULT_STATE.metadata, ...(overrides.metadata ?? {}) },
-    write: { ...DEFAULT_STATE.write, includeMetadata: true, ...(overrides.write ?? {}) },
+    metadata: {
+      ...DEFAULT_STATE.metadata,
+      enabled: true,
+      include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      ...(overrides.metadata ?? {}),
+    },
+    write: { ...DEFAULT_STATE.write, ...(overrides.write ?? {}) },
   };
 }
 
@@ -130,7 +135,10 @@ describe('text variables — write/read roundtrip', () => {
         shape: [8], chunkShape: [8],
         variables: [city, HUMIDITY],
         fieldPipelines: { city: [], humidity: [] },
-        metadata: { customEntries: [], serialization, include: DEFAULT_STATE.metadata.include },
+        metadata: {
+          enabled: true, customEntries: [], serialization,
+          include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+        },
       });
       const { stages, readResult } = computePipelineStages(state);
 
@@ -157,7 +165,10 @@ describe('text variables — write/read roundtrip', () => {
       shape: [16], chunkShape: [4], // 4 chunks — offsets actually matter
       variables: [city, HUMIDITY],
       fieldPipelines: { city: [], humidity: [] },
-      metadata: { customEntries: [], serialization: 'json', include: { ...DEFAULT_STATE.metadata.include, chunkIndex: false } },
+      metadata: {
+        enabled: true, customEntries: [], serialization: 'json',
+        include: { schema: true, layout: true, codecs: true, chunkIndex: false, descriptive: true, endianness: true },
+      },
     });
     const { readResult } = computePipelineStages(state);
     expect(readResult.success).toBe(true);

@@ -270,9 +270,13 @@ describe('Integration: per-chunk partitioning', () => {
         },
       ],
       fieldPipelines: { x: [] },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
       write: {
         ...DEFAULT_STATE.write,
-        includeMetadata: true,
         partitioning: 'per-chunk',
       },
     };

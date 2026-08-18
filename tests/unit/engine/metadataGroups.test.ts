@@ -6,13 +6,18 @@ import {
   computeValuesStage, computeTypedStage, computeLinearizedStage, computeEncodedStage,
 } from '../../../src/engine/pipelineCompute.ts';
 
+// Metadata redesign Task 1: DEFAULT_STATE.metadata.include now defaults every
+// group off, so stateWith's "all groups on unless overridden" baseline must
+// be spelled out explicitly rather than spreading DEFAULT_STATE.metadata.include.
+const ALL_INCLUDE_ON = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
+
 function stateWith(include: Partial<AppState['metadata']['include']>): AppState {
   return {
     ...DEFAULT_STATE,
     metadata: {
       ...DEFAULT_STATE.metadata,
       customEntries: [{ key: 'author', value: 'test' }],
-      include: { ...DEFAULT_STATE.metadata.include, ...include },
+      include: { ...ALL_INCLUDE_ON, ...include },
     },
   };
 }
