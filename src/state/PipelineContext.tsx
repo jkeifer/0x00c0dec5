@@ -1,5 +1,5 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
-import type { PipelineResult } from '../engine/pipelineCompute.ts';
+import type { PipelineResult, MetadataDisplayEntry } from '../engine/pipelineCompute.ts';
 import type { PipelineStage, VirtualFile, ReadFileResult, VariableStats, StageName } from '../types/pipeline.ts';
 import type { ValueSources, ValueArray } from '../engine/layout.ts';
 import type { RuntimeState } from '../worker/client.ts';
@@ -32,6 +32,9 @@ export interface PipelineContextValue {
   /** Task 8 (perf plan): per-stage ValueSources for traceAt/flatGroupAt
    *  — see usePipeline.ts's buildStageSources. */
   stageSources: Map<StageName, ValueSources>;
+  /** Task 9 (metadata redesign): the Metadata stage's Entries view rows —
+   *  see PipelineResult.metadataEntries. */
+  metadataEntries: MetadataDisplayEntry[];
   showDiff: boolean;
   /**
    * Alias of `logicalValues` (see App.tsx's prior inline comment, D6 Phase
@@ -89,6 +92,7 @@ export function PipelineProvider({
       logicalValues: pipeline.logicalValues,
       typedValues: pipeline.typedValues,
       stageSources: pipeline.stageSources,
+      metadataEntries: pipeline.metadataEntries,
       originalValues: pipeline.logicalValues,
     }),
     [pipeline],

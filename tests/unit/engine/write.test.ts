@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { hexToBytes, orderChunks, assembleFiles } from '../../../src/engine/write.ts';
 import { deserializeMetadata } from '../../../src/engine/metadata.ts';
+import { decodeMetadataBinary } from '../../../src/engine/metadataBinary.ts';
 import { chunkRegionsOf } from '../../../src/engine/layout.ts';
 import { computeMetadataStage } from '../../../src/engine/pipelineCompute.ts';
 import { readFile } from '../../../src/engine/read.ts';
@@ -202,6 +203,60 @@ describe('computeMetadataStage', () => {
     };
     const r = computeMetadataStage(state, [], new Map());
     expect(r.stage.bytes.length).toBeGreaterThan(0);
+  });
+
+  describe('entries (Task 9: Entries view)', () => {
+    const baseEnabled = {
+      ...DEFAULT_STATE,
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+        customEntries: [{ key: 'note', value: 'hello' }],
+      },
+    };
+
+    it('disabled -> entries is []', () => {
+      const state = { ...DEFAULT_STATE, metadata: { ...DEFAULT_STATE.metadata, enabled: false } };
+      const r = computeMetadataStage(state, [], new Map());
+      expect(r.entries).toEqual([]);
+    });
+
+    it('json serialization -> entries have null tag/type and include the custom key', () => {
+      const state = { ...baseEnabled, metadata: { ...baseEnabled.metadata, serialization: 'json' as const } };
+      const r = computeMetadataStage(state, [], new Map());
+      expect(r.entries.length).toBeGreaterThan(0);
+      for (const e of r.entries) {
+        expect(e.tag).toBeNull();
+        expect(e.type).toBeNull();
+      }
+      const note = r.entries.find((e) => e.key === 'note');
+      expect(note?.value).toBe('hello');
+    });
+
+    it('binary serialization -> entries are parsed from the serialized bytes with numeric tag/type, custom key carries tag 0', () => {
+      const state = { ...baseEnabled, metadata: { ...baseEnabled.metadata, serialization: 'binary' as const } };
+      const r = computeMetadataStage(state, [], new Map());
+      expect(r.entries.length).toBeGreaterThan(0);
+      for (const e of r.entries) {
+        expect(typeof e.tag).toBe('number');
+        expect(typeof e.type).toBe('number');
+      }
+      const note = r.entries.find((e) => e.key === 'note');
+      expect(note?.tag).toBe(0);
+      expect(note?.value).toBe('hello');
+      // A registered key (schema is gated on, and always emitted when the
+      // schema include-group is on) must carry its real tag, not 0.
+      const schema = r.entries.find((e) => e.key === 'schema');
+      expect(schema?.tag).toBeGreaterThan(0);
+    });
+
+    it('binary entries match decodeMetadataBinary applied directly to the stage bytes', () => {
+      const state = { ...baseEnabled, metadata: { ...baseEnabled.metadata, serialization: 'binary' as const } };
+      const r = computeMetadataStage(state, [], new Map());
+      const decoded = decodeMetadataBinary(r.stage.bytes);
+      expect(r.entries).toEqual(decoded.entries);
+    });
   });
 });
 

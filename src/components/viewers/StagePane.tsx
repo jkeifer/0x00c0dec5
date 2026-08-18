@@ -11,6 +11,7 @@ import { FlatView } from './FlatView.tsx';
 import { TableView } from './TableView.tsx';
 import { GridView } from './GridView.tsx';
 import { ReadProcessView } from './ReadProcessView.tsx';
+import { MetadataEntriesView } from './MetadataEntriesView.tsx';
 
 // Task 4.4 (remediation-plan.md, Phase 4; fixes UI-6): per spec, every
 // non-Values stage offers Hex AND Flat; Values/Typed/Read additionally offer
@@ -42,6 +43,15 @@ const READ_VIEW_MODES = [
 ];
 
 const DEFAULT_VIEW_MODES = [
+  { value: 'hex', label: 'Hex' },
+  { value: 'flat', label: 'Flat' },
+];
+
+// Task 9 (metadata redesign): Metadata additionally offers 'entries' — the
+// parsed-from-bytes key/value table — and it's the default (first = default
+// via StagePane's existing view-mode fallback below).
+const METADATA_VIEW_MODES = [
+  { value: 'entries', label: 'Entries' },
   { value: 'hex', label: 'Hex' },
   { value: 'flat', label: 'Flat' },
 ];
@@ -107,6 +117,7 @@ export function StagePane({
     logicalValues,
     typedValues,
     stageSources,
+    metadataEntries,
   } = usePipelineContext();
 
   // Task 3.8 (D5, fixes SW-2/SW-6/SW-10): stage identity is a name; resolve
@@ -120,6 +131,7 @@ export function StagePane({
   const isTypedStage = selectedStage === 'typed';
   const isReadStage = selectedStage === 'read';
   const isWriteStage = selectedStage === 'write';
+  const isMetadataStage = selectedStage === 'metadata';
   // Table/Grid views only ever render Values/Typed/Read stages (see
   // viewModes below — every other stage is Hex/Flat-only), so exactly one of
   // these is relevant whenever 'table'/'grid' is reachable (D6, fixes UI-9).
@@ -138,7 +150,9 @@ export function StagePane({
       ? TYPED_VIEW_MODES
       : isReadStage
         ? READ_VIEW_MODES
-        : DEFAULT_VIEW_MODES;
+        : isMetadataStage
+          ? METADATA_VIEW_MODES
+          : DEFAULT_VIEW_MODES;
 
   // Auto-fallback: if current view mode isn't available for this stage, use first available
   const effectiveView = viewModes.some((m) => m.value === viewMode)
@@ -201,6 +215,17 @@ export function StagePane({
     // read. Neither case falls through to the value/hex/flat viewers below.
     if (isReadStage && (!readResult.success || effectiveView === 'process')) {
       return <ReadProcessView steps={readResult.steps} />;
+    }
+
+    // Metadata stage: the Entries view is a value-shaped view of the
+    // assembled metadata (Task 9), not the raw bytes — same "default view
+    // that isn't Hex" pattern as Table/Grid for Values/Typed/Read. `enabled`
+    // is derived from the stage's own bytes: computeMetadataStage's
+    // documented invariant is truly-zero-length bytes exactly when
+    // `metadata.enabled` is off (never for an enabled-but-empty document —
+    // the envelope key `metadata_format` is always emitted when enabled).
+    if (isMetadataStage && effectiveView === 'entries') {
+      return <MetadataEntriesView entries={metadataEntries} enabled={!!stage && stage.bytes.length > 0} />;
     }
 
     switch (effectiveView) {

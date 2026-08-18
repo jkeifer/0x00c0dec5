@@ -20,6 +20,7 @@ import { chunkData, chunkDataPerVariable, computeChunkGrid } from './chunk.ts';
 import { linearizeChunk } from './linearize.ts';
 import { runCodecPipeline, shannonEntropy, stepWarnings } from './codecs.ts';
 import { collectMetadata, serializeMetadata } from './metadata.ts';
+import { decodeMetadataBinary } from './metadataBinary.ts';
 import { assembleFiles } from './write.ts';
 import { valuesToBytes, bytesToValues } from './elements.ts';
 import { readFile } from './read.ts';
@@ -392,8 +393,20 @@ export function computeEncodedStage(
 // Typing a metadata custom entry re-runs only this stage (and Files/Read
 // after it) — NOT generation/typing/chunking/encoding.
 
+/** A metadata entry as shown in the Entries view (Task 9): `key`/`value`
+ * always present; `tag`/`type` are the binary wire format's numeric fields
+ * when the stage was serialized as binary, else null (JSON has no tag/type —
+ * it's just a string-keyed object). */
+export interface MetadataDisplayEntry {
+  key: string;
+  value: string;
+  tag: number | null;
+  type: number | null;
+}
+
 export interface MetadataStageResult {
   stage: PipelineStage;
+  entries: MetadataDisplayEntry[];
 }
 
 export function computeMetadataStage(
@@ -404,13 +417,20 @@ export function computeMetadataStage(
   // Master switch off -> truly zero bytes (not a serialized "{}"): the
   // Metadata stage has nothing to show, not an empty metadata document.
   if (!state.metadata.enabled) {
-    return { stage: makeStage('Metadata', new Uint8Array(0), buildMetadataLayout(0)) };
+    return { stage: makeStage('Metadata', new Uint8Array(0), buildMetadataLayout(0)), entries: [] };
   }
   // placement 'omit' still computes and displays Metadata-stage bytes — only
   // assembleFiles (Write stage) declines to write them anywhere.
   const metaEntries = collectMetadata(state, encodedChunks, variableStats);
   const metaBytes = serializeMetadata(metaEntries, state.metadata.serialization);
-  return { stage: makeStage('Metadata', metaBytes, buildMetadataLayout(metaBytes.length)) };
+  // Task 9: entries shown in the Entries view are derived from the bytes
+  // actually produced, not from `metaEntries` directly — binary mode parses
+  // the real wire bytes (via decodeMetadataBinary) so the view shows what the
+  // bytes say, including numeric tag/type; JSON has no tag/type framing.
+  const entries: MetadataDisplayEntry[] = state.metadata.serialization === 'binary'
+    ? decodeMetadataBinary(metaBytes).entries
+    : metaEntries.map((e) => ({ ...e, tag: null, type: null }));
+  return { stage: makeStage('Metadata', metaBytes, buildMetadataLayout(metaBytes.length)), entries };
 }
 
 // ─── Stage 6: Write (assembled files) ──────────────────────────────────────
@@ -509,6 +529,9 @@ export interface PipelineResult {
    *  computed in the worker against the same config the Encoded stage's bytes
    *  came from — see EncodedStageResult.codecWarnings. */
   codecWarnings: string[];
+  /** Task 9 (metadata redesign): the Metadata stage's Entries view rows,
+   *  parsed from the actual serialized bytes — see MetadataStageResult.entries. */
+  metadataEntries: MetadataDisplayEntry[];
   /**
    * The config slices this result was actually computed from, attached by the
    * worker client. The stale-view UX keeps the last-good result mounted while
@@ -617,6 +640,7 @@ export function computePipelineStages(
       (s) => stages[STAGE_ORDER.indexOf(s)].bytes,
     ),
     codecWarnings: encoded.codecWarnings,
+    metadataEntries: metadata.entries,
   };
 }
 
@@ -638,7 +662,7 @@ export interface StagePayloads {
   typed: { stage: PipelineStage; typedValues: Map<string, ValueArray>; variableStats: Map<string, VariableStats> };
   linearized: { stage: PipelineStage };
   encoded: { stage: PipelineStage; codecWarnings: string[] };
-  metadata: { stage: PipelineStage };
+  metadata: { stage: PipelineStage; entries: MetadataDisplayEntry[] };
   write: { stage: PipelineStage; files: VirtualFile[] };
   read: { stage: PipelineStage; readResult: ReadFileResult; readLogicalValues: Map<string, ValueArray> };
 }
@@ -667,6 +691,7 @@ export function assemblePipelineResult(payloads: StagePayloads): PipelineResult 
       (s) => payloads[s].stage.bytes,
     ),
     codecWarnings: payloads.encoded.codecWarnings,
+    metadataEntries: payloads.metadata.entries,
   };
 }
 
@@ -848,7 +873,7 @@ export function createPipelineComputer(): (
     });
     emit('linearized', linearizedM.key, { stage: linearized.stage });
     emit('encoded', encodedM.key, { stage: encoded.stage, codecWarnings: encoded.codecWarnings });
-    emit('metadata', metadataM.key, { stage: metadata.stage });
+    emit('metadata', metadataM.key, { stage: metadata.stage, entries: metadata.entries });
     emit('write', filesM.key, { stage: files.stage, files: files.files });
     emit('read', readM.key, {
       stage: read.stage,
