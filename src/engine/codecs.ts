@@ -1,7 +1,6 @@
 import type { CodecDefinition, CodecStep, ParamDef } from '../types/codecs.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
-import { getDtype, isCharDtype } from '../types/dtypes.ts';
-import { bytesToValues, valuesToBytes } from './elements.ts';
+import { getDtype } from '../types/dtypes.ts';
 import { runPyodideCodec } from './pyodideRuntime.ts';
 import type { AppState } from '../types/state.ts';
 
@@ -12,70 +11,88 @@ const delta: CodecDefinition = {
   label: 'Delta',
   category: 'reordering',
   description: 'Store value-to-value differences',
+  // No `order` param: a second-order delta is just delta twice, and the
+  // pipeline can already say that — as two steps whose intermediate bytes and
+  // sizes are visible, instead of a spinner that hides one.
+  //
+  // `elementSize` is Byte Shuffle's knob: same name, same unit (bytes — every
+  // dtype here is a whole number of them, so a bit width would say nothing
+  // extra), same range, same lesson — a byte-oriented codec has to be told
+  // where elements begin. Like Byte Shuffle's, it is seeded from the input
+  // dtype's size when the step is added (addCodec in CodecPipelineEditor), so
+  // it shows a concrete number rather than a magic "auto". Unlike Byte
+  // Shuffle's, a mismatch against the dtype is NOT warned about: after a Byte
+  // Shuffle the declared dtype is a lie (the bytes are byte planes, still
+  // labelled Float32 — see outputDtypeFor), and 1 is the right answer there.
   params: {
-    order: { label: 'Order', type: 'number', default: 1, min: 1, max: 3, step: 1 },
+    elementSize: { label: 'Element Size', type: 'number', default: 4, min: 1, max: 16, step: 1 },
   },
-  // Task 4.3 (UI-4/SW-7): delta is exact (lossless) for every integer dtype
-  // post-Phase-2 — typed-array writes wrap mod 2^N so encode/decode are
-  // perfect inverses, including on uint8. Only float dtypes warrant the
-  // applicability warning: taking a difference and storing it back at the
-  // same float precision re-rounds the value (see `isLossy` below).
-  // Char dtypes also warn: "differences between words" is meaningless, so
-  // encode/decode below fall back to byte-wise (uint8) delta — still a
-  // lossless roundtrip (warnings never block), just not a useful transform.
-  applicableTo: (dtype) => {
-    const key = dtype as DtypeKey;
-    return !getDtype(key).float && !isCharDtype(key);
-  },
-  // Task 2.6 deviation from the extension spec's plain `lossy: boolean`: delta is
-  // exact for integer dtypes (post-2.5, typed-array writes wrap mod 2^N so encode
-  // and decode are perfect inverses) but lossy for float dtypes (diffs are
-  // re-rounded to the float dtype's precision). A single boolean cannot express
-  // that distinction, so `isLossy` is a predicate over the input dtype instead.
-  isLossy: (inputDtype) => getDtype(inputDtype).float,
+  // No ⚠, on any dtype. Delta used to warn on float and char ("differencing
+  // IEEE bit patterns / text is meaningless") — but that judgment rests on the
+  // step's declared input dtype, and after a Byte Shuffle that dtype is a lie:
+  // the bytes are byte planes, and the pipeline still calls them Float32 (see
+  // outputDtypeFor). The warning fired hardest on the one arrangement where it
+  // knew least. As a plain modular integer transform delta is defined and
+  // exactly reversible on any byte stream, so there is nothing left to warn
+  // about; `elementSize` is how the user says what the bytes mean.
+  applicableTo: () => true,
+  isLossy: () => false,
   encode(bytes, inputDtype, params) {
-    const order = Number(params.order ?? 1);
-    // Char guard (symmetric with decode): bytesToValues on a char dtype
-    // returns strings, and string arithmetic is NaN garbage. Treat char
-    // input as raw uint8 bytes instead — byte-wise delta, lossless.
-    const dtype = isCharDtype(inputDtype as DtypeKey) ? 'uint8' : inputDtype as DtypeKey;
-    const values = bytesToValues(bytes, dtype) as Float64Array;
-
-    // Integer dtypes: diffs of integers are integers, so no rounding is needed.
-    // Typed-array writes below wrap mod 2^N (DataView setters perform ToInt32 /
-    // modulo semantics), which is what makes the round-trip exact for unsigned
-    // dtypes — do NOT clamp to the dtype range here (that was DC-2: clamping a
-    // negative diff on an unsigned dtype to 0 made the transform irreversible).
-    // Float dtypes: values are stored back at the same float precision, which is
-    // inherently lossy (see `isLossy` above) — no clamping applies to floats either.
-    for (let o = 0; o < order; o++) {
-      const prev = [...values];
-      for (let i = values.length - 1; i >= 1; i--) {
-        values[i] = values[i] - prev[i - 1];
-      }
-      // values[0] remains unchanged
-    }
-
-    return { bytes: valuesToBytes(values, dtype), outputDtype: inputDtype };
+    return { bytes: deltaMap(bytes, params, 'encode'), outputDtype: inputDtype };
   },
   decode(bytes, encodedDtype, params) {
-    const order = Number(params.order ?? 1);
-    // Symmetric char guard — see encode above.
-    const dtype = isCharDtype(encodedDtype as DtypeKey) ? 'uint8' : encodedDtype as DtypeKey;
-    const values = bytesToValues(bytes, dtype) as Float64Array;
-
-    // Cumulative sum (prefix sum), applied `order` times. No clamping — see the
-    // encode-side comment above. The typed-array write in valuesToBytes wraps
-    // mod 2^N for integer dtypes, undoing encode's wrap exactly.
-    for (let o = 0; o < order; o++) {
-      for (let i = 1; i < values.length; i++) {
-        values[i] = values[i] + values[i - 1];
-      }
-    }
-
-    return { bytes: valuesToBytes(values, dtype), outputDtype: encodedDtype };
+    return { bytes: deltaMap(bytes, params, 'decode'), outputDtype: encodedDtype };
   },
 };
+
+/** Modular integer delta over unsigned elements of `elementSize` bytes; decode
+ * is the prefix sum. Subtraction is byte-wise with a borrow (little-endian:
+ * byte 0 is least significant), which is what makes it exact — the borrow chain
+ * IS the mod 2^(8N) wrap, so encode/decode are perfect inverses on any byte
+ * stream at any element size, including the 8- and 16-byte dtypes no JS
+ * unsigned view can hold. Do NOT clamp to the dtype range: that was DC-2, where
+ * clamping a negative diff on an unsigned dtype to 0 made the transform
+ * irreversible.
+ *
+ * Signedness never enters into it — two's complement makes `(a - b) mod 2^N`
+ * bit-identical for the signed and unsigned reading of a width (int16
+ * -30000-30000 and uint16 35536-30000 both store 5536) — so this needs the
+ * element size and nothing else about the dtype.
+ *
+ * ponytail: byte-at-a-time for every size; swap in Uint16Array/Uint32Array
+ * views for sizes 2 and 4 if a profile ever asks for it. */
+function deltaMap(
+  bytes: Uint8Array,
+  params: Record<string, number | string>,
+  op: 'encode' | 'decode',
+): Uint8Array {
+  const size = elementSizeOf(params);
+  const out = new Uint8Array(bytes); // trailing partial element copies through
+  const count = Math.floor(out.length / size);
+
+  if (op === 'encode') {
+    // Backward, so each element still sees its unmodified predecessor.
+    for (let i = count - 1; i >= 1; i--) {
+      let borrow = 0;
+      for (let b = 0; b < size; b++) {
+        const diff = out[i * size + b] - out[(i - 1) * size + b] - borrow;
+        out[i * size + b] = diff & 0xff;
+        borrow = diff < 0 ? 1 : 0;
+      }
+    }
+  } else {
+    // Forward, each element summing onto the already-restored one before it.
+    for (let i = 1; i < count; i++) {
+      let carry = 0;
+      for (let b = 0; b < size; b++) {
+        const sum = out[i * size + b] + out[(i - 1) * size + b] + carry;
+        out[i * size + b] = sum & 0xff;
+        carry = sum > 0xff ? 1 : 0;
+      }
+    }
+  }
+  return out;
+}
 
 // ─── Zigzag ─────────────────────────────────────────────────────────────
 
@@ -134,6 +151,10 @@ const byteShuffle: CodecDefinition = {
   key: 'byte-shuffle',
   label: 'Byte Shuffle',
   category: 'reordering',
+  // The transpose moves every byte but the first: after it, byte offset N
+  // holds byte plane b of some *other* element, so per-element tracing can't
+  // survive. See CodecDefinition.traceMode.
+  traceMode: 'positional',
   description: 'Transpose bytes by position within each element',
   params: {
     elementSize: { label: 'Element Size', type: 'number', default: 4, min: 1, max: 16, step: 1 },
@@ -148,7 +169,7 @@ const byteShuffle: CodecDefinition = {
   applicableTo: (dtype) => getDtype(dtype as DtypeKey).size > 1,
   isLossy: () => false,
   encode(bytes, inputDtype, params) {
-    const elementSize = Number(params.elementSize ?? 4);
+    const elementSize = elementSizeOf(params);
     if (elementSize <= 1 || bytes.length === 0) {
       return { bytes: new Uint8Array(bytes), outputDtype: inputDtype };
     }
@@ -172,7 +193,7 @@ const byteShuffle: CodecDefinition = {
     return { bytes: result, outputDtype: inputDtype };
   },
   decode(bytes, encodedDtype, params) {
-    const elementSize = Number(params.elementSize ?? 4);
+    const elementSize = elementSizeOf(params);
     if (elementSize <= 1 || bytes.length === 0) {
       return { bytes: new Uint8Array(bytes), outputDtype: encodedDtype };
     }
@@ -203,20 +224,38 @@ const bitShuffleCodec: CodecDefinition = {
   key: 'bit-shuffle',
   label: 'Bit Shuffle',
   category: 'reordering',
+  // One output byte packs one bit from each of 8 consecutive elements, so no
+  // byte belongs to a single element — not even positionally. Degrades all
+  // the way, like an entropy codec.
+  traceMode: 'chunk-level',
   description:
     'Byte Shuffle one level finer: transposes the BITS of a block of elements '
     + 'into bit planes (all elements’ bit 0, then bit 1, …). Slowly varying '
     + 'data yields long constant bit runs — the transform inside blosc/bitshuffle.',
-  params: {},
+  // Same `elementSize` knob as Byte Shuffle and Delta, for the same reason and
+  // seeded the same way. It used to read the width off the input dtype, which
+  // (a) broke the moment outputDtypeFor started reporting uint8 for its own
+  // output — decode would have transposed at width 1 what encode transposed at
+  // width 4 — and (b) was already wrong for a Bit Shuffle placed after a Byte
+  // Shuffle, where the dtype no longer described the bytes.
+  params: {
+    elementSize: { label: 'Element Size', type: 'number', default: 4, min: 1, max: 16, step: 1 },
+  },
   applicableTo: (dtype) => getDtype(dtype as DtypeKey).size > 1,
   isLossy: () => false,
-  encode(bytes, inputDtype) {
-    return { bytes: bitTranspose(bytes, getDtype(inputDtype as DtypeKey).size, 'encode'), outputDtype: inputDtype };
+  encode(bytes, inputDtype, params) {
+    return { bytes: bitTranspose(bytes, elementSizeOf(params), 'encode'), outputDtype: inputDtype };
   },
-  decode(bytes, encodedDtype) {
-    return { bytes: bitTranspose(bytes, getDtype(encodedDtype as DtypeKey).size, 'decode'), outputDtype: encodedDtype };
+  decode(bytes, encodedDtype, params) {
+    return { bytes: bitTranspose(bytes, elementSizeOf(params), 'decode'), outputDtype: encodedDtype };
   },
 };
+
+/** Shared reader for the `elementSize` param (Delta, Byte Shuffle, Bit
+ *  Shuffle): bytes per element, never below 1. */
+function elementSizeOf(params: Record<string, number | string>): number {
+  return Math.max(1, Math.floor(Number(params.elementSize)) || 4);
+}
 
 /** Transpose bits within each whole block of elements. Block = all complete
  * elements (count*stride bytes); trailing bytes copied through unchanged.
@@ -490,8 +529,28 @@ export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
  * scale/offset-as-codec) was added. This is the single source of truth both
  * the editor and any other dtype-flow consumer should call instead.
  */
+/**
+ * F31: the enabled subset of a codec pipeline. Absent `enabled` = enabled.
+ * Every pipeline consumption boundary (runCodecPipeline, reverseCodecPipeline,
+ * encodedChunkMeta, stepWarnings, metadata serialization) filters through this
+ * so a disabled step is preserved in state but has no effect on the bytes,
+ * the written metadata, or later steps' dtype flow (CLAUDE.md pitfall 3).
+ */
+export function activeSteps(steps: CodecStep[]): CodecStep[] {
+  return steps.filter((s) => s.enabled !== false);
+}
+
 export function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey): DtypeKey {
-  return codec.category === 'entropy' ? 'uint8' : inputDtype;
+  // A codec that declares a traceMode has destroyed element structure: after a
+  // Byte Shuffle the stream is byte planes, after a Bit Shuffle it is bit
+  // planes. Reporting the pre-codec dtype there was a lie with three victims —
+  // the next codec's element size, the ⚠ warnings, and the dtype label on the
+  // step — all of which confidently described elements that no longer exist.
+  // Bytes with no element structure are uint8, the same answer entropy codecs
+  // give. This is only the *flow* dtype; what the Encoded pane draws as a slot
+  // is `slotDtype` (encodedChunkMeta), which deliberately still answers "what
+  // would a reader ignoring this codec decode here".
+  return codec.category === 'entropy' || codec.traceMode ? 'uint8' : inputDtype;
 }
 
 /** True when any configured pipeline step references a runtime-backed codec.
@@ -539,15 +598,20 @@ function computeDtypeFlow(steps: CodecStep[], inputDtype: DtypeKey): DtypeKey[] 
  * behavior, it only surfaces text for the UI to render.
  *
  * Two independent checks feed into this:
- *  - `codec.applicableTo(dtype)` — dtype-level applicability (e.g. delta on
- *    float, shuffle on 1-byte dtypes).
+ *  - `codec.applicableTo(dtype)` — dtype-level applicability (e.g. zigzag on
+ *    an unsigned dtype, shuffle on 1-byte dtypes). Delta opts out entirely
+ *    (`() => true`): see the comment on its definition.
  *  - Byte Shuffle's `elementSize` param vs. the actual input dtype size —
  *    `applicableTo` only receives the dtype, not the step's params, so this
  *    mismatch can't be expressed there. It is exactly the "shuffle needs to
  *    know the element boundary" lesson the design doc is built around.
+ *    Deliberately NOT applied to Delta's identically-named param: a Delta
+ *    after a Byte Shuffle should be set to 1 while the flow still claims the
+ *    pre-shuffle dtype, and warning there would be warning about the truth.
  */
 export function stepWarnings(steps: CodecStep[], inputDtype: DtypeKey): string[] {
   const warnings: string[] = [];
+  steps = activeSteps(steps);
   const runningDtypes = computeDtypeFlow(steps, inputDtype);
 
   steps.forEach((step, i) => {
@@ -557,19 +621,9 @@ export function stepWarnings(steps: CodecStep[], inputDtype: DtypeKey): string[]
     const dtypeInfo = getDtype(dtype);
 
     if (!codec.applicableTo(dtype)) {
-      if (step.codec === 'delta' && dtypeInfo.char) {
-        warnings.push(
-          `Delta on ${dtypeInfo.label} has no numeric meaning — it falls back to byte-wise differences (lossless, but rarely useful for text).`,
-        );
-      } else if (step.codec === 'delta') {
-        warnings.push(
-          `Delta on ${dtypeInfo.label} is lossy — differences are re-rounded to float precision each step (integer dtypes round-trip exactly; this is why).`,
-        );
-      } else {
-        warnings.push(
-          `${codec.label} is not applicable to ${dtypeInfo.label} input — results may be garbled or meaningless.`,
-        );
-      }
+      warnings.push(
+        `${codec.label} is not applicable to ${dtypeInfo.label} input — results may be garbled or meaningless.`,
+      );
     }
 
     if (step.codec === 'byte-shuffle') {
@@ -609,7 +663,7 @@ export function runCodecPipeline(
   let currentBytes = inputBytes;
   let currentDtype: DtypeKey = inputDtype;
 
-  for (const step of steps) {
+  for (const step of activeSteps(steps)) {
     const codec = CODEC_REGISTRY[step.codec];
     if (!codec) continue;
 

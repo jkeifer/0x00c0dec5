@@ -4,6 +4,7 @@ import { assignType } from '../../../src/engine/typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid } from '../../../src/engine/chunk.ts';
 import { linearizeChunk } from '../../../src/engine/linearize.ts';
 import { runCodecPipeline } from '../../../src/engine/codecs.ts';
+import { computePipelineStages, pipelineCapError } from '../../../src/engine/pipelineCompute.ts';
 import { assembleFiles } from '../../../src/engine/write.ts';
 import { encodedChunkMeta } from '../../../src/engine/layout.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
@@ -135,7 +136,7 @@ describe('Integration: full codec chain (delta + shuffle + rle)', () => {
       ],
       fieldPipelines: {
         temp: [
-          { codec: 'delta', params: { order: 1 } },
+          { codec: 'delta', params: {} },
           { codec: 'byte-shuffle', params: { elementSize: 2 } },
           { codec: 'rle', params: {} },
         ],
@@ -147,13 +148,46 @@ describe('Integration: full codec chain (delta + shuffle + rle)', () => {
     expect(files.length).toBeGreaterThanOrEqual(1);
     expect(files[0].bytes.length).toBeGreaterThan(0);
 
-    // After RLE (entropy codec), the chunk's pipeline metadata reports
-    // hasEntropy — which is what drives chunk-level (degraded) tracing in
+    // After RLE (entropy codec), X    // hasEntropy — which is what drives chunk-level (degraded) tracing in
     // the Encoded stage's layout (buildEncodedLayout in layout.ts). Per-byte
     // trace-degradation itself is pinned by the layout equivalence suite
     // (layout.equivalence.test.ts's ENCODED_CASES 'rle (entropy)' case).
     const meta = encodedChunkMeta(state.fieldPipelines['temp'], 'int16');
-    expect(meta.hasEntropy).toBe(true);
+    expect(meta.traceMode).toBe('chunk-level');
+  });
+});
+
+describe('Integration: F31 disabled codec step', () => {
+  it('produces byte-identical files (incl. metadata) to omitting the step', () => {
+    const base: AppState = {
+      ...DEFAULT_STATE,
+      variables: [
+        {
+          id: 'temp', name: 'temp', color: '#f00',
+          logicalType: { type: 'integer', min: 0, max: 1000, generation: 'sorted' },
+          typeAssignment: { storageDtype: 'int16' },
+        },
+      ],
+      chunkPipeline: [],
+    };
+    const withDisabled: AppState = {
+      ...base,
+      fieldPipelines: {
+        temp: [
+          { codec: 'delta', params: {} },
+          { codec: 'byte-shuffle', params: { elementSize: 2 }, enabled: false },
+        ],
+      },
+    };
+    const without: AppState = {
+      ...base,
+      fieldPipelines: { temp: [{ codec: 'delta', params: {} }] },
+    };
+
+    const a = runFullPipeline(withDisabled).files;
+    const b = runFullPipeline(without).files;
+    expect(a.length).toBe(b.length);
+    expect(Array.from(a[0].bytes)).toEqual(Array.from(b[0].bytes));
   });
 });
 
@@ -176,7 +210,7 @@ describe('Integration: multi-variable column-oriented', () => {
       fieldPipelines: {
         a: [],
         b: [
-          { codec: 'delta', params: { order: 1 } },
+          { codec: 'delta', params: {} },
         ],
       },
     };
@@ -211,7 +245,7 @@ describe('Integration: multi-variable row-oriented', () => {
         },
       ],
       chunkPipeline: [
-        { codec: 'delta', params: { order: 1 } },
+        { codec: 'delta', params: {} },
       ],
     };
 
@@ -262,10 +296,10 @@ describe('Integration: determinism', () => {
       ...DEFAULT_STATE,
       fieldPipelines: {
         temperature: [
-          { codec: 'delta', params: { order: 1 } },
+          { codec: 'delta', params: {} },
         ],
         pressure: [
-          { codec: 'delta', params: { order: 1 } },
+          { codec: 'delta', params: {} },
         ],
         humidity: [],
       },
@@ -278,5 +312,28 @@ describe('Integration: determinism', () => {
     for (let i = 0; i < run1.files.length; i++) {
       expect(Array.from(run1.files[i].bytes)).toEqual(Array.from(run2.files[i].bytes));
     }
+  });
+});
+
+describe('Integration: hard cap guard (pipelineCapError)', () => {
+  it('refuses computes over HARD_ELEMENT_CAP with a clear message instead of allocating', () => {
+    const state: AppState = { ...DEFAULT_STATE, shape: [100_000_000], chunkShape: [100_000_000] };
+    expect(pipelineCapError(state)).toMatch(/total values exceeds/);
+    expect(() => computePipelineStages(state)).toThrow(/total values exceeds/);
+  });
+
+  it('refuses computes over HARD_CHUNK_CAP (tiny chunks over a large shape)', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      variables: [DEFAULT_STATE.variables[0]],
+      shape: [4096, 4096],
+      chunkShape: [1, 1],
+    };
+    expect(pipelineCapError(state)).toMatch(/chunks exceeds/);
+    expect(() => computePipelineStages(state)).toThrow(/chunks exceeds/);
+  });
+
+  it('allows states at/below the caps', () => {
+    expect(pipelineCapError(DEFAULT_STATE)).toBeNull();
   });
 });

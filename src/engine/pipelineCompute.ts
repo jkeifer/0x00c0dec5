@@ -18,7 +18,7 @@ import { generateValues } from './generate.ts';
 import { assignType } from './typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid } from './chunk.ts';
 import { linearizeChunk } from './linearize.ts';
-import { runCodecPipeline, shannonEntropy } from './codecs.ts';
+import { runCodecPipeline, shannonEntropy, stepWarnings } from './codecs.ts';
 import { collectMetadata, serializeMetadata } from './metadata.ts';
 import { assembleFiles } from './write.ts';
 import { valuesToBytes, bytesToValues } from './elements.ts';
@@ -30,11 +30,49 @@ import {
   buildEncodedLayout,
   buildMetadataLayout,
   encodedChunkMeta,
+  type ChunkTraceMode,
   type StageLayout,
   type ValueArray,
   type ValueSources,
   type LayoutRegion,
 } from './layout.ts';
+
+/** Hard ceiling on total values (shape product × variable count). The
+ * SOFT_ELEMENT_CAP banner (SchemaEditor) warns at 8M; past this the
+ * allocations OOM-crash the tab, so the compute entries refuse with a clear
+ * error instead of attempting them. */
+export const HARD_ELEMENT_CAP = 32_000_000;
+
+/** Hard ceiling on chunk COUNT: per-chunk bookkeeping (chunk/linearized/
+ * encoded/layout objects) OOMs long before the values do — e.g. 1×1 chunks
+ * over a large array. */
+export const HARD_CHUNK_CAP = 1_048_576;
+
+/**
+ * Human-readable refusal when `state` is too big to compute without risking
+ * an out-of-memory crash, else null. Checked at both compute entries
+ * (computePipelineStages and createPipelineComputer) so every path — typing,
+ * presets, share links, persisted saves — fails loud instead of OOM; also
+ * used by persistence.validateState so an oversized save never boot-loops,
+ * and by SchemaEditor's cap banner for a matching inline message.
+ */
+export function pipelineCapError(
+  state: Pick<AppState, 'shape' | 'chunkShape' | 'variables'>,
+): string | null {
+  const totalValues =
+    state.shape.reduce((a, b) => a * b, 1) * Math.max(state.variables.length, 1);
+  if (!Number.isFinite(totalValues) || totalValues > HARD_ELEMENT_CAP) {
+    return `${totalValues.toLocaleString()} total values exceeds the ${HARD_ELEMENT_CAP.toLocaleString()} limit — reduce the shape or variable count`;
+  }
+  const chunkCount = state.shape.reduce(
+    (n, dim, d) => n * Math.ceil(dim / (state.chunkShape[d] ?? dim)),
+    1,
+  );
+  if (chunkCount > HARD_CHUNK_CAP) {
+    return `${chunkCount.toLocaleString()} chunks exceeds the ${HARD_CHUNK_CAP.toLocaleString()} limit — increase the chunk size`;
+  }
+  return null;
+}
 
 function makeStage(name: string, bytes: Uint8Array, layout: StageLayout): PipelineStage {
   return {
@@ -175,7 +213,7 @@ export function computeTypedStage(
     const storageDtype = v.typeAssignment.storageDtype;
 
     typedPartBytes.push(result.bytes);
-    variableStats.set(v.name, result.stats);
+    variableStats.set(v.id, result.stats);
 
     // Read back the typed values for use in chunking — bytesToValues honors the
     // same byteOrder the bytes were written with, and handles char dtypes
@@ -226,7 +264,7 @@ export function computeLinearizedStage(
   const linearizedChunks = chunks.map((chunk) => linearizeChunk(chunk, interleaving, byteOrder));
   const linearizedBytes = concatBytes(linearizedChunks.map((lc) => lc.bytes));
 
-  const linearizedLayout = buildLinearizedLayout(chunks, linearizedChunks, interleaving, shape, chunkShape, linearization);
+  const linearizedLayout = buildLinearizedLayout(chunks, linearizedChunks, interleaving, shape, chunkShape, linearization, byteOrder);
 
   return {
     stage: makeStage('Linearized', linearizedBytes, linearizedLayout),
@@ -246,6 +284,37 @@ export function computeLinearizedStage(
 export interface EncodedStageResult {
   stage: PipelineStage;
   encodedChunks: EncodedChunk[];
+  /**
+   * S1 (overhaul-plan.md F1/F22): every warning `stepWarnings` would show
+   * somewhere in the codec section, collected here — in the worker, against
+   * the SAME config this stage's bytes were computed from — instead of being
+   * re-derived on the main thread against live `state.*` (which could name a
+   * codec pipeline not in the stage currently shown; PipelineStrip used to do
+   * this zip). Mirrors CodecSection's per-mode dtype/pipeline resolution.
+   */
+  codecWarnings: string[];
+}
+
+function collectEncodedWarnings(
+  variables: Variable[],
+  fieldPipelines: Record<string, CodecStep[]>,
+  chunkPipeline: CodecStep[],
+  interleaving: 'row' | 'column',
+): string[] {
+  if (interleaving === 'column') {
+    return variables.flatMap((v) =>
+      stepWarnings(fieldPipelines[v.id] ?? [], v.typeAssignment.storageDtype),
+    );
+  }
+
+  const dtypes = variables.map((v) => v.typeAssignment.storageDtype);
+  const mixedDtypes = new Set(dtypes).size > 1;
+  const inputDtype: DtypeKey = mixedDtypes
+    ? 'uint8'
+    : variables.length > 0
+      ? variables[0].typeAssignment.storageDtype
+      : 'uint8';
+  return stepWarnings(chunkPipeline, inputDtype);
 }
 
 /** Per-chunk codec steps + input dtype — single source of truth for "which
@@ -286,14 +355,14 @@ export function computeEncodedStage(
   // fieldPipelines is keyed by Variable.id (D5); ChunkVariable only carries the
   // variable's name (the file format's key), so resolve name -> id here.
   const nameToId = new Map(variables.map((v) => [v.name, v.id]));
-  const outputDtypes: string[] = [];
-  const hasEntropy: boolean[] = [];
+  const slotDtypes: string[] = [];
+  const traceModes: ChunkTraceMode[] = [];
   const encodedChunks: EncodedChunk[] = chunks.map((chunk, idx) => {
     const linearized = linearizedChunks[idx];
     const { steps, inputDtype } = chunkCodecInput(chunk, interleaving, nameToId, fieldPipelines, chunkPipeline);
     const meta = encodedChunkMeta(steps, inputDtype);
-    outputDtypes.push(meta.outputDtype);
-    hasEntropy.push(meta.hasEntropy);
+    slotDtypes.push(meta.slotDtype);
+    traceModes.push(meta.traceMode);
     const result = runCodecPipeline(linearized.bytes, steps, inputDtype);
     return interleaving === 'column'
       ? {
@@ -310,8 +379,9 @@ export function computeEncodedStage(
   });
 
   const encodedBytes = concatBytes(encodedChunks.map((ec) => ec.bytes));
-  const encodedLayout = buildEncodedLayout(linearizedLayout, encodedChunks, outputDtypes, hasEntropy);
-  return { stage: makeStage('Encoded', encodedBytes, encodedLayout), encodedChunks };
+  const encodedLayout = buildEncodedLayout(linearizedLayout, encodedChunks, slotDtypes, traceModes);
+  const codecWarnings = collectEncodedWarnings(variables, fieldPipelines, chunkPipeline, interleaving);
+  return { stage: makeStage('Encoded', encodedBytes, encodedLayout), encodedChunks, codecWarnings };
 }
 
 // ─── Stage 5: Metadata ──────────────────────────────────────────────────────
@@ -428,29 +498,52 @@ export interface PipelineResult {
    *  (format 'logical'; read uses its reconstructed map), others -> typedValues
    *  (format 'typed'). */
   stageSources: Map<StageName, ValueSources>;
+  /** S1 (overhaul-plan.md F1/F22): warnings for the Encoded stage's ⚠ icon,
+   *  computed in the worker against the same config the Encoded stage's bytes
+   *  came from — see EncodedStageResult.codecWarnings. */
+  codecWarnings: string[];
+  /**
+   * The config slices this result was actually computed from, attached by the
+   * worker client. The stale-view UX keeps the last-good result mounted while
+   * a newer state computes (or is refused by the hard cap) — viewers must lay
+   * out that result with ITS shape/variables, not the live state's, or a
+   * committed-but-refused huge shape drives a billions-wide canvas on the
+   * main thread while the values are still the old 32. Optional because
+   * engine-side construction (computePipelineStages, tests) has no client.
+   */
+  computedFrom?: Pick<AppState, 'shape' | 'chunkShape' | 'variables' | 'interleaving'>;
 }
 
 /** Build the stageSources map (brief, Task 7): values/read -> logical
  * (float64) source arrays, typed/linearized/encoded/metadata/write -> typed
- * source arrays (metadata/write have no per-value regions, so their sources
- * are structurally unused by traceAt, but 'typed' is the correct family). */
+ * source arrays.
+ *
+ * Every stage also carries its OWN bytes, so traceAt decodes chunk-region
+ * values from the bytes actually at that offset rather than from the
+ * pre-codec `values` map. For Linearized that's equivalent (the bytes are
+ * those values, just reordered); for Encoded and Write it is the fix — those
+ * stages' bytes have been through the codec pipeline, so a delta step must
+ * display differences and a byte-shuffle step must display the transposed
+ * garbage a naive reader would see. Values/Typed/Read have no chunk regions
+ * and never consult it. */
 function buildStageSources(
   logicalValues: Map<string, ValueArray>,
   typedValues: Map<string, ValueArray>,
   readLogicalValues: Map<string, ValueArray>,
+  bytesFor: (stage: StageName) => Uint8Array,
 ): Map<StageName, ValueSources> {
-  const logical: ValueSources = { values: logicalValues, format: 'logical' };
-  const typed: ValueSources = { values: typedValues, format: 'typed' };
-  const read: ValueSources = { values: readLogicalValues, format: 'logical' };
-  return new Map<StageName, ValueSources>([
-    ['values', logical],
-    ['typed', typed],
-    ['linearized', typed],
-    ['encoded', typed],
-    ['metadata', typed],
-    ['write', typed],
-    ['read', read],
-  ]);
+  const family: Record<StageName, Omit<ValueSources, 'bytes'>> = {
+    values: { values: logicalValues, format: 'logical' },
+    typed: { values: typedValues, format: 'typed' },
+    linearized: { values: typedValues, format: 'typed' },
+    encoded: { values: typedValues, format: 'typed' },
+    metadata: { values: typedValues, format: 'typed' },
+    write: { values: typedValues, format: 'typed' },
+    read: { values: readLogicalValues, format: 'logical' },
+  };
+  return new Map<StageName, ValueSources>(
+    STAGE_ORDER.map((s) => [s, { ...family[s], bytes: bytesFor(s) }]),
+  );
 }
 
 export function computePipelineStages(
@@ -458,6 +551,9 @@ export function computePipelineStages(
   onStage?: (stage: StageName, ms: number) => void,
   sourceValues?: SourceValues,
 ): PipelineResult {
+  const capError = pipelineCapError(state);
+  if (capError) throw new Error(capError);
+
   const timed = <T,>(stage: StageName, fn: () => T): T => {
     if (!onStage) return fn();
     const t0 = performance.now();
@@ -507,7 +603,13 @@ export function computePipelineStages(
     variableStats: typed.variableStats,
     logicalValues: values.variableValues,
     typedValues: typed.typedVariableValues,
-    stageSources: buildStageSources(values.variableValues, typed.typedVariableValues, read.logicalValues),
+    stageSources: buildStageSources(
+      values.variableValues,
+      typed.typedVariableValues,
+      read.logicalValues,
+      (s) => stages[STAGE_ORDER.indexOf(s)].bytes,
+    ),
+    codecWarnings: encoded.codecWarnings,
   };
 }
 
@@ -528,7 +630,7 @@ export interface StagePayloads {
   values: { stage: PipelineStage; logicalValues: Map<string, ValueArray> };
   typed: { stage: PipelineStage; typedValues: Map<string, ValueArray>; variableStats: Map<string, VariableStats> };
   linearized: { stage: PipelineStage };
-  encoded: { stage: PipelineStage };
+  encoded: { stage: PipelineStage; codecWarnings: string[] };
   metadata: { stage: PipelineStage };
   write: { stage: PipelineStage; files: VirtualFile[] };
   read: { stage: PipelineStage; readResult: ReadFileResult; readLogicalValues: Map<string, ValueArray> };
@@ -555,7 +657,9 @@ export function assemblePipelineResult(payloads: StagePayloads): PipelineResult 
       payloads.values.logicalValues,
       payloads.typed.typedValues,
       payloads.read.readLogicalValues,
+      (s) => payloads[s].stage.bytes,
     ),
+    codecWarnings: payloads.encoded.codecWarnings,
   };
 }
 
@@ -600,6 +704,9 @@ export function createPipelineComputer(): (
   };
 
   return (state, knownKeys = {}, onStage, sourceValues) => {
+    const capError = pipelineCapError(state);
+    if (capError) throw new Error(capError);
+
     // Per-variable fail-loud lives in computeValuesStage: a variable with a
     // `source` ref but no matching loaded entry throws there. No schema-wide
     // guard needed.
@@ -733,7 +840,7 @@ export function createPipelineComputer(): (
       variableStats: typed.variableStats,
     });
     emit('linearized', linearizedM.key, { stage: linearized.stage });
-    emit('encoded', encodedM.key, { stage: encoded.stage });
+    emit('encoded', encodedM.key, { stage: encoded.stage, codecWarnings: encoded.codecWarnings });
     emit('metadata', metadataM.key, { stage: metadata.stage });
     emit('write', filesM.key, { stage: files.stage, files: files.files });
     emit('read', readM.key, {

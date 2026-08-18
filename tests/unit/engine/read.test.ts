@@ -166,7 +166,8 @@ describe('readFile — lossy roundtrip (type assignment with float32 storage)', 
     const { files, variableStats } = computePipelineStages(state);
 
     // float32 can't exactly represent decimal values like 23.4
-    const tempStats = variableStats.get('temperature')!;
+    // (variableStats is keyed by Variable.id — S2)
+    const tempStats = variableStats.get('temp')!;
     expect(tempStats.isLossy).toBe(true);
     expect(tempStats.rounded).toBeGreaterThan(0);
 
@@ -202,7 +203,8 @@ describe('readFile — lossless roundtrip with scale/offset type assignment', ()
     const { files, variableStats } = computePipelineStages(state);
 
     // int16 with scale=10 should be lossless for decimal values with 1 decimal place
-    const tempStats = variableStats.get('temperature')!;
+    // (variableStats is keyed by Variable.id — S2)
+    const tempStats = variableStats.get('temp')!;
     expect(tempStats.isLossy).toBe(false);
 
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });

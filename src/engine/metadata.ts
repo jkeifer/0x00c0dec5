@@ -1,6 +1,7 @@
 import type { AppState, MetadataIncludeConfig } from '../types/state.ts';
 import type { VariableStats } from '../types/pipeline.ts';
 import { computeChunkGrid } from './chunk.ts';
+import { activeSteps } from './codecs.ts';
 
 export interface MetadataEntry {
   key: string;
@@ -98,11 +99,14 @@ export function collectMetadata(
     if (state.interleaving === 'column') {
       const byName: Record<string, unknown> = {};
       for (const v of state.variables) {
-        byName[v.name] = state.fieldPipelines[v.id] ?? [];
+        // F31: only ACTIVE steps are written, so the read round-trip stays
+        // honest — a step toggled off doesn't appear in the file, matching the
+        // bytes the encoder actually produced.
+        byName[v.name] = activeSteps(state.fieldPipelines[v.id] ?? []);
       }
       entries.push({ key: 'codec_pipelines', value: JSON.stringify(byName) });
     } else {
-      entries.push({ key: 'codec_pipelines', value: JSON.stringify(state.chunkPipeline) });
+      entries.push({ key: 'codec_pipelines', value: JSON.stringify(activeSteps(state.chunkPipeline)) });
     }
   }
 
@@ -143,11 +147,15 @@ export function collectMetadata(
     entries.push({ key: 'logical_types', value: JSON.stringify(logicalTypes) });
   }
 
-  // Variable statistics
+  // Variable statistics. The stats map is keyed by Variable.id (S2 — stable
+  // across renames), but the FILE format is name-oriented like every other
+  // per-variable metadata entry, so resolve ids back to names here at the
+  // serialization boundary.
   if (include.descriptive && variableStats && variableStats.size > 0) {
     const statsObj: Record<string, VariableStats> = {};
-    for (const [name, stats] of variableStats) {
-      statsObj[name] = stats;
+    for (const v of state.variables) {
+      const stats = variableStats.get(v.id);
+      if (stats) statsObj[v.name] = stats;
     }
     entries.push({ key: 'variable_statistics', value: JSON.stringify(statsObj) });
   }

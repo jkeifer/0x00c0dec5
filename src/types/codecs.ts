@@ -19,20 +19,39 @@ export interface CodecDefinition {
    *  loads, and the worker awaits runtime init before computes that use one
    *  (see stateUsesPyodideCodec). Absent = educational codec, always available. */
   runtime?: 'pyodide';
+  /**
+   * How far this codec degrades byte tracing (CLAUDE.md pitfall 1). Absent =
+   * the codec leaves every byte at its element's position, so per-value
+   * tracing survives intact (delta, zigzag — they rewrite values in place).
+   *
+   *  - 'positional': the codec permutes bytes *within* the chunk, so byte
+   *    offset N no longer holds element N's data. The Encoded stage still
+   *    shows one row/highlight per fixed-width slot — that's what a reader
+   *    ignoring the codec would see, garbage values and all — but the slot no
+   *    longer identifies a real element, so its trace deliberately does not
+   *    cross-match other panes (they fall back to the chunk wash). Byte
+   *    Shuffle.
+   *  - 'chunk-level': no byte carries per-element meaning at all. Bit Shuffle
+   *    (bits, not bytes, are permuted — a single output byte mixes bits from
+   *    up to 8 different elements).
+   *
+   * Entropy codecs are always 'chunk-level' regardless of this field; the
+   * degradation is monotone, so a pipeline takes the worst mode any step
+   * declares (see encodedChunkMeta in engine/layout.ts).
+   */
+  traceMode?: 'positional' | 'chunk-level';
   description: string;
   params: Record<string, ParamDef>;
   applicableTo: (dtype: string) => boolean;
   /**
    * Task 2.6: whether encode→decode is lossy for a given *input* dtype.
    *
-   * This deviates from docs/extension-read-step.md's `lossy: boolean` field.
-   * A plain boolean cannot express delta's behavior: after task 2.5 removed
-   * the clamp, delta's encode/decode is an exact modular round-trip for
-   * integer dtypes (typed-array writes wrap mod 2^N), but is still lossy for
-   * float dtypes (diffs are re-rounded to the float dtype's precision). A
-   * predicate over the input dtype is the minimum shape that can express
-   * "lossy for some dtypes, exact for others." See DC-2 in
-   * docs/remediation-plan.md.
+   * Currently `() => false` on every codec — the one dtype-dependent case was
+   * delta on floats, and delta is now plain integer arithmetic (it differences
+   * bit patterns instead, exactly and uselessly). Lossiness in this tool lives
+   * entirely on `Variable.typeAssignment` (scale/offset, bit-rounding), which
+   * is a separate mechanism with its own stats. Kept only because
+   * `isPipelineLossy` (engine/read.ts) still asks.
    */
   isLossy: (inputDtype: DtypeKey) => boolean;
   encode: (
@@ -56,4 +75,13 @@ export interface CodecDefinition {
 export interface CodecStep {
   codec: string;
   params: Record<string, number | string>;
+  /**
+   * F31: per-step demo toggle. **Absent = enabled** (zero migration — every
+   * existing save/preset/share-link is unchanged). A disabled step is kept in
+   * state with its params intact but is filtered out at every pipeline
+   * consumption boundary via `activeSteps` (engine/codecs.ts), so it never
+   * encodes, never reaches the written metadata, and never affects the
+   * dtype-flow of later steps.
+   */
+  enabled?: boolean;
 }

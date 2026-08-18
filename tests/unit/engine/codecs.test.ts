@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
+  activeSteps,
   CODEC_REGISTRY,
   runCodecPipeline,
   shannonEntropy,
   outputDtypeFor,
   stepWarnings,
 } from '../../../src/engine/codecs.ts';
+import { reverseCodecPipeline } from '../../../src/engine/decode.ts';
 import { valuesToBytes, bytesToValues } from '../../../src/engine/elements.ts';
 import type { CodecStep } from '../../../src/types/codecs.ts';
 
@@ -92,24 +94,17 @@ describe('curation', () => {
 
 // ─── isLossy (task 2.6) ────────────────────────────────────────────────
 //
-// isLossy is a predicate over the *input* dtype, not a plain boolean (see the
-// comment on CodecDefinition.isLossy in src/types/codecs.ts): delta is exact
-// for integer dtypes after task 2.5 removed the clamp (typed-array writes wrap
-// mod 2^N, making encode/decode perfect inverses), but is still lossy for
-// float dtypes because diffs are re-rounded to the float dtype's precision.
+// isLossy is a predicate over the *input* dtype (see the comment on
+// CodecDefinition.isLossy in src/types/codecs.ts). Delta is a plain modular
+// integer transform, so it is exact for every dtype — float and char included,
+// where it differences raw bit patterns: meaningless, but reversibly so.
 
 describe('delta codec — isLossy', () => {
   const codec = CODEC_REGISTRY['delta'];
 
-  it('is false for every integer dtype', () => {
-    for (const dtype of ['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32'] as const) {
+  it('is false for every dtype', () => {
+    for (const dtype of ['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32', 'float32', 'float64', 'char8'] as const) {
       expect(codec.isLossy(dtype)).toBe(false);
-    }
-  });
-
-  it('is true for every float dtype', () => {
-    for (const dtype of ['float32', 'float64'] as const) {
-      expect(codec.isLossy(dtype)).toBe(true);
     }
   });
 });
@@ -137,33 +132,44 @@ describe('delta codec', () => {
 
   it('computes differences for sorted data', () => {
     const input = valuesToBytes([10, 20, 30, 40], 'int32');
-    const result = codec.encode(input, 'int32', { order: 1 });
+    const result = codec.encode(input, 'int32', { elementSize: 4 });
     const values = bytesToValues(result.bytes, 'int32');
     expect(Array.from(values)).toEqual([10, 10, 10, 10]);
   });
 
   it('preserves first value', () => {
     const input = valuesToBytes([100, 105, 107], 'int32');
-    const result = codec.encode(input, 'int32', { order: 1 });
+    const result = codec.encode(input, 'int32', { elementSize: 4 });
     const values = bytesToValues(result.bytes, 'int32');
     expect(values[0]).toBe(100);
   });
 
-  it('handles order 2', () => {
-    // Values: 0, 1, 4, 9 (squares)
-    // After order 1: 0, 1, 3, 5
-    // After order 2: 0, 1, 2, 2
+  it('second-order differencing is just delta twice (why there is no order param)', () => {
+    // Values: 0, 1, 4, 9 (squares) → once: 0, 1, 3, 5 → twice: 0, 1, 2, 2
     const input = valuesToBytes([0, 1, 4, 9], 'int32');
-    const result = codec.encode(input, 'int32', { order: 2 });
-    const values = bytesToValues(result.bytes, 'int32');
-    expect(Array.from(values)).toEqual([0, 1, 2, 2]);
+    const once = codec.encode(input, 'int32', { elementSize: 4 });
+    const twice = codec.encode(once.bytes, once.outputDtype, { elementSize: 4 });
+    expect(Array.from(bytesToValues(twice.bytes, 'int32'))).toEqual([0, 1, 2, 2]);
+    // …and it reverses by decoding the same number of times.
+    const back = codec.decode(codec.decode(twice.bytes, 'int32', { elementSize: 4 }).bytes, 'int32', { elementSize: 4 });
+    expect(Array.from(bytesToValues(back.bytes, 'int32'))).toEqual([0, 1, 4, 9]);
   });
 
   it('identity with all same values', () => {
     const input = valuesToBytes([5, 5, 5, 5], 'int32');
-    const result = codec.encode(input, 'int32', { order: 1 });
+    const result = codec.encode(input, 'int32', { elementSize: 4 });
     const values = bytesToValues(result.bytes, 'int32');
     expect(Array.from(values)).toEqual([5, 0, 0, 0]);
+  });
+
+  it('is a plain integer transform on floats: exact roundtrip, garbage values', () => {
+    // Differencing IEEE bit patterns, not the numbers — the ⚠ says so, and
+    // the point is that it is fully reversible anyway.
+    const input = valuesToBytes([1.5, 2.5, 3.5, 4.5], 'float32');
+    const encoded = codec.encode(input, 'float32', { elementSize: 4 });
+    expect(Array.from(bytesToValues(encoded.bytes, 'float32'))).not.toEqual([1.5, 1, 1, 1]);
+    const decoded = codec.decode(encoded.bytes, 'float32', { elementSize: 4 });
+    expect(Array.from(decoded.bytes)).toEqual(Array.from(input));
   });
 });
 
@@ -255,7 +261,7 @@ describe('runCodecPipeline', () => {
   it('chains codecs sequentially', () => {
     const bytes = valuesToBytes([100, 200, 300], 'int32');
     const steps: import('../../../src/types/codecs.ts').CodecStep[] = [
-      { codec: 'delta', params: { order: 1 } },
+      { codec: 'delta', params: {} },
     ];
 
     const result = runCodecPipeline(bytes, steps, 'int32');
@@ -287,38 +293,87 @@ describe('runCodecPipeline', () => {
   });
 });
 
+// ─── F31: per-step enable toggle ─────────────────────────────────────
+describe('activeSteps (F31 disabled-step filter)', () => {
+  it('absent enabled = enabled', () => {
+    const steps: CodecStep[] = [{ codec: 'delta', params: {} }];
+    expect(activeSteps(steps)).toEqual(steps);
+  });
+
+  it('drops only enabled:false steps', () => {
+    const steps: CodecStep[] = [
+      { codec: 'delta', params: {}, enabled: true },
+      { codec: 'byte-shuffle', params: { elementSize: 4 }, enabled: false },
+      { codec: 'zigzag', params: {} },
+    ];
+    expect(activeSteps(steps).map((s) => s.codec)).toEqual(['delta', 'zigzag']);
+  });
+
+  it('a disabled step encodes/decodes/warns identically to omitting it', () => {
+    const bytes = valuesToBytes([100, 200, 300], 'int32');
+    const withDisabled: CodecStep[] = [
+      { codec: 'delta', params: {} },
+      { codec: 'byte-shuffle', params: { elementSize: 4 }, enabled: false },
+    ];
+    const without: CodecStep[] = [{ codec: 'delta', params: {} }];
+
+    const encA = runCodecPipeline(bytes, withDisabled, 'int32');
+    const encB = runCodecPipeline(bytes, without, 'int32');
+    expect(encA.bytes).toEqual(encB.bytes);
+    expect(encA.outputDtype).toBe(encB.outputDtype);
+
+    // Disabled step doesn't collapse the flow dtype to uint8 (pitfall 3).
+    expect(encA.outputDtype).toBe('int32');
+
+    const decA = reverseCodecPipeline(encA.bytes, withDisabled, 'int32');
+    expect(Array.from(bytesToValues(decA.bytes, 'int32'))).toEqual([100, 200, 300]);
+
+    // A disabled byte-shuffle whose elementSize mismatches must not warn.
+    expect(stepWarnings(withDisabled, 'int32')).toEqual(stepWarnings(without, 'int32'));
+  });
+});
+
 // ─── Decode roundtrip tests ──────────────────────────────────────────
 
 describe('delta decode', () => {
   const codec = CODEC_REGISTRY['delta'];
 
-  it('roundtrips exactly (order 1)', () => {
+  it('roundtrips exactly', () => {
     const originalValues = [10, 20, 30, 40];
     const input = valuesToBytes(originalValues, 'int32');
-    const encoded = codec.encode(input, 'int32', { order: 1 });
-    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
+    const encoded = codec.encode(input, 'int32', { elementSize: 4 });
+    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, {});
     const values = bytesToValues(decoded.bytes, 'int32');
     expect(Array.from(values)).toEqual(originalValues);
   });
 
-  it('roundtrips exactly (order 2)', () => {
-    const originalValues = [0, 1, 4, 9];
-    const input = valuesToBytes(originalValues, 'int32');
-    const encoded = codec.encode(input, 'int32', { order: 2 });
-    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { order: 2 });
-    const values = bytesToValues(decoded.bytes, 'int32');
-    expect(Array.from(values)).toEqual(originalValues);
-  });
-
-  it('roundtrips float values', () => {
-    const originalValues = [1.5, 2.5, 3.5, 4.5];
-    const input = valuesToBytes(originalValues, 'float32');
-    const encoded = codec.encode(input, 'float32', { order: 1 });
-    const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { order: 1 });
-    const values = bytesToValues(decoded.bytes, 'float32');
-    for (let i = 0; i < originalValues.length; i++) {
-      expect(values[i]).toBeCloseTo(originalValues[i], 5);
+  it('roundtrips every dtype width exactly, including the wrapping edges', () => {
+    // The mod-2^N wrap is the whole reason this is lossless on unsigned dtypes:
+    // a negative diff must wrap, not clamp (DC-2).
+    const cases = [
+      ['uint8', 1, [0, 255, 1, 200]],
+      ['int8', 1, [-128, 127, -1, 0]],
+      ['uint16', 2, [0, 65535, 30000, 1]],
+      ['int16', 2, [-32768, 32767, 30000, -30000]],
+      ['uint32', 4, [0, 4294967295, 7, 4000000000]],
+      ['int32', 4, [-2147483648, 2147483647, 0, -5]],
+      ['float64', 8, [1e300, -1e-300, 0, 1.5]],
+    ] as const;
+    for (const [dtype, elementSize, values] of cases) {
+      const input = valuesToBytes([...values], dtype);
+      const encoded = codec.encode(input, dtype, { elementSize });
+      const decoded = codec.decode(encoded.bytes, encoded.outputDtype, { elementSize });
+      expect(Array.from(bytesToValues(decoded.bytes, dtype)), dtype).toEqual([...values]);
     }
+  });
+
+  it('roundtrips a byte count that is not a whole number of elements', () => {
+    // Trailing partial element copies through untouched.
+    const input = new Uint8Array([1, 2, 3, 4, 5]);
+    const encoded = codec.encode(input, 'uint16', { elementSize: 2 });
+    expect(encoded.bytes[4]).toBe(5);
+    const decoded = codec.decode(encoded.bytes, 'uint16', { elementSize: 2 });
+    expect(Array.from(decoded.bytes)).toEqual([1, 2, 3, 4, 5]);
   });
 });
 
@@ -387,16 +442,22 @@ describe('rle decode', () => {
 describe('delta codec — applicableTo', () => {
   const codec = CODEC_REGISTRY['delta'];
 
-  it('is applicable to every integer dtype, including uint8', () => {
-    for (const dtype of ['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32'] as const) {
+  // Delta warns on nothing: it is a modular integer transform over elementSize
+  // bytes, defined and exactly reversible on any byte stream. The old float and
+  // char warnings judged the step's *declared* input dtype, which a preceding
+  // Byte Shuffle makes a lie (byte planes, still labelled Float32).
+  it('is applicable to every dtype', () => {
+    for (const dtype of ['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32', 'float32', 'float64', 'char4', 'char8', 'char16'] as const) {
       expect(codec.applicableTo(dtype)).toBe(true);
     }
   });
 
-  it('warns (not applicable) on float dtypes', () => {
-    for (const dtype of ['float32', 'float64'] as const) {
-      expect(codec.applicableTo(dtype)).toBe(false);
-    }
+  it('raises no warning after a byte shuffle, where the declared dtype is stale', () => {
+    const steps: CodecStep[] = [
+      { codec: 'byte-shuffle', params: { elementSize: 4 } },
+      { codec: 'delta', params: { elementSize: 1 } },
+    ];
+    expect(stepWarnings(steps, 'float32')).toEqual([]);
   });
 });
 
@@ -428,11 +489,17 @@ describe('rle codec — applicableTo', () => {
 // ─── outputDtypeFor (UI-15) ──────────────────────────────────────────────
 
 describe('outputDtypeFor', () => {
-  it('preserves dtype for reordering codecs (delta, byte-shuffle, zigzag, bit-shuffle)', () => {
+  it('preserves dtype for codecs that leave elements where they were (delta, zigzag)', () => {
     expect(outputDtypeFor(CODEC_REGISTRY['delta'], 'int16')).toBe('int16');
-    expect(outputDtypeFor(CODEC_REGISTRY['byte-shuffle'], 'float32')).toBe('float32');
     expect(outputDtypeFor(CODEC_REGISTRY['zigzag'], 'int16')).toBe('int16');
-    expect(outputDtypeFor(CODEC_REGISTRY['bit-shuffle'], 'float32')).toBe('float32');
+  });
+
+  it('collapses to uint8 for codecs that destroy element structure (the shuffles)', () => {
+    // Not entropy codecs, but their output has no elements in it either: byte
+    // planes and bit planes. Reporting float32 here is what made the next
+    // step's element size, the ⚠ warnings, and the step's dtype label all lie.
+    expect(outputDtypeFor(CODEC_REGISTRY['byte-shuffle'], 'float32')).toBe('uint8');
+    expect(outputDtypeFor(CODEC_REGISTRY['bit-shuffle'], 'float32')).toBe('uint8');
   });
 
   it('collapses to uint8 for entropy codecs (rle, gzip)', () => {
@@ -452,15 +519,14 @@ describe('stepWarnings', () => {
   });
 
   it('returns no warnings for integer delta (humidity-style uint dtype)', () => {
-    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    const steps: CodecStep[] = [{ codec: 'delta', params: {} }];
     expect(stepWarnings(steps, 'uint16')).toEqual([]);
   });
 
-  it('warns for delta on a float dtype (temperature-style)', () => {
-    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
-    const warnings = stepWarnings(steps, 'float32');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/lossy/i);
+  it('does not warn for delta on any dtype', () => {
+    const steps: CodecStep[] = [{ codec: 'delta', params: { elementSize: 4 } }];
+    expect(stepWarnings(steps, 'float32')).toEqual([]);
+    expect(stepWarnings(steps, 'char8')).toEqual([]);
   });
 
   it('warns for byte-shuffle on a 1-byte dtype', () => {
@@ -493,7 +559,7 @@ describe('stepWarnings', () => {
     // applicability, so no warning should appear regardless of the dtype it
     // receives.
     const steps: CodecStep[] = [
-      { codec: 'delta', params: { order: 1 } },
+      { codec: 'delta', params: {} },
       { codec: 'rle', params: {} },
     ];
     expect(stepWarnings(steps, 'uint16')).toEqual([]);
@@ -501,11 +567,11 @@ describe('stepWarnings', () => {
 
   it('warns per-step, not just for the first offending step', () => {
     const steps: CodecStep[] = [
-      { codec: 'delta', params: { order: 1 } }, // float32 -> warns (lossy)
-      { codec: 'byte-shuffle', params: { elementSize: 4 } }, // still float32 (delta preserves dtype) -> no warning
+      { codec: 'zigzag', params: {} }, // uint8 is not signed -> warns
+      { codec: 'byte-shuffle', params: { elementSize: 4 } }, // 1-byte dtype -> warns twice (applicability + mismatch)
     ];
-    const warnings = stepWarnings(steps, 'float32');
-    expect(warnings).toHaveLength(1);
+    const warnings = stepWarnings(steps, 'uint8');
+    expect(warnings).toHaveLength(3);
   });
 
   it('ignores unknown codec keys', () => {
@@ -565,23 +631,23 @@ describe('codecs on charN input', () => {
     expect(encoded.bytes.length).toBeLessThan(repeated.length);
   });
 
-  it('delta on char input falls back to byte-wise delta and roundtrips exactly (symmetric guard)', () => {
+  it('delta on char input differences the raw bytes and roundtrips exactly', () => {
     const delta = CODEC_REGISTRY['delta'];
-    const encoded = delta.encode(charBytes, 'char8', { order: 1 });
+    const encoded = delta.encode(charBytes, 'char8', {});
     // Dtype is preserved (delta is not an entropy codec)...
     expect(encoded.outputDtype).toBe('char8');
     // ...and the encoded bytes are NOT the input (the transform actually ran).
     expect(Array.from(encoded.bytes)).not.toEqual(Array.from(charBytes));
-    const decoded = delta.decode(encoded.bytes, 'char8', { order: 1 });
+    const decoded = delta.decode(encoded.bytes, 'char8', {});
     expect(Array.from(decoded.bytes)).toEqual(Array.from(charBytes));
     expect(bytesToValues(decoded.bytes, 'char8')).toEqual(words);
   });
 
   it('delta-on-char roundtrips through runCodecPipeline + reverseCodecPipeline dtype flow', () => {
-    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
+    const steps: CodecStep[] = [{ codec: 'delta', params: {} }];
     const result = runCodecPipeline(charBytes, steps, 'char8');
     expect(result.outputDtype).toBe('char8');
-    const decoded = CODEC_REGISTRY['delta'].decode(result.bytes, 'char8', { order: 1 });
+    const decoded = CODEC_REGISTRY['delta'].decode(result.bytes, 'char8', {});
     expect(Array.from(decoded.bytes)).toEqual(Array.from(charBytes));
   });
 
@@ -594,11 +660,9 @@ describe('codecs on charN input', () => {
     expect(Array.from(decoded.bytes)).toEqual(Array.from(bytes));
   });
 
-  it('stepWarnings flags delta-on-char with the byte-wise fallback message', () => {
-    const steps: CodecStep[] = [{ codec: 'delta', params: { order: 1 } }];
-    const warnings = stepWarnings(steps, 'char8');
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toMatch(/byte-wise/);
+  it('stepWarnings is silent for delta on char dtypes', () => {
+    const steps: CodecStep[] = [{ codec: 'delta', params: { elementSize: 8 } }];
+    expect(stepWarnings(steps, 'char8')).toEqual([]);
   });
 
   it('stepWarnings flags byte-shuffle elementSize mismatch against char16', () => {
