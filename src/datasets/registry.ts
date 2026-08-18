@@ -12,6 +12,12 @@ export interface DatasetRegistryEntry {
   id: DatasetId;
   label: string;
   dataModel: AppState['dataModel'];
+  /** The real data-branch manifest's shape — informational only (the fill
+   * tiles/crops to whatever shape the schema has). Shown in the source hint
+   * so "what size should I use?" has an answer. Mirrors data-branch-work/
+   * datasets/{id}/manifest.json by hand (the test fixtures are deliberately
+   * tiny and do NOT match). */
+  naturalShape: number[];
 }
 
 /** Asset base. Dev: the vite middleware serving data-branch-work/ with a
@@ -26,9 +32,9 @@ export function datasetUrl(id: DatasetId, file: string): string {
 }
 
 export const DATASETS: DatasetRegistryEntry[] = [
-  { id: 'etopo-dem', label: 'Terrain elevation (ETOPO)', dataModel: 'array' },
-  { id: 'sst-field', label: 'Sea-surface temperature (MUR)', dataModel: 'array' },
-  { id: 'ghcn-daily', label: 'Weather station daily (GHCN)', dataModel: 'tabular' },
+  { id: 'etopo-dem', label: 'Terrain elevation (ETOPO)', dataModel: 'array', naturalShape: [1024, 1024] },
+  { id: 'sst-field', label: 'Sea-surface temperature (MUR)', dataModel: 'array', naturalShape: [1024, 1024] },
+  { id: 'ghcn-daily', label: 'Weather station daily (GHCN)', dataModel: 'tabular', naturalShape: [144769] },
 ];
 
 export function datasetById(id: string): DatasetRegistryEntry | undefined {
@@ -51,9 +57,15 @@ export interface CuratedVariable {
   label: string;             // dropdown label, e.g. 'GHCN Daily › tmax'
   dataModel: AppState['dataModel'];
   kind: 'number' | 'string';
-  dtype?: NumericBinDtype;   // numeric only — natural storage dtype
+  /** Numeric only — the storage dtype a fresh drop-in gets. For a source whose
+   * manifest declares a `scale` (GHCN's tenths) this is the *unscaled* float
+   * dtype, not the bin's: the values the app sees are °C, and squeezing them
+   * back into an int via scale/offset is the user's move to make, not a
+   * pre-baked one. So it can differ from the manifest dtype. */
+  dtype?: NumericBinDtype;
   logicalType: LogicalTypeConfig; // static copy of the manifest's
   attribution: string;       // short dataset-level attribution line for the row hint
+  naturalShape: number[];    // the dataset's real shape (DatasetRegistryEntry.naturalShape)
 }
 
 function curated(
@@ -69,6 +81,7 @@ function curated(
     datasetId, name, kind, logicalType, attribution, dtype,
     label: `${dataset.label} › ${name}`,
     dataModel: dataset.dataModel,
+    naturalShape: dataset.naturalShape,
   };
 }
 
@@ -87,27 +100,27 @@ export const CURATED_VARIABLES: CuratedVariable[] = [
   ),
   curated(
     'ghcn-daily', 'date', 'number',
-    { type: 'integer', min: 20200101, max: 20200148, generation: 'sorted' },
+    { type: 'integer', min: 18262, max: 18309, generation: 'sorted' },
     'NOAA NCEI GHCN-Daily (4 US stations)',
     'int32',
   ),
   curated(
     'ghcn-daily', 'tmax', 'number',
-    { type: 'integer', min: 120, max: 180, generation: 'smooth' },
+    { type: 'decimal', min: 12, max: 18, decimalPlaces: 1, generation: 'smooth' },
     'NOAA NCEI GHCN-Daily (4 US stations)',
-    'int16',
+    'float32',
   ),
   curated(
     'ghcn-daily', 'tmin', 'number',
-    { type: 'integer', min: 20, max: 80, generation: 'smooth' },
+    { type: 'decimal', min: 2, max: 8, decimalPlaces: 1, generation: 'smooth' },
     'NOAA NCEI GHCN-Daily (4 US stations)',
-    'int16',
+    'float32',
   ),
   curated(
     'ghcn-daily', 'prcp', 'number',
-    { type: 'integer', min: 0, max: 25, generation: 'stepped' },
+    { type: 'decimal', min: 0, max: 2.5, decimalPlaces: 1, generation: 'stepped' },
     'NOAA NCEI GHCN-Daily (4 US stations)',
-    'int16',
+    'float32',
   ),
   curated(
     'ghcn-daily', 'station', 'string',
@@ -122,9 +135,8 @@ export function curatedVariable(ref: { datasetId: DatasetId; variableName: strin
   return CURATED_VARIABLES.find((c) => c.datasetId === ref.datasetId && c.name === ref.variableName);
 }
 
-/** Promise-cached manifest loader, shared by the main thread (apply) and the
- * worker (values). Failed loads evict so a transient network error is
- * retryable. */
+/** Promise-cached manifest loader, called from the worker (values). Failed
+ * loads evict so a transient network error is retryable. */
 const manifestCache = new Map<DatasetId, Promise<DatasetManifest>>();
 export function loadManifest(id: DatasetId, fetchFn: typeof fetch = fetch): Promise<DatasetManifest> {
   let p = manifestCache.get(id);

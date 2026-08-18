@@ -127,24 +127,25 @@ const GHCN_PROVENANCE = [
   { key: 'source_url', value: 'https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily' },
   { key: 'retrieved', value: '2026-07-13' },
   { key: 'license', value: 'U.S. Government work — public domain' },
+  // CF-style units. Without these the stored ints are unreadable — which is
+  // the point: the scale factor lives in type_assignments, the unit here.
+  { key: 'date_units', value: 'days since 1970-01-01' },
+  { key: 'temperature_units', value: 'degC' },
+  { key: 'precipitation_units', value: 'mm' },
 ];
 
 const DEFAULT_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
 
-// ─── GeoTIFFesque (array, etopo-dem + two generated derived bands) ──────────
+// ─── GeoTIFFesque (array, the real etopo-dem elevation band) ────────────────
 //
 // COG: single file, TIFF header/IFD at the front (header placement, BINARY —
 // TIFF's IFD is binary, not JSON), magic II*\0, 256×256 tiles, C order,
-// little-endian, PIXEL interleaving (TIFF PlanarConfiguration=1, the TIFF
-// default — band-interleaved 'column' is the toggle users can flip to see the
-// difference). elevation is the real etopo-dem band (int16, horizontal
-// predictor + DEFLATE); slope and hillshade are generated derived bands
-// (organic 2D 'smooth' noise, ids outside the dataset-id prefix so they
-// generate instead of binding) with float32 storage, standing in for the
-// terrain products a real COG commonly carries alongside elevation. Row
-// interleaving means per-field pipelines are inactive (mixed dtypes across
-// the three bands force uint8 chunk input anyway) — DEFLATE moves to the
-// shared chunk pipeline, mirroring avroesque's row-mode pattern.
+// little-endian, single band: the real etopo-dem elevation (int16). The
+// earlier slope/hillshade "derived bands" were generated smooth NOISE — they
+// looked random next to real terrain and taught nothing, so they're gone
+// (single-band DEM is the canonical GeoTIFF anyway). Row interleaving means
+// per-field pipelines are inactive — DEFLATE lives in the shared chunk
+// pipeline, mirroring avroesque's row-mode pattern.
 
 const geotiffVariables: Variable[] = [
   {
@@ -152,16 +153,6 @@ const geotiffVariables: Variable[] = [
     source: { datasetId: 'etopo-dem', variableName: 'elevation' },
     logicalType: { type: 'integer', min: -1485, max: 8271, generation: 'smooth' },
     typeAssignment: { storageDtype: 'int16' },
-  },
-  {
-    id: 'gen-slope', name: 'slope', color: colors.palette[1],
-    logicalType: { type: 'continuous', min: 0, max: 45, significantFigures: 4, generation: 'smooth' },
-    typeAssignment: { storageDtype: 'float32' },
-  },
-  {
-    id: 'gen-hillshade', name: 'hillshade', color: colors.palette[2],
-    logicalType: { type: 'continuous', min: 0, max: 255, significantFigures: 5, generation: 'smooth' },
-    typeAssignment: { storageDtype: 'float32' },
   },
 ];
 
@@ -176,8 +167,6 @@ const geotiffesque: AppState = {
   // Row mode: per-field pipelines are inactive; the shared chunk pipeline runs.
   fieldPipelines: {
     'etopo-dem-elevation': [],
-    'gen-slope': [],
-    'gen-hillshade': [],
   },
   chunkPipeline: [{ codec: 'deflate', params: {} }],
   metadata: {
@@ -268,26 +257,28 @@ const parquetVariables: Variable[] = [
   {
     id: 'ghcn-daily-date', name: 'date', color: colors.palette[0],
     source: { datasetId: 'ghcn-daily', variableName: 'date' },
-    logicalType: { type: 'integer', min: 18690101, max: 20260709, generation: 'sorted' },
+    logicalType: { type: 'integer', min: -36889, max: 20643, generation: 'sorted' },
     typeAssignment: { storageDtype: 'int32' },
   },
+  // The scale/offset lesson: the values are °C to one decimal, and `scale: 10`
+  // stores them losslessly in half the bytes a float32 would take.
   {
     id: 'ghcn-daily-tmax', name: 'tmax', color: colors.palette[1],
     source: { datasetId: 'ghcn-daily', variableName: 'tmax' },
-    logicalType: { type: 'integer', min: -167, max: 433, generation: 'smooth' },
-    typeAssignment: { storageDtype: 'int16' },
+    logicalType: { type: 'decimal', min: -16.7, max: 43.3, decimalPlaces: 1, generation: 'smooth' },
+    typeAssignment: { storageDtype: 'int16', scale: 10 },
   },
   {
     id: 'ghcn-daily-tmin', name: 'tmin', color: colors.palette[2],
     source: { datasetId: 'ghcn-daily', variableName: 'tmin' },
-    logicalType: { type: 'integer', min: -261, max: 289, generation: 'smooth' },
-    typeAssignment: { storageDtype: 'int16' },
+    logicalType: { type: 'decimal', min: -26.1, max: 28.9, decimalPlaces: 1, generation: 'smooth' },
+    typeAssignment: { storageDtype: 'int16', scale: 10 },
   },
   {
     id: 'ghcn-daily-prcp', name: 'prcp', color: colors.palette[3],
     source: { datasetId: 'ghcn-daily', variableName: 'prcp' },
-    logicalType: { type: 'integer', min: 0, max: 3772, generation: 'stepped' },
-    typeAssignment: { storageDtype: 'int16' },
+    logicalType: { type: 'decimal', min: 0, max: 377.2, decimalPlaces: 1, generation: 'stepped' },
+    typeAssignment: { storageDtype: 'int16', scale: 10 },
   },
   {
     id: 'ghcn-daily-station', name: 'station', color: colors.palette[4],

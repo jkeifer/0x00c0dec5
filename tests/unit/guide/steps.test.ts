@@ -4,9 +4,9 @@ import { STEPS, BLOG_POSTS } from '../../../src/components/guide/steps.ts';
 // Must stay in sync with Sidebar.tsx's SECTION_TESTIDS values.
 const SIDEBAR_SLUGS = [
   'schema',
+  'typing',
   'chunk',
   'interleave',
-  'typing',
   'codecs',
   'metadata',
   'write',

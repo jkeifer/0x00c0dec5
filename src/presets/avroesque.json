@@ -20,8 +20,8 @@
       },
       "logicalType": {
         "type": "integer",
-        "min": 18690101,
-        "max": 20260709,
+        "min": -36889,
+        "max": 20643,
         "generation": "sorted"
       },
       "typeAssignment": {
@@ -37,13 +37,15 @@
         "variableName": "tmax"
       },
       "logicalType": {
-        "type": "integer",
-        "min": -167,
-        "max": 433,
+        "type": "decimal",
+        "min": -16.7,
+        "max": 43.3,
+        "decimalPlaces": 1,
         "generation": "smooth"
       },
       "typeAssignment": {
-        "storageDtype": "int16"
+        "storageDtype": "int16",
+        "scale": 10
       }
     },
     {
@@ -55,13 +57,15 @@
         "variableName": "tmin"
       },
       "logicalType": {
-        "type": "integer",
-        "min": -261,
-        "max": 289,
+        "type": "decimal",
+        "min": -26.1,
+        "max": 28.9,
+        "decimalPlaces": 1,
         "generation": "smooth"
       },
       "typeAssignment": {
-        "storageDtype": "int16"
+        "storageDtype": "int16",
+        "scale": 10
       }
     },
     {
@@ -73,13 +77,15 @@
         "variableName": "prcp"
       },
       "logicalType": {
-        "type": "integer",
+        "type": "decimal",
         "min": 0,
-        "max": 3772,
+        "max": 377.2,
+        "decimalPlaces": 1,
         "generation": "stepped"
       },
       "typeAssignment": {
-        "storageDtype": "int16"
+        "storageDtype": "int16",
+        "scale": 10
       }
     },
     {
@@ -132,6 +138,18 @@
       {
         "key": "license",
         "value": "U.S. Government work — public domain"
+      },
+      {
+        "key": "date_units",
+        "value": "days since 1970-01-01"
+      },
+      {
+        "key": "temperature_units",
+        "value": "degC"
+      },
+      {
+        "key": "precipitation_units",
+        "value": "mm"
       }
     ],
     "serialization": "json",

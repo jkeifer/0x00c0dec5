@@ -122,14 +122,65 @@ export const STEPS: GuideStep[] = [
       'Variables need not be numeric: the text type draws words from a bundled set — names, ' +
       'cities, countries, or prefix-heavy station IDs like WX-0042-A — and because the sets ' +
       'are stored sorted, the same four modes shape categorical data too: stepped becomes ' +
-      'runs of one repeated word, sorted becomes alphabetical order. The Data picker loads ' +
-      'real public-domain datasets (terrain, sea-surface temperature, weather stations) in ' +
-      'place of the generator — dataset presets choose the data, format presets choose the ' +
-      'pipeline.',
+      'runs of one repeated word, sorted becomes alphabetical order. Each variable also has ' +
+      'its own Source dropdown, which loads a real public-domain dataset (terrain, ' +
+      'sea-surface temperature, weather stations) in place of the generator for that one ' +
+      'variable — the four format presets in the header ship with sources pre-wired, so the ' +
+      'pipeline is real but the choice of pipeline and the choice of data are independent.',
     tryIt:
       'In Schema, change temperature’s generation from smooth to random and watch the Values ' +
       'pane. Then check the Encoded stage’s entropy stat in the pipeline strip — random data ' +
       'starts near the ceiling before you have applied a single codec.',
+  },
+  {
+    id: 'typing',
+    title: 'Type assignment: precision for bytes',
+    section: 'typing',
+    decision:
+      'Choose each variable’s storage dtype: how many bytes to spend per value, and what ' +
+      'precision to give up. This is where lossiness enters the pipeline — before any codec runs.',
+    options: [
+      {
+        label: 'float64 (8 bytes)',
+        pros: 'Stores every generated value exactly. Nothing to explain in the diff view.',
+        cons: 'Eight bytes per value, most of them noise-like mantissa bits that compress poorly.',
+      },
+      {
+        label: 'float32 (4 bytes)',
+        pros: 'Half the size; plenty of precision for values like "23.4".',
+        cons: 'Values with more precision than ~7 significant digits get rounded — genuinely lossy.',
+      },
+      {
+        label: 'int16 + scale/offset (2 bytes)',
+        pros: 'A quarter of float64’s size. (value − offset) × scale quantizes decimals onto an integer grid — scale 10 keeps one decimal place exactly.',
+        cons: 'Values outside the representable range clamp, and anything finer than the scale step rounds away. You must pick scale/offset to fit min/max.',
+      },
+      {
+        label: 'char[N] fixed-width text (4/8/16 bytes)',
+        pros: 'Every value occupies exactly N bytes, so chunking, seeking, and tracing stay trivial — the same bet DBF and NetCDF-classic made — and the hex view’s ASCII column shows the words directly.',
+        cons: 'Too narrow truncates — "Wellington" in char8 stores "Wellingt", counted in the truncated stat and flagged lossy at Read. Too wide pads — char16 cities are mostly trailing spaces.',
+      },
+      {
+        label: 'keepBits (float bit-rounding)',
+        pros: 'Zeroing mantissa bits you don’t need creates trailing zero bytes that shuffle + compress beautifully, while keeping float semantics.',
+        cons: 'Irrecoverably truncates precision — the diff view will show it. Choosing keepBits requires knowing your data’s real precision.',
+      },
+    ],
+    body:
+      'Every real format’s schema answers this same question: Parquet separates logical from ' +
+      'physical types, GeoTIFF has a sample format tag, Zarr has dtype plus filters. The tool ' +
+      'deliberately makes it a pipeline stage (Typed) rather than a codec: "what does this ' +
+      'value mean" and "how many bytes do I spend representing it" are different decisions. ' +
+      'The stats beside each variable (clipped, rounded, lossy) come from this stage and feed ' +
+      'the Read stage’s diff view later. Text faces the same size-versus-fidelity trade as ' +
+      'numbers, just with truncation and padding instead of rounding; real formats eventually ' +
+      'reach for offset arrays or dictionaries to store variable-length strings — complexity ' +
+      'this tool leaves out on purpose.',
+    tryIt:
+      'Set temperature’s storage dtype to int16 with scale 1: the Typed stage halves, the ' +
+      'stats show rounded values, and the Read diff view shows errors up to half a degree. ' +
+      'Now set scale to 10 — one decimal place fits the integer grid exactly and the error ' +
+      'vanishes. Same dtype, same size; the scale factor did the work.',
   },
   {
     id: 'chunk',
@@ -208,56 +259,6 @@ export const STEPS: GuideStep[] = [
       'come back untouched.',
   },
   {
-    id: 'typing',
-    title: 'Type assignment: precision for bytes',
-    section: 'typing',
-    decision:
-      'Choose each variable’s storage dtype: how many bytes to spend per value, and what ' +
-      'precision to give up. This is where lossiness enters the pipeline — before any codec runs.',
-    options: [
-      {
-        label: 'float64 (8 bytes)',
-        pros: 'Stores every generated value exactly. Nothing to explain in the diff view.',
-        cons: 'Eight bytes per value, most of them noise-like mantissa bits that compress poorly.',
-      },
-      {
-        label: 'float32 (4 bytes)',
-        pros: 'Half the size; plenty of precision for values like "23.4".',
-        cons: 'Values with more precision than ~7 significant digits get rounded — genuinely lossy.',
-      },
-      {
-        label: 'int16 + scale/offset (2 bytes)',
-        pros: 'A quarter of float64’s size. (value − offset) × scale quantizes decimals onto an integer grid — scale 10 keeps one decimal place exactly.',
-        cons: 'Values outside the representable range clamp, and anything finer than the scale step rounds away. You must pick scale/offset to fit min/max.',
-      },
-      {
-        label: 'char[N] fixed-width text (4/8/16 bytes)',
-        pros: 'Every value occupies exactly N bytes, so chunking, seeking, and tracing stay trivial — the same bet DBF and NetCDF-classic made — and the hex view’s ASCII column shows the words directly.',
-        cons: 'Too narrow truncates — "Wellington" in char8 stores "Wellingt", counted in the truncated stat and flagged lossy at Read. Too wide pads — char16 cities are mostly trailing spaces.',
-      },
-      {
-        label: 'keepBits (float bit-rounding)',
-        pros: 'Zeroing mantissa bits you don’t need creates trailing zero bytes that shuffle + compress beautifully, while keeping float semantics.',
-        cons: 'Irrecoverably truncates precision — the diff view will show it. Choosing keepBits requires knowing your data’s real precision.',
-      },
-    ],
-    body:
-      'Every real format’s schema answers this same question: Parquet separates logical from ' +
-      'physical types, GeoTIFF has a sample format tag, Zarr has dtype plus filters. The tool ' +
-      'deliberately makes it a pipeline stage (Typed) rather than a codec: "what does this ' +
-      'value mean" and "how many bytes do I spend representing it" are different decisions. ' +
-      'The stats beside each variable (clipped, rounded, lossy) come from this stage and feed ' +
-      'the Read stage’s diff view later. Text faces the same size-versus-fidelity trade as ' +
-      'numbers, just with truncation and padding instead of rounding; real formats eventually ' +
-      'reach for offset arrays or dictionaries to store variable-length strings — complexity ' +
-      'this tool leaves out on purpose.',
-    tryIt:
-      'Set temperature’s storage dtype to int16 with scale 1: the Typed stage halves, the ' +
-      'stats show rounded values, and the Read diff view shows errors up to half a degree. ' +
-      'Now set scale to 10 — one decimal place fits the integer grid exactly and the error ' +
-      'vanishes. Same dtype, same size; the scale factor did the work.',
-  },
-  {
     id: 'codecs',
     title: 'Codecs: prepare, then compress',
     section: 'codecs',
@@ -270,7 +271,7 @@ export const STEPS: GuideStep[] = [
       {
         label: 'Delta + Zigzag (reordering)',
         pros: 'Delta stores value-to-value differences — smooth or sorted data collapses to small numbers. Zigzag then maps those signed diffs to unsigned so small magnitudes stay small byte values (Parquet’s move ahead of RLE/bit-packing).',
-        cons: 'Delta is lossy on float dtypes (each difference is re-rounded — the ⚠ warning); Zigzag only applies to signed integer dtypes and is a no-op without a preceding signed-producing step.',
+        cons: 'Delta is plain integer arithmetic over an element size you set, so it is only meaningful when that size matches what the bytes actually are — on float dtypes it differences raw IEEE bit patterns rather than numbers, reversibly but uselessly; Zigzag only applies to signed integer dtypes and is a no-op without a preceding signed-producing step.',
       },
       {
         label: 'Byte Shuffle / Bit Shuffle (reordering)',
@@ -466,9 +467,9 @@ export const STEPS: GuideStep[] = [
       'numeric columns, dictionary+RLE on the categorical station column — footer metadata with ' +
       'a length trailer, binary serialization. "Avro-esque" is the row-oriented counterpart on ' +
       'the same weather data: one shared per-chunk pipeline, header metadata, JSON. ' +
-      '"GeoTIFFesque" is a 2-d array of three bands (elevation plus generated slope and ' +
-      'hillshade), tiled 256×256 chunks, row/pixel-interleaved, header metadata serialized to ' +
-      'binary, with a Deflate chunk pipeline. "Zarrish" is a 2-d array, per-chunk files, sidecar ' +
+      '"GeoTIFFesque" is a 2-d array of a single elevation band, tiled 256×256 chunks, header ' +
+      'metadata serialized to binary, with a Deflate chunk pipeline. "Zarrish" is a 2-d array, ' +
+      'per-chunk files, sidecar ' +
       'JSON metadata, and Byte Shuffle + Zstd already applied — real Zarr’s default compressor ' +
       'is Zstd, and you can watch it work here without adding a thing. None of them is magic — ' +
       'each is one path through the sidebar you just walked. When a format ships a feature, it ' +

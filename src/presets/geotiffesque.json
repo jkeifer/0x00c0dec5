@@ -29,42 +29,10 @@
       "typeAssignment": {
         "storageDtype": "int16"
       }
-    },
-    {
-      "id": "gen-slope",
-      "name": "slope",
-      "color": "#61afef",
-      "logicalType": {
-        "type": "continuous",
-        "min": 0,
-        "max": 45,
-        "significantFigures": 4,
-        "generation": "smooth"
-      },
-      "typeAssignment": {
-        "storageDtype": "float32"
-      }
-    },
-    {
-      "id": "gen-hillshade",
-      "name": "hillshade",
-      "color": "#98c379",
-      "logicalType": {
-        "type": "continuous",
-        "min": 0,
-        "max": 255,
-        "significantFigures": 5,
-        "generation": "smooth"
-      },
-      "typeAssignment": {
-        "storageDtype": "float32"
-      }
     }
   ],
   "fieldPipelines": {
-    "etopo-dem-elevation": [],
-    "gen-slope": [],
-    "gen-hillshade": []
+    "etopo-dem-elevation": []
   },
   "chunkPipeline": [
     {
