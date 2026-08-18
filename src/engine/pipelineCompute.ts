@@ -401,6 +401,13 @@ export function computeMetadataStage(
   encodedChunks: EncodedChunk[],
   variableStats: Map<string, VariableStats>,
 ): MetadataStageResult {
+  // Master switch off -> truly zero bytes (not a serialized "{}"): the
+  // Metadata stage has nothing to show, not an empty metadata document.
+  if (!state.metadata.enabled) {
+    return { stage: makeStage('Metadata', new Uint8Array(0), buildMetadataLayout(0)) };
+  }
+  // placement 'omit' still computes and displays Metadata-stage bytes — only
+  // assembleFiles (Write stage) declines to write them anywhere.
   const metaEntries = collectMetadata(state, encodedChunks, variableStats);
   const metaBytes = serializeMetadata(metaEntries, state.metadata.serialization);
   return { stage: makeStage('Metadata', metaBytes, buildMetadataLayout(metaBytes.length)) };

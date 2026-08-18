@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { hexToBytes, orderChunks, assembleFiles } from '../../../src/engine/write.ts';
 import { deserializeMetadata } from '../../../src/engine/metadata.ts';
 import { chunkRegionsOf } from '../../../src/engine/layout.ts';
+import { computeMetadataStage } from '../../../src/engine/pipelineCompute.ts';
+import { readFile } from '../../../src/engine/read.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
 import type { EncodedChunk } from '../../../src/types/pipeline.ts';
 
@@ -175,6 +177,83 @@ describe('metadata.enabled toggle', () => {
     // Should have 2 chunk files + 1 metadata sidecar
     expect(files).toHaveLength(3);
     expect(files.some((f) => f.name === 'metadata')).toBe(true);
+  });
+});
+
+describe('computeMetadataStage', () => {
+  it('metadata disabled -> Metadata stage bytes are zero-length', () => {
+    const state = {
+      ...DEFAULT_STATE,
+      metadata: { ...DEFAULT_STATE.metadata, enabled: false },
+    };
+    const r = computeMetadataStage(state, [], new Map());
+    expect(r.stage.bytes.length).toBe(0);
+  });
+
+  it('metadata enabled -> Metadata stage still produces bytes even when placement is omit', () => {
+    const state = {
+      ...DEFAULT_STATE,
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'omit' as const },
+    };
+    const r = computeMetadataStage(state, [], new Map());
+    expect(r.stage.bytes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('metadataPlacement omit', () => {
+  const chunk = makeEncodedChunk([0], [0x01, 0x02, 0x03]);
+
+  it('writes no metadata anywhere but chunks are intact, and layout matches the sidecar case', () => {
+    const baseState = {
+      ...DEFAULT_STATE,
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+    };
+    const omitState = { ...baseState, write: { ...baseState.write, metadataPlacement: 'omit' as const } };
+    const sidecarState = { ...baseState, write: { ...baseState.write, metadataPlacement: 'sidecar' as const } };
+
+    const omitFiles = assembleFiles(omitState, [chunk], [1]);
+    const sidecarFiles = assembleFiles(sidecarState, [chunk], [1]);
+
+    // No metadata file/section anywhere.
+    expect(omitFiles.some((f) => f.name === 'metadata')).toBe(false);
+
+    // Chunk layout identical to the sidecar case's data file: magic + chunk + magic.
+    const magic = hexToBytes(omitState.write.magicNumber);
+    const expectedSize = magic.length + chunk.bytes.length + magic.length;
+    expect(omitFiles).toHaveLength(1);
+    expect(omitFiles[0].bytes.length).toBe(expectedSize);
+    const sidecarDataFile = sidecarFiles.find((f) => f.name !== 'metadata')!;
+    expect(Array.from(omitFiles[0].bytes)).toEqual(Array.from(sidecarDataFile.bytes));
+
+    // Reading it back fails honestly: no evidence metadata was ever written.
+    const magicBytes = hexToBytes(omitState.write.magicNumber);
+    const read = readFile(omitFiles, { magic: magicBytes });
+    expect(read.success).toBe(false);
+    expect(!read.success && read.reason).toBe('no-metadata');
+  });
+
+  it('per-chunk partitioning: omit produces chunk files only, no sidecar', () => {
+    const chunks = [
+      makeEncodedChunk([0], [0x01, 0x02]),
+      makeEncodedChunk([1], [0x03, 0x04]),
+    ];
+    const state = {
+      ...DEFAULT_STATE,
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true },
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' as const, metadataPlacement: 'omit' as const },
+    };
+    const files = assembleFiles(state, chunks, [2]);
+    expect(files).toHaveLength(2);
+    expect(files.every((f) => f.name !== 'metadata')).toBe(true);
   });
 });
 

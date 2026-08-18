@@ -43,9 +43,13 @@ const metadataChanged: AppState = {
   ...DEFAULT_STATE,
   metadata: {
     ...DEFAULT_STATE.metadata,
-    // Custom entries are ungated (metadata redesign Task 2), so `descriptive`
-    // doesn't need to be on for the "hello" sanity check below — left on here
-    // anyway since this test isn't exercising include-group filtering.
+    // Metadata redesign Task 3: the master switch must be on for the
+    // Metadata stage to produce any bytes at all (DEFAULT_STATE has it off).
+    enabled: true,
+    // Custom entries are ungated by include-group toggles (metadata redesign
+    // Task 2), so `descriptive` doesn't need to be on for the "hello" sanity
+    // check below — left on here anyway since this test isn't exercising
+    // include-group filtering.
     include: { ...DEFAULT_STATE.metadata.include, descriptive: true },
     customEntries: [{ key: 'note', value: 'hello' }],
   },

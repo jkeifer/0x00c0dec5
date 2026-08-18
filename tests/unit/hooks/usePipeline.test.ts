@@ -23,11 +23,13 @@ describe('computePipelineStages', () => {
     ]);
   });
 
-  it('has non-zero byte counts for all stages except Read (when no metadata)', () => {
+  it('has non-zero byte counts for all stages except Metadata/Read (when metadata disabled)', () => {
     const { stages } = computePipelineStages(DEFAULT_STATE);
     for (const stage of stages) {
-      if (stage.name === 'Read') {
-        // Read stage has 0 bytes when metadata is not included (default)
+      if (stage.name === 'Read' || stage.name === 'Metadata') {
+        // metadata.enabled defaults false (DEFAULT_STATE): Metadata stage is
+        // truly zero-length (metadata redesign Task 3), and Read has nothing
+        // to find as a result.
         continue;
       }
       expect(stage.stats.byteCount).toBeGreaterThan(0);

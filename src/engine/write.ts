@@ -119,15 +119,15 @@ function assembleSingleFile(
   chunkLookup: Map<string, ChunkBlockRegion>,
   variableStats?: Map<string, VariableStats>,
 ): VirtualFile[] {
-  // If metadata is not included, produce file with only magic + chunks + magic
-  // ponytail: temporary shim (metadata redesign Task 1) — reads the new
-  // master switch directly; Task 3 gives this call site real omit/placement
-  // semantics.
-  if (state.metadata.enabled === false) {
+  const placement = state.write.metadataPlacement;
+
+  // Disabled, or placement explicitly says "write it nowhere": file is only
+  // magic + chunks + magic. (The Metadata stage itself may still have bytes
+  // when enabled+omit — computeMetadataStage is a separate, earlier stage;
+  // assembleFiles here just never places those bytes into a file.)
+  if (!state.metadata.enabled || placement === 'omit') {
     return buildNoMetadataFile(magic, orderedChunks, chunkLookup, state.shape);
   }
-
-  const placement = state.write.metadataPlacement;
 
   if (placement === 'header') {
     // The header's metadata embeds chunk_index offsets, which are only known
@@ -285,9 +285,10 @@ function assemblePerChunkFiles(
     files.push({ name, bytes, layout: { byteLength: totalLength, shape: state.shape, regions } });
   }
 
-  // Only include metadata sidecar when metadata.enabled is true.
-  // ponytail: temporary shim (metadata redesign Task 1), see above.
-  if (state.metadata.enabled !== false) {
+  // Only include metadata sidecar when metadata is enabled and placement
+  // isn't 'omit' — per-chunk partitioning's only metadata location is a
+  // sidecar, so 'omit' there just means "no sidecar", same as disabled.
+  if (state.metadata.enabled && state.write.metadataPlacement !== 'omit') {
     // Per-chunk mode: each chunk is its own file, so "offset" is always the
     // position right after that file's own leading magic (not a position
     // within a combined stream). The reader matches these entries to files

@@ -682,8 +682,11 @@ export function referenceStageTraces(state: AppState): Map<StageName, ByteTrace[
   const encodedTraces = encodedChunks.flatMap((ec) => ec.traces);
 
   const variableStats = referenceVariableStats(state.variables, variableValues);
-  const metaEntries = collectMetadata(state, encodedChunks, variableStats);
-  const metaBytes = serializeMetadata(metaEntries, state.metadata.serialization);
+  // Mirrors production's computeMetadataStage (metadata redesign Task 3):
+  // disabled -> truly zero bytes, not a serialized "{}".
+  const metaBytes = state.metadata.enabled
+    ? serializeMetadata(collectMetadata(state, encodedChunks, variableStats), state.metadata.serialization)
+    : new Uint8Array(0);
   const metadataTraces = makeMetadataTraces(metaBytes.length);
 
   const refFiles = referenceAssembleFileTraces(state, encodedChunks, variableStats);
