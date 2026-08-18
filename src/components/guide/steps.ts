@@ -329,43 +329,56 @@ export const STEPS: GuideStep[] = [
       },
       {
         label: 'Binary serialization',
-        pros: 'Compact length-prefixed entries (count, then key-length/key/value-length/value). What Parquet (Thrift) and GeoTIFF (tags) chose.',
-        cons: 'Opaque without the layout spec — you can see the structure in hex, but only because this tool’s format is deliberately simple.',
+        pros: 'Compact tag records — a numeric tag, a type code, and a typed payload (packed u32s for shape and the chunk index, one-byte enum codes). What Parquet (Thrift) and GeoTIFF (tags) chose.',
+        cons: 'Opaque by construction: key names never appear in the bytes, so without the tag table — the spec — a hex dump is unreadable.',
       },
       {
         label: 'Chunk index: include or omit',
-        pros: 'Including it (default) lets the reader seek straight to any chunk’s offset.',
-        cons: 'Omitting it saves bytes but the reader must compute offsets — impossible once any size-changing codec is in play (RLE, Dictionary, Deflate, GZip, Zstd). Read fails with no-chunk-index.',
+        pros: 'Including it (default off, like every group here) lets the reader seek straight to any chunk’s offset.',
+        cons: 'Omitting it saves bytes but the reader must compute offsets — impossible in a single file once any size-changing codec is in play (RLE, Dictionary, Deflate, GZip, Zstd), so Read fails with no-chunk-index. With per-chunk files each chunk is its own file, so no index is needed at all — which is exactly why Zarr gets away without one.',
       },
       {
         label: 'Endianness: include or omit',
-        pros: 'Including it (default) records byte_order explicitly, so any reader — on any hardware — decodes multi-byte values correctly regardless of the byte order Write actually used.',
+        pros: 'Including it records byte_order explicitly, so any reader — on any hardware — decodes multi-byte values correctly regardless of the byte order Write actually used.',
         cons: 'Omitting it does not fail the read: the reader silently assumes its own host order. If Write actually used the other order (see the Chunk section’s Byte order control), every multi-byte value decodes to the wrong number — no error, no warning, just quietly corrupt data.',
       },
     ],
     body:
       'Everything the pipeline decided so far gets recorded here, because the reader has ' +
-      'none of your configuration — only bytes. This is also where "geo" formats stop being ' +
-      'special: add a custom entry like crs = EPSG:4326 and you have done exactly what ' +
-      'GeoTIFF does. The CRS is not magic; it is a string in a metadata dictionary. The ' +
-      'chunk-index toggle is the sharpest lesson in the section: with RLE applied, chunk ' +
-      'sizes are unpredictable, and without an index they are unlocatable — which is why ' +
-      'every real chunked format carries one. The endianness toggle is the quietest lesson: ' +
-      'every other missing-metadata failure in this tool is loud — Read stops and names what ' +
-      'it was missing. Omitted byte order is the one exception. The reader has to guess ' +
-      'something to keep going, so it guesses its own host order and proceeds; on a ' +
-      'byte-order mismatch, Read still reports success, and only the diff view shows the ' +
-      'reconstructed values are garbage. Real formats treat this as non-negotiable for exactly ' +
-      'that reason — TIFF’s first two bytes are the byte order itself ("II" or "MM"), and ' +
-      'network protocols standardize on big-endian ("network byte order") so no metadata is ' +
-      'even needed.',
+      'none of your configuration — only bytes. Metadata starts disabled, and every include ' +
+      'group starts off too — there is nothing to discover if the file already tells the whole ' +
+      'truth by default. This is also where "geo" formats stop being special: add a custom ' +
+      'entry like crs = EPSG:4326 and you have done exactly what GeoTIFF does. The CRS is not ' +
+      'magic; it is a string in a metadata dictionary — and picking a curated spatial source ' +
+      '(Schema section) seeds crs/bbox/transform into your custom entries automatically, the ' +
+      'same strings GeoTIFF carries in its tags. Custom entries are never gated by a group ' +
+      'toggle: clicking "+ Entry" is the intent, so it always writes, and an entry keyed the ' +
+      'same as an auto-collected one wins in place — you can tell the reader anything, true or ' +
+      'not. The chunk-index toggle is the sharpest lesson in the section: with RLE applied, ' +
+      'chunk sizes are unpredictable, and without an index they are unlocatable in a single ' +
+      'file — which is why every real chunked format carries one. Per-chunk partitioning is the ' +
+      'exception: each chunk is already its own file, so there is nothing for an index to ' +
+      'locate. The endianness toggle is the quietest lesson: every other missing-metadata ' +
+      'failure in this tool is loud — Read stops and names what it was missing. Omitted byte ' +
+      'order is the one exception. The reader has to guess something to keep going, so it ' +
+      'guesses its own host order and proceeds; on a byte-order mismatch, Read still reports ' +
+      'success, and only the diff view shows the reconstructed values are garbage. Real formats ' +
+      'treat this as non-negotiable for exactly that reason — TIFF’s first two bytes are the ' +
+      'byte order itself ("II" or "MM"), and network protocols standardize on big-endian ' +
+      '("network byte order") so no metadata is even needed.',
     tryIt:
-      'Switch serialization to Binary and view the Metadata stage in hex — the keys are ' +
-      'still visible in the ASCII column, each prefixed by its little-endian length. Then, ' +
-      'with RLE on any variable, untick "Include chunk index" and watch the Read section ' +
-      'fail with no-chunk-index. Separately: in the Chunk section, set Byte order to Big-endian, ' +
-      'then here untick "Include endianness" — Read still says success, but open the diff view ' +
-      'and watch the values that were actually written come back wrong.',
+      'Start from defaults: enable metadata and watch Read fail at read-schema — turn the ' +
+      'include groups on one at a time and watch each one unlock the next named step. Then ' +
+      'switch serialization to Binary and view the Metadata stage’s Entries view — each row ' +
+      'shows its numeric tag and type code instead of a key you can read in hex; the ' +
+      'auto-collected keys have genuinely vanished from the bytes. With RLE on any variable, ' +
+      'turn off "Include chunk index" and watch the Read section fail with no-chunk-index — ' +
+      'then switch Write’s partitioning to per-chunk and turn it off again: this time Read ' +
+      'still succeeds, because each chunk is its own file. Add a custom entry keyed shape with ' +
+      'a wrong value — your entry wins over the real one, and Read trusts it. Separately: in ' +
+      'the Chunk section, set Byte order to Big-endian, then here turn off "Include ' +
+      'endianness" — Read still says success, but open the diff view and watch the values that ' +
+      'were actually written come back wrong.',
     links: BLOG_POSTS.filter((p) =>
       p.url.includes('metadata-makes-the-data-format-metadata-storage-and-representation-across-array-formats'),
     ),
@@ -399,14 +412,21 @@ export const STEPS: GuideStep[] = [
         pros: 'Metadata lives beside the data, not inside it — update it without touching data files. Per-chunk partitioning is Zarr’s directory model.',
         cons: 'Now there are multiple things to keep together; lose the sidecar and the data is uninterpretable bytes.',
       },
+      {
+        label: 'Omit',
+        pros: 'Nothing extra to place — the smallest possible file, magic and chunk bytes only.',
+        cons: 'The metadata was still assembled (the Metadata stage pane shows real bytes) — Write just throws it away instead of never having built it. Read cannot tell this apart from metadata being disabled entirely; both produce the same no-metadata failure, which is itself honest — the reader only ever sees what actually reached a file.',
+      },
     ],
     body:
       'The magic number (default 00 C0 DE C5 — the tool’s own name) is the format’s ' +
       'handshake: Parquet writes PAR1, TIFF writes II* , and a reader checks it before ' +
       'trusting anything else. Placement is the deepest trade-off in this section: header ' +
       'favors streaming readers, footer favors writers (and object storage, where you cannot ' +
-      'rewrite the front), sidecar favors mutability. Note that "Include metadata" defaults ' +
-      'to off — the next step shows you exactly what a reader can do without it.',
+      'rewrite the front), sidecar favors mutability, and Omit favors nothing but file size — ' +
+      'it exists to show that "assembled" and "written" are different steps. Metadata itself ' +
+      'starts disabled by default in the Metadata section — the next step shows you exactly ' +
+      'what a reader can do without it.',
     tryIt:
       'Set placement to footer and the Footer locator to "none": Read fails with ' +
       'metadata-not-found even though the metadata bytes are right there in the hex view. ' +
