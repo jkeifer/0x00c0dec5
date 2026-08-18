@@ -30,8 +30,13 @@ function baseState() {
     ],
     fieldPipelines: { temp: [] },
     chunkPipeline: [],
-    metadata: { customEntries: [], serialization: 'json', include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true } },
-    write: { includeMetadata: true, magicNumber: '00C0DEC5', partitioning: 'single', metadataPlacement: 'header', chunkOrder: 'row-major', footerLocator: 'trailer' },
+    metadata: {
+      enabled: true,
+      customEntries: [],
+      serialization: 'json',
+      include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+    },
+    write: { magicNumber: '00C0DEC5', partitioning: 'single', metadataPlacement: 'header', chunkOrder: 'row-major', footerLocator: 'trailer' },
     ui: { leftPaneStage: 'encoded', rightPaneStage: 'read', leftPaneView: 'hex', rightPaneView: 'table', showDiff: false },
   };
 }

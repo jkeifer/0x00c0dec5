@@ -106,7 +106,7 @@ export const FAILURE_MESSAGES: Record<ReadFailureReason, (byteCount: number, det
     `The file contains ${byteCount} bytes of data but no metadata describing how to interpret them. ` +
     `A reader needs to know: the variable names and types, the data shape, how the data was chunked ` +
     `and interleaved, and what codecs were applied — in order to reverse the encoding and reconstruct values.\n\n` +
-    `Enable "Include metadata" in the Write step to make this file self-describing.`,
+    `Turn on "Enable Metadata" in the Metadata section to make this file self-describing.`,
   'metadata-not-found': (byteCount) =>
     `Cannot read file.\n\n` +
     `The file contains ${byteCount} bytes of data and metadata was written, but this reader's best-effort ` +

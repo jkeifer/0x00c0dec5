@@ -66,7 +66,15 @@ async function main() {
   await page.locator('[data-testid="model-toggle-array"]').click();
   await page.waitForTimeout(500);
   await seedStateAndReload(page, {
-    [ARRAY_KEY]: { dataModel: 'array', shape: [8, 8], chunkShape: [4, 4], write: { includeMetadata: true } },
+    [ARRAY_KEY]: {
+      dataModel: 'array',
+      shape: [8, 8],
+      chunkShape: [4, 4],
+      metadata: {
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+      },
+    },
   });
   await waitForPipelineIdle(page);
 

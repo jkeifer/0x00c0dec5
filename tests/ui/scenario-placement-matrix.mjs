@@ -51,6 +51,28 @@ async function setIncludeChunkIndex(page, on) {
   await page.waitForTimeout(500);
 }
 
+/** All six include groups default OFF alongside the master switch (metadata
+ * redesign). The matrix below needs a fully-described file to read back, so
+ * flip every group on once, up front. */
+const ALL_INCLUDE_TOGGLES = [
+  'include-schema-toggle',
+  'include-layout-toggle',
+  'include-codecs-toggle',
+  'include-chunk-index-toggle',
+  'include-descriptive-toggle',
+  'include-endianness-toggle',
+];
+
+async function setAllIncludeGroups(page, on) {
+  for (const testid of ALL_INCLUDE_TOGGLES) {
+    await page
+      .locator(`[data-testid="${testid}"] button`, { hasText: on ? /^Yes$/ : /^No$/ })
+      .click();
+    await page.waitForTimeout(200);
+  }
+  await page.waitForTimeout(300);
+}
+
 async function setPlacement(page, placement) {
   await page
     .locator('[data-testid="sidebar-section-write"] button', { hasText: new RegExp(`^${PLACEMENT_LABEL[placement]}$`) })
@@ -87,11 +109,20 @@ async function addRleToHumidity(page) {
   await page.waitForTimeout(500);
 }
 
+async function removeCodec(page, codecLabel) {
+  await page.locator(`button[aria-label="Remove ${codecLabel}"]`).click();
+  await page.waitForTimeout(500);
+  await waitForPipelineIdle(page);
+}
+
 async function main() {
   const { browser, page } = await launch();
 
-  // Turn on include-metadata first — the matrix is meaningless without it.
+  // Turn on the master switch AND every include group first — the matrix is
+  // meaningless without a fully-described file (all six groups default off
+  // independently of the master switch; metadata redesign Task 1/8).
   await setIncludeMetadata(page, true);
+  await setAllIncludeGroups(page, true);
   await waitForPipelineIdle(page);
   const includeOnText = await readStatusText(page);
   h.check(
@@ -182,6 +213,57 @@ async function main() {
 
   // Restore chunk index on for a clean pedagogical-failure check below.
   await setIncludeChunkIndex(page, true);
+  await removeCodec(page, 'RLE');
+  await waitForPipelineIdle(page);
+
+  // ─── placement = 'omit' ────────────────────────────────────────────────────
+  //
+  // Distinct from the master switch: metadata.enabled stays true and every
+  // include group stays on, so the Metadata stage still computes and shows
+  // nonzero bytes (Entries view populated) — but Write's placement='omit'
+  // means assembleFiles never writes those bytes anywhere (no header, no
+  // footer, no sidecar). The reader then has zero metadata to work with, same
+  // failure reason as the master-off case (no-metadata), even though the
+  // Metadata stage pane looks fully populated.
+  await setPlacement(page, 'header');
+  await waitForPipelineIdle(page);
+  await page
+    .locator('[data-testid="sidebar-section-write"] button', { hasText: /^Omit$/ })
+    .click();
+  await waitForPipelineIdle(page);
+
+  const metadataStageNode = await page.locator('[data-testid="pipeline-stage-4"]').innerText();
+  const metadataStageBytes = parseFloat((metadataStageNode.match(/([\d.]+)\s*(B|KB|MB|GB)\b/) ?? [])[1] ?? 'NaN');
+  h.check(
+    'placement=omit: Metadata stage still shows nonzero bytes',
+    Number.isFinite(metadataStageBytes) && metadataStageBytes > 0,
+    metadataStageNode.replace(/\n/g, ' '),
+  );
+
+  await page.locator('[data-testid="pane-dropdown-left"]').selectOption('metadata');
+  await page.waitForTimeout(200);
+  await waitForPipelineIdle(page);
+  const omitEntriesCount = await page
+    .locator('[data-testid="pane-left"] [data-testid^="metadata-entry-"]')
+    .count();
+  h.check(
+    'placement=omit: Metadata stage Entries view is populated',
+    omitEntriesCount > 0,
+    `entries=${omitEntriesCount}`,
+  );
+
+  const omitReadText = await readStatusText(page);
+  await shot(page, 'placement-matrix-omit');
+  h.check(
+    'placement=omit: read fails no-metadata (nothing written to any file)',
+    /Read failed/.test(omitReadText) &&
+      !/File parsed successfully/.test(omitReadText) &&
+      /no metadata/i.test(omitReadText),
+    omitReadText.slice(0, 200).replace(/\n/g, ' '),
+  );
+
+  // Restore placement to header for the final master-off check below.
+  await setPlacement(page, 'header');
   await waitForPipelineIdle(page);
 
   // include-metadata OFF → read should fail (the pedagogical path: nothing in the

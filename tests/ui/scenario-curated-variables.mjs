@@ -92,13 +92,20 @@ async function main() {
   const { browser, page, issues } = await launch({ fresh: true });
   await waitForPipelineIdle(page);
 
-  // DEFAULT_STATE.write.includeMetadata is false (the app's honest-failure
-  // teaching default — Read fails without metadata by design). This scenario
-  // cares about curated sources, not that lesson, so seed metadata on for
-  // both data models (tabular now, array before check 2 switches models).
+  // DEFAULT_STATE.metadata.enabled is false, and every include group also
+  // defaults off (the app's honest-failure teaching default — Read fails
+  // without metadata by design). This scenario cares about curated sources,
+  // not that lesson, so seed metadata fully on for both data models (tabular
+  // now, array before check 2 switches models).
+  const METADATA_ON = {
+    metadata: {
+      enabled: true,
+      include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+    },
+  };
   await seedMergedAndReload(page, {
-    [TABULAR_KEY]: { write: { includeMetadata: true } },
-    [ARRAY_KEY]: { write: { includeMetadata: true } },
+    [TABULAR_KEY]: METADATA_ON,
+    [ARRAY_KEY]: METADATA_ON,
   });
   await waitForPipelineIdle(page);
 
@@ -144,6 +151,43 @@ async function main() {
     .innerText()
     .catch(() => null);
   h.check('(1) table view renders a real ghcn-daily/tmax value', tmaxCell !== null && tmaxCell.trim().length > 0, `tmax[0]=${tmaxCell}`);
+
+  // Source binding seeds ghcn-daily's DATASET_SEED_ENTRIES (provenance +
+  // units) as plain metadata.customEntries (src/datasets/registry.ts,
+  // src/state/useAppState.ts's UPDATE_VARIABLE case). Assert the seeded keys
+  // land as custom-entry rows in the Metadata section, and that they make it
+  // into the written file's actual metadata (Metadata stage Entries view).
+  await page.locator('[data-testid="sidebar-section-metadata"]').scrollIntoViewIfNeeded();
+  const customKeys = await page
+    .locator('[data-testid^="metadata-custom-key-"]')
+    .evaluateAll((els) => els.map((el) => el.value));
+  h.check(
+    '(1) binding ghcn-daily/tmax seeds source/source_url custom entries',
+    customKeys.includes('source') && customKeys.includes('source_url') && customKeys.includes('temperature_units'),
+    customKeys.join(', '),
+  );
+
+  await page.locator('[data-testid="pane-dropdown-left"]').selectOption('metadata');
+  await page.waitForTimeout(200);
+  await waitForPipelineIdle(page);
+  const sourceEntryText = await page
+    .locator('[data-testid="pane-left"] [data-testid="metadata-entry-source"]')
+    .innerText()
+    .catch(() => '');
+  h.check(
+    '(1) seeded "source" custom entry appears in the written file\'s Metadata Entries view',
+    /GHCN-Daily/i.test(sourceEntryText),
+    sourceEntryText.slice(0, 160).replace(/\n/g, ' '),
+  );
+  await shot(page, 'curated-variables-1-seeded-entries');
+
+  // Restore the left pane to Values/table — the checks below (and the
+  // reload-through-check-3 flow) expect it there, same as before this
+  // seeded-entries check existed.
+  await page.locator('[data-testid="pane-dropdown-left"]').selectOption('values');
+  await page.locator('[data-testid="pane-left"] [data-testid="view-mode-table"]').click();
+  await page.waitForTimeout(200);
+  await waitForPipelineIdle(page);
 
   const readStatus1 = await readStatusText(page);
   h.check(
@@ -386,7 +430,7 @@ async function main() {
   // Pyodide-backed codec, so the runtime must be ready. A fresh reload here
   // clears the aborted-route state from check 4; the seedMergedAndReload
   // addInitScript from the top of this scenario is still registered on this
-  // context, so `write.includeMetadata` stays forced without re-seeding.
+  // context, so `metadata.enabled`/`include` stay forced without re-seeding.
   await safeReload(page);
   await waitForPipelineIdle(page, 30_000);
 

@@ -42,8 +42,12 @@ async function main() {
   // DEFAULT_STATE ships every include-group off — only the ungated
   // `metadata_format` envelope key would show. Turn schema on so the view
   // actually has multiple rows to exercise (schema/type_assignments/
-  // logical_types/metadata_format).
+  // logical_types/metadata_format). Layout is also on, since the override-lie
+  // check below overrides the `shape` key, which only collectMetadata emits
+  // (and MetadataEditor's autoEntries/override-note only recognizes) when
+  // include.layout is true.
   await setIncludeGroup(page, 'include-schema-toggle', true);
+  await setIncludeGroup(page, 'include-layout-toggle', true);
 
   // ── Select Metadata stage in the LEFT pane (default view mode 'table',
   //    which isn't offered for Metadata — StagePane's first-mode fallback
@@ -128,6 +132,50 @@ async function main() {
     /tag \d+ · /.test(binaryBadgeText),
     binaryBadgeText.replace(/\n/g, ' ').slice(0, 120),
   );
+
+  // ── Override lie: a custom entry keyed `shape` replaces the auto entry's
+  //    value in place (spec §2, override-wins — no rename-on-collision
+  //    protection). MetadataEditor flags the row with
+  //    metadata-key-override-note-{i}, the Entries view shows the corrupted
+  //    value (not the real shape), and the read fails honestly. ────────────
+  await setSerialization(page, 'json');
+  await page.locator('[data-testid="sidebar-section-metadata"]').scrollIntoViewIfNeeded();
+  await page.locator('[data-testid="sidebar-section-metadata"] button', { hasText: /^\+ Entry$/ }).click();
+  await page.waitForTimeout(200);
+  const customKeyInputs = page.locator('[data-testid^="metadata-custom-key-"]');
+  const newEntryIndex = (await customKeyInputs.count()) - 1;
+  await customKeyInputs.nth(newEntryIndex).fill('shape');
+  await page.locator('[data-testid="sidebar-section-metadata"] input[placeholder="value"]').nth(newEntryIndex).fill('not-json-shape');
+  await page.waitForTimeout(300);
+  await waitForPipelineIdle(page);
+
+  const overrideNoteVisible = await page
+    .locator(`[data-testid="metadata-key-override-note-${newEntryIndex}"]`)
+    .count();
+  h.check('override lie: MetadataEditor flags the shape row as overriding an auto key', overrideNoteVisible === 1);
+
+  await shot(page, 'metadata-entries-override-lie');
+  const overriddenShapeEntryText = await page
+    .locator('[data-testid="pane-right"] [data-testid="metadata-entry-shape"]')
+    .innerText()
+    .catch(() => '');
+  h.check(
+    'override lie: Entries view shows the corrupted (non-JSON) shape value, not the real shape',
+    overriddenShapeEntryText.includes('not-json-shape'),
+    overriddenShapeEntryText.replace(/\n/g, ' ').slice(0, 120),
+  );
+
+  const overrideReadStatus = await page.locator('[data-testid="read-status"]').innerText().catch(() => '');
+  h.check(
+    'override lie: read fails honestly (no silent protection from the corrupted shape)',
+    /Read failed/.test(overrideReadStatus) && !/File parsed successfully/.test(overrideReadStatus),
+    overrideReadStatus.slice(0, 160).replace(/\n/g, ' '),
+  );
+
+  // Remove the override entry so it doesn't leak into the disabled check below.
+  await page.locator(`button[aria-label="Remove metadata entry shape"]`).click();
+  await page.waitForTimeout(200);
+  await waitForPipelineIdle(page);
 
   // ── Disabled: shows the disabled empty state, not an empty table. ─────────
   await setIncludeMetadata(page, false);

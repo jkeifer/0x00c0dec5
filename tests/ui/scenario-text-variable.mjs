@@ -35,9 +35,13 @@ const SEED_STATE = {
   ],
   fieldPipelines: { city: [], humidity: [] },
   chunkPipeline: [],
-  metadata: { customEntries: [], serialization: 'json', include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true } },
+  metadata: {
+    enabled: true,
+    customEntries: [],
+    serialization: 'json',
+    include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+  },
   write: {
-    includeMetadata: true,
     magicNumber: '00C0DEC5',
     partitioning: 'single',
     metadataPlacement: 'header',

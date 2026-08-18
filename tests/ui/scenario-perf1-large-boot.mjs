@@ -39,8 +39,16 @@ function arrayState(shape) {
     ],
     fieldPipelines: { temp: [], press: [] },
     chunkPipeline: [],
-    metadata: { customEntries: [], serialization: 'json', include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true } },
-    write: { includeMetadata: false, magicNumber: '00C0DEC5', partitioning: 'single', metadataPlacement: 'header', chunkOrder: 'row-major', footerLocator: 'trailer' },
+    // This scenario is about boot perf at scale, not metadata/read — leave
+    // metadata off (the app default) rather than paying to fully describe an
+    // 8M+-value file.
+    metadata: {
+      enabled: false,
+      customEntries: [],
+      serialization: 'json',
+      include: { schema: false, layout: false, codecs: false, chunkIndex: false, descriptive: false, endianness: false },
+    },
+    write: { magicNumber: '00C0DEC5', partitioning: 'single', metadataPlacement: 'header', chunkOrder: 'row-major', footerLocator: 'trailer' },
     ui: { leftPaneStage: 'values', rightPaneStage: 'values', leftPaneView: 'grid', rightPaneView: 'hex', showDiff: false },
   };
 }

@@ -3,7 +3,7 @@
 // TableView/GridView when viewing the Read stage with diff mode on.
 //
 // Scenario: enable a lossy type assignment (scale/offset on an int storage
-// dtype for a decimal/continuous variable), enable Include metadata (so Read
+// dtype for a decimal/continuous variable), enable Metadata (so Read
 // succeeds), select the Read stage + diff mode in both Table and Grid view,
 // and verify the summary numbers render without NaN and hover stays smooth
 // (no console errors, no exceptions).
@@ -41,11 +41,25 @@ async function main() {
   await dtypeSelects.first().selectOption('int8');
   await page.waitForTimeout(300);
 
-  // ── 2. Enable metadata so Read succeeds. ──
+  // ── 2. Enable metadata so Read succeeds. All six include groups default
+  //      off independently of the master switch (metadata redesign Tasks
+  //      1/8), so a fully-described file needs every one of them on too. ──
   const metadataSection = page.locator('[data-testid="sidebar-section-metadata"]');
   await metadataSection.scrollIntoViewIfNeeded();
   const metadataEnabledYes = page.locator('[data-testid="metadata-enabled-toggle"] button', { hasText: /^Yes$/ });
   await metadataEnabledYes.click();
+  await page.waitForTimeout(300);
+  for (const testid of [
+    'include-schema-toggle',
+    'include-layout-toggle',
+    'include-codecs-toggle',
+    'include-chunk-index-toggle',
+    'include-descriptive-toggle',
+    'include-endianness-toggle',
+  ]) {
+    await page.locator(`[data-testid="${testid}-opt-yes"]`).click();
+    await page.waitForTimeout(200);
+  }
   await page.waitForTimeout(400);
   // Project 4's eager Pyodide init keeps the worker busy for the first few
   // seconds after boot — wait for the pipeline to actually go idle before
@@ -57,7 +71,7 @@ async function main() {
   await readSection.scrollIntoViewIfNeeded();
   const readStatus = page.locator('[data-testid="read-status"]');
   const readOk = await readStatus.locator('text=File parsed successfully').count();
-  h.check('read succeeded after enabling Include metadata', readOk > 0);
+  h.check('read succeeded after enabling Metadata', readOk > 0);
 
   const diffYes = readStatus.locator('button, [role="radio"]', { hasText: /^Yes$/ }).first();
   await diffYes.click();

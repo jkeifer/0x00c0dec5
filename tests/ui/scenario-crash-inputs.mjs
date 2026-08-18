@@ -181,13 +181,16 @@ async function main() {
       interleaving: 'column',
       fieldPipelines: {},
       chunkPipeline: [],
-      metadata: { customEntries: [], serialization: 'json' },
+      // metadata.enabled true (not old-shape write.includeMetadata, which
+      // migrateState now drops the WHOLE seed for — metadata redesign Task 1)
+      // so this test actually exercises chunkShape [0] clamping rather than
+      // silently falling back to unrelated defaults that happen to also pass.
+      metadata: { enabled: true, customEntries: [], serialization: 'json' },
       write: {
         magicNumber: '00C0DEC5',
         partitioning: 'single',
         metadataPlacement: 'header',
         chunkOrder: 'row-major',
-        includeMetadata: true,
       },
       ui: {},
     };

@@ -1,23 +1,32 @@
 // Regression scenario: read-process view + granular metadata toggles
-// (read plan Tasks 1-6; this file is Task 7).
+// (read plan Tasks 1-6; this file is Task 7; ladder walk + per-chunk/entropy
+// end-to-end check added by the metadata redesign's Task 14).
 //
 // Covers the reader's narrated 8-step log (READ_STEP_ORDER in
 // src/engine/read.ts, rendered by ReadProcessView.tsx), the
-// [data-testid="read-status-progress"] progress line, and the five
-// Metadata-section include toggles (MetadataEditor.tsx INCLUDE_GROUPS):
+// [data-testid="read-status-progress"] progress line, and the six
+// Metadata-section include toggles (MetadataEditor.tsx INCLUDE_GROUPS) —
+// ALL of which default off independently of `metadata-enabled-toggle`
+// (metadata redesign Tasks 1/8), so a file needs the master switch AND every
+// include group its content depends on before a read can succeed:
 //
-//   1. default + include-metadata ON  → process view shows 8 ✓ steps, "8/8 steps"
-//   2. master include-metadata OFF    → checklist replaces pane content even in
-//                                       hex mode; failed at Locate metadata, 1/8
-//   3. include-schema off             → failed at Read schema (variables/types msg)
-//   4. include-layout off             → failed at Read layout
-//   5. byte-shuffle + include-codecs off → read still SUCCEEDS (assume-identity,
+//   0. fresh defaults (master off)     → failed at Locate metadata, 1/8
+//   1. master ON, all groups still off → failed at Read schema, 4/8 (ladder step 1)
+//   2. + include-schema ON             → failed at Read layout, 5/8 (ladder step 2)
+//   3. + include-layout ON             → process view shows 8 ✓ steps, "8/8 steps"
+//      (codecs/chunkIndex/descriptive/endianness all now on too — full ladder)
+//   4. include-schema off              → failed at Read schema (variables/types msg)
+//   5. include-layout off              → failed at Read layout
+//   6. byte-shuffle + include-codecs off → read still SUCCEEDS (assume-identity,
 //                                       same-size garble): decode-chunks notes
 //                                       "assumed raw bytes", diff view reports
 //                                       differences on the shuffled variable
-//   6. RLE + include-codecs off       → failed at Decode chunks with the
+//   7. RLE + include-codecs off        → failed at Decode chunks with the
 //                                       expected/found byte-count mismatch
-//   7. include-descriptive off        → still 8/8 success (reader never needs it)
+//   8. include-descriptive off         → still 8/8 success (reader never needs it)
+//   9. per-chunk partitioning + entropy codec (deflate) + chunkIndex OFF →
+//      read still SUCCEEDS end to end (Task 5's fix: per-chunk needs no
+//      chunk index, offsets are computed from partition boundaries)
 //
 // Run: node tests/ui/scenario-read-process.mjs   (dev server must be running)
 
@@ -59,11 +68,26 @@ async function setIncludeMetadata(page, on) {
   await waitForPipelineIdle(page);
 }
 
-/** The five granular toggles use Radio testIdPrefix `${testid}-opt`. */
+/** The six granular toggles use Radio testIdPrefix `${testid}-opt`. */
 async function setIncludeGroup(page, testid, on) {
   await page.locator(`[data-testid="${testid}-opt-${on ? 'yes' : 'no'}"]`).click();
   await page.waitForTimeout(500);
   await waitForPipelineIdle(page);
+}
+
+const ALL_INCLUDE_TOGGLES = [
+  'include-schema-toggle',
+  'include-layout-toggle',
+  'include-codecs-toggle',
+  'include-chunk-index-toggle',
+  'include-descriptive-toggle',
+  'include-endianness-toggle',
+];
+
+async function setAllIncludeGroups(page, on) {
+  for (const testid of ALL_INCLUDE_TOGGLES) {
+    await setIncludeGroup(page, testid, on);
+  }
 }
 
 async function setPaneViewMode(page, mode) {
@@ -88,11 +112,57 @@ async function removeCodec(page, codecLabel) {
 async function main() {
   const { browser, page } = await launch();
   await waitForPipelineIdle(page);
-
-  // ── 1. Default state + include-metadata ON → 8/8 ✓ in process view ───────
-  await setIncludeMetadata(page, true);
   await page.locator('[data-testid="pane-dropdown-right"]').selectOption('read');
   await setPaneViewMode(page, 'process');
+
+  // ── 0. Ladder walk: fresh defaults (master switch off too) → failed at
+  //       Locate metadata, 1/8. All six include groups default off
+  //       independently of the master switch (metadata redesign Tasks 1/8),
+  //       so this is the true starting point before any toggle is touched. ──
+  await shot(page, 'read-process-ladder-0-fresh');
+  const pLadder0 = await progressText(page);
+  h.check(
+    'ladder 0: fresh defaults → progress "1/8 steps · failed at: Locate metadata"',
+    pLadder0 === '1/8 steps · failed at: Locate metadata',
+    `"${pLadder0}"`,
+  );
+
+  // ── Ladder step 1: master switch ON, all six include groups still off →
+  //       schema is the first thing a real reader needs that isn't written,
+  //       so it fails at Read schema (locate/parse succeed on the envelope
+  //       alone — collectMetadata always emits metadata_format when enabled). ──
+  await setIncludeMetadata(page, true);
+  await shot(page, 'read-process-ladder-1-master-only');
+  const pLadder1 = await progressText(page);
+  h.check(
+    'ladder 1: master ON, groups off → progress "3/8 steps · failed at: Read schema"',
+    pLadder1 === '3/8 steps · failed at: Read schema',
+    `"${pLadder1}"`,
+  );
+
+  // ── Ladder step 2: + include-schema ON → next thing missing is layout. ────
+  await setIncludeGroup(page, 'include-schema-toggle', true);
+  await shot(page, 'read-process-ladder-2-schema-on');
+  const pLadder2 = await progressText(page);
+  h.check(
+    'ladder 2: + schema ON → progress "4/8 steps · failed at: Read layout"',
+    pLadder2 === '4/8 steps · failed at: Read layout',
+    `"${pLadder2}"`,
+  );
+
+  // ── Ladder step 3: + every remaining group ON → full success, 8/8. ────────
+  await setIncludeGroup(page, 'include-layout-toggle', true);
+  await setIncludeGroup(page, 'include-codecs-toggle', true);
+  await setIncludeGroup(page, 'include-chunk-index-toggle', true);
+  await setIncludeGroup(page, 'include-descriptive-toggle', true);
+  await setIncludeGroup(page, 'include-endianness-toggle', true);
+  await shot(page, 'read-process-ladder-3-all-on');
+  const pLadder3 = await progressText(page);
+  h.check('ladder 3: every group ON → progress "8/8 steps"', pLadder3 === '8/8 steps', `"${pLadder3}"`);
+
+  // ── 1. Fully-enabled state → 8/8 ✓ in process view (the rest of this
+  //       scenario's checks 4-8 below toggle individual groups off one at a
+  //       time against this fully-on baseline). ─────────────────────────────
   await shot(page, 'read-process-all-ok');
 
   const stepCount = await page
@@ -267,6 +337,37 @@ async function main() {
   );
   const p7 = await progressText(page);
   h.check('descriptive off: progress "8/8 steps"', p7 === '8/8 steps', `"${p7}"`);
+
+  // ── 8. Per-chunk partitioning + entropy codec (RLE) + chunk-index OFF →
+  //       read still succeeds end to end (Task 5's fix: per-chunk files carry
+  //       no cross-file byte offsets to compute, so they're resolved by
+  //       filename/coords, not by the chunk_index — unlike single-file mode,
+  //       where the same combo fails no-chunk-index). ──────────────────────
+  await addCodecToTemperature(page, 'rle');
+  await setIncludeGroup(page, 'include-chunk-index-toggle', false);
+  await page
+    .locator('[data-testid="sidebar-section-write"] button', { hasText: /^Per-chunk$/ })
+    .click();
+  await page.waitForTimeout(500);
+  await waitForPipelineIdle(page);
+  await shot(page, 'read-process-per-chunk-entropy-no-index');
+
+  const readStatus8 = await page.locator('[data-testid="read-status"]').innerText();
+  h.check(
+    'per-chunk + rle + chunk-index off: read succeeds end to end',
+    /File parsed successfully/.test(readStatus8),
+    readStatus8.slice(0, 160).replace(/\n/g, ' '),
+  );
+  const p8 = await progressText(page);
+  h.check('per-chunk + rle + chunk-index off: progress "8/8 steps"', p8 === '8/8 steps', `"${p8}"`);
+
+  // Restore: single-file partitioning, chunk index on, RLE removed.
+  await page
+    .locator('[data-testid="sidebar-section-write"] button', { hasText: /^Single file$/ })
+    .click();
+  await page.waitForTimeout(300);
+  await removeCodec(page, 'RLE');
+  await setIncludeGroup(page, 'include-chunk-index-toggle', true);
 
   await browser.close();
   h.finish();

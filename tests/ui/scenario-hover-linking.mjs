@@ -67,9 +67,16 @@ function gridCanvasState() {
     ],
     fieldPipelines: { temp: [] },
     chunkPipeline: [],
-    metadata: { customEntries: [], serialization: 'json', include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true } },
+    // Metadata/Read aren't exercised by this check — leave it off (the app
+    // default) rather than old-shape `write.includeMetadata`, which
+    // migrateState now drops the WHOLE seed for (metadata redesign Task 1).
+    metadata: {
+      enabled: false,
+      customEntries: [],
+      serialization: 'json',
+      include: { schema: false, layout: false, codecs: false, chunkIndex: false, descriptive: false, endianness: false },
+    },
     write: {
-      includeMetadata: false,
       magicNumber: '00C0DEC5',
       partitioning: 'single',
       metadataPlacement: 'header',

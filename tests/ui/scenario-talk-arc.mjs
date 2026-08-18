@@ -259,7 +259,7 @@ async function main() {
   const offText = await readStatusText(page);
   h.check(
     'beat5: include-metadata OFF -> read-status shows failure with educational message',
-    /Read failed/.test(offText) && !/File parsed successfully/.test(offText) && /Include metadata/i.test(offText),
+    /Read failed/.test(offText) && !/File parsed successfully/.test(offText) && /Enable Metadata/i.test(offText),
     offText.slice(0, 220).replace(/\n/g, ' '),
   );
   await shot(page, 'talk-arc-5a');
