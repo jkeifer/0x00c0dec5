@@ -10,11 +10,21 @@ type NumberInputProps = Omit<
    * showing it so typing isn't fought (no coerced 0 appearing under the
    * cursor), and blur re-syncs the display to the last committed value. */
   onValue: (n: number) => void;
+  /** Commit only on blur/Enter instead of per keystroke. For inputs whose
+   * commit triggers a full pipeline recompute (shape, chunk shape): typing
+   * "3600" must not fire computes at 3, 36, and 360 on the way — the
+   * intermediate values are never what the user meant, and a large one can
+   * hang the worker mid-keystroke. */
+  commitOnBlur?: boolean;
 };
 
-export function NumberInput({ value, onValue, ...rest }: NumberInputProps) {
+export function NumberInput({ value, onValue, commitOnBlur, ...rest }: NumberInputProps) {
   // null = mirror the `value` prop; a string = in-progress text while editing
   const [draft, setDraft] = useState<string | null>(null);
+  const commit = (text: string) => {
+    const n = parseFloat(text);
+    if (!Number.isNaN(n)) onValue(n);
+  };
   return (
     <input
       {...rest}
@@ -22,10 +32,19 @@ export function NumberInput({ value, onValue, ...rest }: NumberInputProps) {
       value={draft ?? String(value)}
       onChange={(e) => {
         setDraft(e.target.value);
-        const n = parseFloat(e.target.value);
-        if (!Number.isNaN(n)) onValue(n);
+        if (!commitOnBlur) commit(e.target.value);
       }}
-      onBlur={() => setDraft(null)}
+      onBlur={(e) => {
+        if (commitOnBlur) commit(e.target.value);
+        setDraft(null);
+      }}
+      onKeyDown={
+        commitOnBlur
+          ? (e) => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+            }
+          : rest.onKeyDown
+      }
     />
   );
 }

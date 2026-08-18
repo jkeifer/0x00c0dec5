@@ -7,6 +7,23 @@ import { useHover } from '../../hooks/useHover.ts';
 import { colors, fonts, fontSizes, spacing } from '../../theme.ts';
 import { buildGridImage } from './gridImage.ts';
 
+// Floor on the canvas's displayed CSS height (px) — see F8: a naive
+// `height: auto` on a 1-row-tall intrinsic canvas rounds to sub-pixel and
+// vanishes for very flat grids (both tabular FORMAT presets are 1D).
+const MIN_CANVAS_HEIGHT = 24;
+
+// F32: Chromium (and other engines) silently refuse to paint into a canvas
+// wider than 65535px (2^16 - 1) — putImageData succeeds with no error, but
+// every readback is all-zero-alpha. A 1D tabular array over that many
+// elements (e.g. GHCN's 144769-row preset) hits this directly since the
+// logical raster is `cols = element count, rows = 1`. The physical canvas
+// buffer is reshaped to stay under this cap (more physical rows, capped
+// width) independent of the *logical* rows/cols used for hover/overlay math
+// below — the browser stretches the buffer to fill the CSS box regardless
+// of its internal pixel dimensions, so this only affects how finely the
+// same data is rasterized, not the coordinate math.
+const MAX_CANVAS_DIM = 65535;
+
 interface GridCanvasProps {
   rows: number;
   cols: number;
@@ -45,25 +62,44 @@ export function GridCanvas({
   // CSS scale factor (displayed px per source element) — recomputed on
   // resize so overlay/hover math stays correct if the pane is resized.
   const [scale, setScale] = useState(1);
+  // Displayed canvas height in px. Aspect-correct (scale * rows) rounds away
+  // to ~0 for very flat grids (e.g. 1D data: rows=1, cols in the hundreds of
+  // thousands — see F8), so it's clamped to a visible minimum. Tracked
+  // separately from `scale` because that floor decouples vertical scale from
+  // horizontal scale; overlay math uses `rowScale` (below) for the vertical
+  // axis instead of assuming square pixels.
+  const [displayHeight, setDisplayHeight] = useState(rows);
 
   useEffect(() => {
     const el = canvasRef.current;
     if (!el || cols <= 0) return;
-    const update = () => setScale(el.clientWidth / cols);
+    const update = () => {
+      const s = el.clientWidth / cols;
+      setScale(s);
+      setDisplayHeight(Math.max(s * rows, MIN_CANVAS_HEIGHT));
+    };
     update();
     const obs = new ResizeObserver(update);
     obs.observe(el);
     return () => obs.disconnect();
-  }, [cols]);
+  }, [cols, rows]);
+  const rowScale = rows > 0 ? displayHeight / rows : scale;
+
+  // Physical canvas buffer dims — reshape of the same row-major element
+  // order into a narrower-but-taller raster when `cols` alone would exceed
+  // MAX_CANVAS_DIM (see F32 comment above). Logical `rows`/`cols` (used for
+  // hover/overlay math and the CSS display box) are untouched.
+  const physCols = Math.min(cols, MAX_CANVAS_DIM);
+  const physRows = physCols > 0 ? Math.min(Math.ceil((cols * rows) / physCols), MAX_CANVAS_DIM) : rows;
 
   // Draw: one px per element via ImageData, keyed on every image input.
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || cols <= 0 || rows <= 0) return;
+    if (!canvas || physCols <= 0 || physRows <= 0) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const buffer = buildGridImage({
-      colorValues, min, max, baseColor: variable.color, width: cols, height: rows,
+      colorValues, min, max, baseColor: variable.color, width: physCols, height: physRows,
       diffs: diffs?.diffs, diffActive: diffs?.diffActive, maxAbsDiff: diffs?.maxAbsDiff,
     });
     // ponytail: TS 5.9's lib.dom types Uint8ClampedArray's buffer as
@@ -71,8 +107,8 @@ export function GridCanvas({
     // constructor wants the narrower ArrayBuffer-backed form. buildGridImage
     // always allocates a plain `new Uint8ClampedArray(n)` (never a
     // SharedArrayBuffer view), so this cast is safe, not a real risk.
-    ctx.putImageData(new ImageData(buffer as Uint8ClampedArray<ArrayBuffer>, cols, rows), 0, 0);
-  }, [colorValues, min, max, variable.color, cols, rows, diffs]);
+    ctx.putImageData(new ImageData(buffer as Uint8ClampedArray<ArrayBuffer>, physCols, physRows), 0, 0);
+  }, [colorValues, min, max, variable.color, physCols, physRows, diffs]);
 
   function coordsFromEvent(e: React.MouseEvent<HTMLCanvasElement>): { row: number; col: number; idx: number } | null {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -112,15 +148,15 @@ export function GridCanvas({
     for (let d = 0; d < parts.length; d++) idx = idx * (shape[d] ?? 1) + parts[d];
     const row = Math.floor(idx / cols);
     const viewport = containerRef.current;
-    const cellTop = row * scale;
-    const cellBottom = cellTop + scale;
+    const cellTop = row * rowScale;
+    const cellBottom = cellTop + rowScale;
     if (cellTop < viewport.scrollTop || cellBottom > viewport.scrollTop + viewport.clientHeight) {
       // Not fully visible: CENTER the target row (nearest-edge scrolling
       // parked it at the extreme top/bottom). The browser clamps scrollTop
       // assignments to the valid range, so no explicit clamping needed.
-      viewport.scrollTop = cellTop - (viewport.clientHeight - scale) / 2;
+      viewport.scrollTop = cellTop - (viewport.clientHeight - rowScale) / 2;
     }
-  }, [hoveredTraceId, hoverSource, paneId, variable.name, shape, cols, scale]);
+  }, [hoveredTraceId, hoverSource, paneId, variable.name, shape, cols, rowScale]);
 
   // Local hover element (this pane's own mouse position) plus the
   // cross-pane hover (when it's this pane that must show the overlay). The
@@ -213,14 +249,14 @@ export function GridCanvas({
         <div style={{ position: 'relative', width: '100%' }}>
           <canvas
             ref={canvasRef}
-            width={cols}
-            height={rows}
+            width={physCols}
+            height={physRows}
             data-testid="grid-canvas"
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
             style={{
               width: '100%',
-              height: 'auto',
+              height: displayHeight,
               display: 'block',
               imageRendering: 'pixelated',
               cursor: 'default',
@@ -234,9 +270,9 @@ export function GridCanvas({
                 style={{
                   position: 'absolute',
                   left: b.left * scale,
-                  top: b.top * scale,
+                  top: b.top * rowScale,
                   width: b.width * scale,
-                  height: b.height * scale,
+                  height: b.height * rowScale,
                   background: 'var(--hover-weak)',
                   outline: '1px solid var(--chunk-outline)',
                   outlineOffset: -1,
@@ -251,9 +287,9 @@ export function GridCanvas({
               style={{
                 position: 'absolute',
                 left: overlay.value.col * scale,
-                top: overlay.value.row * scale,
+                top: overlay.value.row * rowScale,
                 width: scale,
-                height: scale,
+                height: rowScale,
                 background: 'var(--hover-strong)',
                 pointerEvents: 'none',
               }}

@@ -45,6 +45,7 @@ export const colors = {
   // (PipelineStrip, ReadStatus, StagePane, TypeAssignConfig).
   success: 'var(--success)',
   error: 'var(--error)',
+  errorDim: 'var(--error-dim)',
 } as const;
 
 /**

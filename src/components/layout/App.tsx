@@ -1,14 +1,13 @@
 import { useRef, useState } from 'react';
 import { Panel, Group, Separator, useDefaultLayout } from 'react-resizable-panels';
 import type { PanelImperativeHandle } from 'react-resizable-panels';
-import type { Variable } from '../../types/state.ts';
-import type { CodecStep } from '../../types/codecs.ts';
 import { useAppState } from '../../state/useAppState.ts';
 import { useWorkerPipeline } from '../../hooks/useWorkerPipeline.ts';
 import { PipelineProvider, usePipelineContext } from '../../state/PipelineContext.tsx';
 import { colors, fonts, fontSizes } from '../../theme.ts';
 import { Header } from './Header.tsx';
 import { RuntimeBanner } from './RuntimeBanner.tsx';
+import { ComputeErrorBanner } from './ComputeErrorBanner.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { PipelineStrip } from './PipelineStrip.tsx';
 import { StagePane } from '../viewers/StagePane.tsx';
@@ -94,6 +93,18 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
     return <BootScreen error={bootError} />;
   }
 
+  // Stale-view consistency: while a newer state computes (or is refused by
+  // the hard cap), the panes keep showing `result` — so they must be laid out
+  // with the config that result was computed FROM, not the live state. Live
+  // state here would size grids/tables to a shape whose values don't exist
+  // yet (a committed-but-refused 2-billion-wide shape = frozen canvas).
+  const viewConfig = result.computedFrom ?? {
+    shape: state.shape,
+    chunkShape: state.chunkShape,
+    variables: state.variables,
+    interleaving: state.interleaving,
+  };
+
   function toggleSidebar() {
     if (sidebarRef.current?.isCollapsed()) {
       sidebarRef.current.expand();
@@ -158,12 +169,7 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
               overflow: 'hidden',
             }}
           >
-            <PipelineStripConnected
-              variables={state.variables}
-              fieldPipelines={state.fieldPipelines}
-              chunkPipeline={state.chunkPipeline}
-              interleaving={state.interleaving}
-            />
+            <PipelineStripConnected codecWarnings={result.codecWarnings} />
             <HoverBarConnected />
             <Group
               orientation="horizontal"
@@ -191,10 +197,10 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
                     dispatch({ type: 'UPDATE_UI', changes: { leftPaneView: view } })
                   }
                   accentColor={colors.paneAccentLeft}
-                  variables={state.variables}
-                  shape={state.shape}
-                  chunkShape={state.chunkShape}
-                  interleaving={state.interleaving}
+                  variables={viewConfig.variables}
+                  shape={viewConfig.shape}
+                  chunkShape={viewConfig.chunkShape}
+                  interleaving={viewConfig.interleaving}
                   collapsed={leftCollapsed}
                   onToggleCollapse={toggleLeftPane}
                 />
@@ -220,10 +226,10 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
                     dispatch({ type: 'UPDATE_UI', changes: { rightPaneView: view } })
                   }
                   accentColor={colors.paneAccentRight}
-                  variables={state.variables}
-                  shape={state.shape}
-                  chunkShape={state.chunkShape}
-                  interleaving={state.interleaving}
+                  variables={viewConfig.variables}
+                  shape={viewConfig.shape}
+                  chunkShape={viewConfig.chunkShape}
+                  interleaving={viewConfig.interleaving}
                   collapsed={rightCollapsed}
                   onToggleCollapse={toggleRightPane}
                 />
@@ -240,32 +246,20 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
  * keep taking plain props (easy to test in isolation) while `MainLayout`
  * no longer drills pipeline fields into them by hand.
  *
- * `PipelineStripConnected` additionally forwards the codec config (task 4.3,
- * UI-4) from `state` — `PipelineContext` only carries the *computed*
- * pipeline output, not the raw `fieldPipelines`/`chunkPipeline`/`interleaving`
- * config `stepWarnings` needs, so those four are passed as plain props
- * instead of being drilled through the context. */
-function PipelineStripConnected({
-  variables,
-  fieldPipelines,
-  chunkPipeline,
-  interleaving,
-}: {
-  variables: Variable[];
-  fieldPipelines: Record<string, CodecStep[]>;
-  chunkPipeline: CodecStep[];
-  interleaving: 'row' | 'column';
-}) {
+ * `PipelineStripConnected` additionally forwards `codecWarnings` (S1,
+ * overhaul-plan.md F1/F22): `PipelineContext` only carries the pipeline
+ * output that's identical for both StagePanes, so `codecWarnings` — which
+ * comes from the same `PipelineResult` as `stages` but isn't otherwise
+ * needed by anything under `PipelineProvider` — is passed as a plain prop
+ * from `MainLayout`'s `result` rather than being added to the context. */
+function PipelineStripConnected({ codecWarnings }: { codecWarnings: string[] }) {
   const { stages, readResult, variableStats, computing } = usePipelineContext();
   return (
     <PipelineStrip
       stages={stages}
       readResult={readResult}
       variableStats={variableStats}
-      variables={variables}
-      fieldPipelines={fieldPipelines}
-      chunkPipeline={chunkPipeline}
-      interleaving={interleaving}
+      codecWarnings={codecWarnings}
       computing={computing}
     />
   );
@@ -291,6 +285,11 @@ export function App() {
     <GuideProvider>
       <Header diagnostics={diagnostics} />
       <RuntimeBanner runtime={diagnostics.runtime} />
+      {/* F4: a mid-session ok:false must stay visible past the boot screen,
+       * which only ever sees the FIRST error (result stays null until the
+       * first success). Gated on result!==null so a boot-time failure keeps
+       * showing through BootScreen instead of doubling up here. */}
+      {result !== null && <ComputeErrorBanner diagnostics={diagnostics} />}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'row', overflow: 'hidden' }}>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <ErrorBoundary>

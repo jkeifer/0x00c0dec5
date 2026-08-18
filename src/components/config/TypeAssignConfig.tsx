@@ -3,7 +3,7 @@ import type { VariableStats } from '../../types/pipeline.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
 import { DTYPE_KEYS, DTYPE_REGISTRY, getDtype } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
-import { inputStyle } from '../shared/controlStyles.ts';
+import { inputStyle, clampParamValue } from '../shared/controlStyles.ts';
 import { NumberInput } from '../shared/NumberInput.tsx';
 
 interface TypeAssignConfigProps {
@@ -20,7 +20,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
       {variables.map((v) => {
-        const stats = variableStats.get(v.name);
+        const stats = variableStats.get(v.id);
         const outDtype = v.typeAssignment.storageDtype;
         const outInfo = getDtype(outDtype);
         const isIntStorage = !outInfo.float && !outInfo.char;
@@ -86,6 +86,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
                 <NumberInput
                   value={v.typeAssignment.scale ?? 1}
                   step={0.1}
+                  commitOnBlur
                   onValue={(n) => updateAssignment(v, { scale: n || 1 })}
                   style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                 />
@@ -93,6 +94,7 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
                 <NumberInput
                   value={v.typeAssignment.offset ?? 0}
                   step={1}
+                  commitOnBlur
                   onValue={(n) => updateAssignment(v, { offset: n })}
                   style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                 />
@@ -110,8 +112,13 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
                   value={v.typeAssignment.keepBits ?? ''}
                   placeholder="all"
                   onChange={(e) => {
-                    const val = parseInt(e.target.value);
-                    updateAssignment(v, { keepBits: isNaN(val) ? undefined : val });
+                    const raw = e.target.value;
+                    if (raw === '') {
+                      updateAssignment(v, { keepBits: undefined });
+                      return;
+                    }
+                    const maxBits = outDtype === 'float64' ? 52 : 23;
+                    updateAssignment(v, { keepBits: clampParamValue(raw, 1, maxBits, 1) });
                   }}
                   style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                 />

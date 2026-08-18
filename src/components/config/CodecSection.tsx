@@ -80,6 +80,9 @@ export function CodecSection({
     : variables.length > 0
       ? variables[0].typeAssignment.storageDtype
       : 'uint8';
+  const preservedFieldPipelineCount = Object.values(fieldPipelines).filter(
+    (steps) => steps.length > 0,
+  ).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
@@ -94,6 +97,8 @@ export function CodecSection({
         }}
       >
         Row mode: a single codec pipeline is applied to all interleaved data.
+        {preservedFieldPipelineCount > 0 &&
+          ` ${preservedFieldPipelineCount} per-field pipeline${preservedFieldPipelineCount === 1 ? '' : 's'} preserved, inactive in row mode.`}
       </div>
       {mixedDtypes && (
         <div

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { type Variable, type VariableSource, type LogicalTypeConfig, type LogicalType, type WordSetKey } from '../../types/state.ts';
 import { CURATED_VARIABLES, curatedVariable, DATASETS } from '../../datasets/registry.ts';
+import { HARD_ELEMENT_CAP } from '../../engine/pipelineCompute.ts';
 import { wordSetMaxLength } from '../../engine/generate.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
@@ -95,6 +96,7 @@ export function SchemaEditor({
             <NumberInput
               min={1}
               value={shape[0]}
+              commitOnBlur
               onValue={(n) => onShapeChange([Math.max(1, Math.trunc(n))])}
               data-testid="shape-input"
               style={{ ...inputStyle(), width: 60 }}
@@ -112,6 +114,7 @@ export function SchemaEditor({
                 <NumberInput
                   min={1}
                   value={dim}
+                  commitOnBlur
                   onValue={(n) => {
                     const newShape = [...shape];
                     newShape[d] = Math.max(1, Math.trunc(n));
@@ -155,22 +158,34 @@ export function SchemaEditor({
       {(() => {
         const totalElements = shape.reduce((a, b) => a * b, 1);
         const totalValues = totalElements * Math.max(variables.length, 1);
-        return totalValues > SOFT_ELEMENT_CAP ? (
+        if (totalValues <= SOFT_ELEMENT_CAP) return null;
+        const overHard = totalValues > HARD_ELEMENT_CAP;
+        return (
           <div
             data-testid="element-cap-warning"
             style={{
-              background: colors.warningDim,
-              borderLeft: `2px solid ${colors.warning}`,
+              background: overHard ? colors.errorDim : colors.warningDim,
+              borderLeft: `2px solid ${overHard ? colors.error : colors.warning}`,
               borderRadius: radii.sm,
               padding: spacing.xs,
               fontSize: fontSizes.xs,
-              color: colors.warning,
+              color: overHard ? colors.error : colors.warning,
             }}
           >
-            {totalValues.toLocaleString()} values — beyond the comfortable limit; recomputes
-            will be slow and memory-heavy. The app won't stop you.
+            {overHard ? (
+              <>
+                {totalValues.toLocaleString()} values — over the{' '}
+                {HARD_ELEMENT_CAP.toLocaleString()} hard limit. Recomputes are refused (the
+                view shows the last good state) until the shape or variable count shrinks.
+              </>
+            ) : (
+              <>
+                {totalValues.toLocaleString()} values — beyond the comfortable limit;
+                recomputes will be slow and memory-heavy. The app won't stop you.
+              </>
+            )}
           </div>
-        ) : null;
+        );
       })()}
 
       {/* Variable list */}
@@ -189,10 +204,6 @@ export function SchemaEditor({
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
           {variables.map((v, varIdx) => {
             const hasWarning = !v.name || duplicateNames.has(v.name);
-            // Curated rows lock the logicalType-family controls only (name/color
-            // stay editable). Drive the existing `rowLocked` disabled wiring
-            // from Boolean(v.source).
-            const rowLocked = Boolean(v.source);
             const catalog = v.source ? curatedVariable(v.source) : undefined;
             // For text, 'smooth' means drifting through the sorted word set
             // rather than a numeric random walk.
@@ -252,9 +263,10 @@ export function SchemaEditor({
                     </button>
                 </div>
 
-                {/* Source row: Custom (generated) or a curated variable,
-                    grouped by dataset. Selecting a source binds the row (locks
-                    logicalType); 'custom' clears it. */}
+                {/* Source row: Generated or a curated variable, grouped by
+                    dataset. Selecting a source binds the row (its logicalType
+                    becomes catalog-owned and its generation controls are
+                    hidden); 'custom' clears it. */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
                   <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>src</span>
                   <select
@@ -271,7 +283,7 @@ export function SchemaEditor({
                     data-testid={`variable-source-${varIdx}`}
                     style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer', flex: 1, minWidth: 0 }}
                   >
-                    <option value="custom">Custom (generated)</option>
+                    <option value="custom">Generated</option>
                     {curatedByDataset.map((g) => (
                       <optgroup key={g.label} label={g.label}>
                         {g.variables.map((c) => (
@@ -289,10 +301,15 @@ export function SchemaEditor({
                     style={{ fontSize: fontSizes.xs, color: colors.textTertiary, fontStyle: 'italic' }}
                   >
                     {catalog.attribution}
+                    {' · '}natural shape {catalog.naturalShape.join(' × ')} — tiles/crops to
+                    fit the shape above
                   </div>
                 )}
 
-                {/* Logical type + params row */}
+                {/* Logical type + generation params. Every control below only
+                    feeds generateValues, so a curated row (v.source set) hides
+                    the lot rather than showing dead, irrelevant inputs. */}
+                {!v.source && (<>
                 <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>
                   <select
                     value={v.logicalType.type}
@@ -325,7 +342,6 @@ export function SchemaEditor({
                         onUpdateVariable(v.id, { logicalType: base });
                       }
                     }}
-                    disabled={rowLocked}
                     style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
                   >
                     {LOGICAL_TYPES.map((lt) => (
@@ -339,7 +355,6 @@ export function SchemaEditor({
                       <select
                         value={v.logicalType.wordSet ?? 'names'}
                         onChange={(e) => updateLogicalType(v, { wordSet: e.target.value as WordSetKey })}
-                        disabled={rowLocked}
                         data-testid={`wordset-select-${varIdx}`}
                         style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
                       >
@@ -356,15 +371,15 @@ export function SchemaEditor({
                       <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>min</span>
                       <NumberInput
                         value={v.logicalType.min}
+                        commitOnBlur
                         onValue={(n) => updateLogicalType(v, { min: n })}
-                        disabled={rowLocked}
                         style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                       />
                       <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>max</span>
                       <NumberInput
                         value={v.logicalType.max}
+                        commitOnBlur
                         onValue={(n) => updateLogicalType(v, { max: n })}
-                        disabled={rowLocked}
                         style={{ ...inputStyle(fontSizes.xs), width: 55 }}
                       />
                     </>
@@ -377,8 +392,8 @@ export function SchemaEditor({
                         min={0}
                         max={10}
                         value={v.logicalType.decimalPlaces ?? 1}
+                        commitOnBlur
                         onValue={(n) => updateLogicalType(v, { decimalPlaces: Math.max(0, Math.trunc(n)) })}
-                        disabled={rowLocked}
                         style={{ ...inputStyle(fontSizes.xs), width: 40 }}
                       />
                     </>
@@ -391,8 +406,8 @@ export function SchemaEditor({
                         min={1}
                         max={15}
                         value={v.logicalType.significantFigures ?? 6}
+                        commitOnBlur
                         onValue={(n) => updateLogicalType(v, { significantFigures: Math.max(1, Math.trunc(n)) })}
-                        disabled={rowLocked}
                         style={{ ...inputStyle(fontSizes.xs), width: 40 }}
                       />
                     </>
@@ -407,7 +422,6 @@ export function SchemaEditor({
                     onChange={(e) =>
                       updateLogicalType(v, { generation: e.target.value as LogicalTypeConfig['generation'] })
                     }
-                    disabled={rowLocked}
                     data-testid={`generation-mode-${varIdx}`}
                     title={genDesc}
                     style={{ ...inputStyle(fontSizes.xs), cursor: 'pointer' }}
@@ -431,6 +445,7 @@ export function SchemaEditor({
                     {genDesc}
                   </span>
                 </div>
+                </>)}
               </div>
             );
           })}

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo } from 'react';
+import { useRef, useEffect, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { PipelineStage } from '../../types/pipeline.ts';
 import { useHover } from '../../hooks/useHover.ts';
@@ -6,6 +6,7 @@ import { chunkIdForElement, type ValueSources } from '../../engine/layout.ts';
 import { flatGroupCount, flatGroupAt, flatGroupIndexOf, byteToHex, scrollToIndexCentered } from './viewerUtils.ts';
 import { hoverHighlightFor } from './hoverHighlight.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
+import { WINDOWED_SECTION_ROWS, WINDOW_ROWS, clampWindowStart } from './useHexData.ts';
 
 interface FlatViewProps {
   stage: PipelineStage;
@@ -40,8 +41,19 @@ export function FlatView({ stage, sources, paneId, chunkShape, interleaving }: F
   const layout = stage.layout;
   const groupCount = useMemo(() => flatGroupCount(layout), [layout]);
 
+  // F9: above WINDOWED_SECTION_ROWS groups, virtualizing all of them makes a
+  // scroll track tall enough to hit Firefox's ~17.9M px element-height cap
+  // (same failure HexView's windowing avoids — see useHexData.ts). Mirror
+  // that fix here: bound the virtualizer to a WINDOW_ROWS-sized slice of
+  // groups and remap virtual row indices to real group indices by adding
+  // `windowStart`.
+  const windowed = groupCount > WINDOWED_SECTION_ROWS;
+  const [windowStart, setWindowStart] = useState(0);
+  const clampedWindowStart = windowed ? clampWindowStart(windowStart, groupCount) : 0;
+  const visibleCount = windowed ? Math.min(WINDOW_ROWS, groupCount - clampedWindowStart) : groupCount;
+
   const virtualizer = useVirtualizer({
-    count: groupCount,
+    count: visibleCount,
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 10,
@@ -49,6 +61,22 @@ export function FlatView({ stage, sources, paneId, chunkShape, interleaving }: F
 
   const virtualizerRef = useRef(virtualizer);
   virtualizerRef.current = virtualizer;
+
+  // Cross-pane hover into a group outside the current window: change the
+  // window first, then scroll once the new window's virtualizer reflects it
+  // (next render) — same two-phase pendingScrollRow pattern as HexView's
+  // HexSectionView (useHexData.ts's windowing).
+  const pendingScrollGroup = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (pendingScrollGroup.current === null) return;
+    const target = pendingScrollGroup.current;
+    pendingScrollGroup.current = null;
+    if (target >= clampedWindowStart && target < clampedWindowStart + visibleCount) {
+      scrollToIndexCentered(virtualizerRef.current, target - clampedWindowStart);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fires once per windowStart landing, not per visibleCount/groupCount change
+  }, [clampedWindowStart]);
 
   // Scroll to hovered trace from other pane — falls back to the chunkId when
   // the exact traceId has no bytes in this stage (e.g. a chunk-level hover
@@ -60,9 +88,15 @@ export function FlatView({ stage, sources, paneId, chunkShape, interleaving }: F
         groupIdx = flatGroupIndexOf(layout, hoveredChunkId);
       }
       if (groupIdx !== undefined) {
-        scrollToIndexCentered(virtualizerRef.current, groupIdx);
+        if (windowed && (groupIdx < clampedWindowStart || groupIdx >= clampedWindowStart + visibleCount)) {
+          pendingScrollGroup.current = groupIdx;
+          setWindowStart(clampWindowStart(groupIdx - WINDOW_ROWS / 2, groupCount));
+          return;
+        }
+        scrollToIndexCentered(virtualizerRef.current, groupIdx - clampedWindowStart);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- clampedWindowStart/visibleCount/windowed/groupCount are derived from groupCount+windowStart, not independent triggers
   }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, layout]);
 
   return (
@@ -86,8 +120,9 @@ export function FlatView({ stage, sources, paneId, chunkShape, interleaving }: F
         }}
       >
         {virtualizer.getVirtualItems().map((virtualRow) => {
-          const group = flatGroupAt(layout, stage.bytes, sources, virtualRow.index);
-          const prevGroup = virtualRow.index > 0 ? flatGroupAt(layout, stage.bytes, sources, virtualRow.index - 1) : null;
+          const groupIndex = clampedWindowStart + virtualRow.index;
+          const group = flatGroupAt(layout, stage.bytes, sources, groupIndex);
+          const prevGroup = groupIndex > 0 ? flatGroupAt(layout, stage.bytes, sources, groupIndex - 1) : null;
           const showBoundary = prevGroup !== null && prevGroup.chunkId !== group.chunkId;
 
           // UI-2 fix (remediation-plan.md task 4.2): Values/Typed/Read stage

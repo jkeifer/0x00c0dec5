@@ -13,7 +13,7 @@ import { ReadStatus } from '../config/ReadStatus.tsx';
 import { FileExplorer } from '../files/FileExplorer.tsx';
 import { colors, fontSizes, radii, spacing, collapseButtonStyle } from '../../theme.ts';
 
-const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Type Assignment', 'Codecs', 'Metadata', 'Write', 'Read'] as const;
+const SECTIONS = ['Schema', 'Type Assignment', 'Chunk', 'Interleave', 'Codecs', 'Metadata', 'Write', 'Read'] as const;
 
 // CLAUDE.md's "Data-testid conventions" enumerates: schema, chunk, interleave, codecs,
 // metadata, write, read. "Type Assignment" is a section that postdates that list (see
@@ -21,9 +21,9 @@ const SECTIONS = ['Schema', 'Chunk', 'Interleave', 'Type Assignment', 'Codecs', 
 // slug ("typing") rather than reusing "codecs", since reusing an id would break uniqueness.
 const SECTION_TESTIDS: Record<(typeof SECTIONS)[number], string> = {
   Schema: 'schema',
+  'Type Assignment': 'typing',
   Chunk: 'chunk',
   Interleave: 'interleave',
-  'Type Assignment': 'typing',
   Codecs: 'codecs',
   Metadata: 'metadata',
   Write: 'write',
@@ -100,6 +100,16 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
             onShapeChange={(shape) => dispatch({ type: 'SET_SHAPE', shape })}
           />
         );
+      case 'Type Assignment':
+        return (
+          <TypeAssignConfig
+            variables={state.variables}
+            variableStats={variableStats}
+            onUpdateVariable={(id, changes) =>
+              dispatch({ type: 'UPDATE_VARIABLE', id, changes })
+            }
+          />
+        );
       case 'Chunk':
         return (
           <ChunkConfig
@@ -126,16 +136,6 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
             dataModel={state.dataModel}
             onChange={(interleaving) =>
               dispatch({ type: 'SET_INTERLEAVING', interleaving })
-            }
-          />
-        );
-      case 'Type Assignment':
-        return (
-          <TypeAssignConfig
-            variables={state.variables}
-            variableStats={variableStats}
-            onUpdateVariable={(id, changes) =>
-              dispatch({ type: 'UPDATE_VARIABLE', id, changes })
             }
           />
         );

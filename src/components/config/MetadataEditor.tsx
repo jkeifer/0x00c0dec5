@@ -3,6 +3,7 @@ import type { AppState } from '../../types/state.ts';
 import type { MetadataIncludeConfig } from '../../types/state.ts';
 import { collectMetadata, serializeMetadata, dedupeCustomKey, type ChunkIndexEntry } from '../../engine/metadata.ts';
 import { computeChunkGrid, enumerateChunkCoords } from '../../engine/chunk.ts';
+import { pipelineCapError } from '../../engine/pipelineCompute.ts';
 import { Radio } from '../shared/Radio.tsx';
 import { colors, fontSizes, spacing } from '../../theme.ts';
 import { inputStyle } from '../shared/controlStyles.ts';
@@ -43,6 +44,11 @@ const INCLUDE_GROUPS: { key: keyof MetadataIncludeConfig; testid: string; label:
  * count Write will embed.
  */
 function buildPlaceholderChunkIndex(state: AppState): ChunkIndexEntry[] {
+  // Same hard cap as the compute entries: this preview materializes one entry
+  // per chunk ON THE MAIN THREAD, so a refused-by-the-worker state (e.g. a
+  // committed 2-billion-element shape) must not enumerate millions of coords
+  // here either — that froze the tab before the worker even saw the state.
+  if (pipelineCapError(state) !== null) return [];
   const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
   const coordsList = enumerateChunkCoords(chunkGrid);
   const variableNames = state.interleaving === 'column' ? state.variables.map((v) => v.name) : [undefined];

@@ -53,6 +53,7 @@ export function ChunkConfig({
             min={1}
             max={shape[d]}
             value={cs}
+            commitOnBlur
             onValue={(n) => {
               const newChunkShape = [...chunkShape];
               newChunkShape[d] = Math.max(1, Math.min(shape[d], Math.trunc(n)));

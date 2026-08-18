@@ -1,6 +1,7 @@
 import { Component } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import { colors, fonts, fontSizes, radii, spacing } from '../../theme.ts';
+import { STORAGE_KEYS } from '../../state/persistence.ts';
 
 interface ErrorBoundaryProps {
   children: ReactNode;
@@ -10,7 +11,7 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
-const RESET_STORAGE_KEYS = ['0x00c0dec5-state-tabular', '0x00c0dec5-state-array'];
+const RESET_STORAGE_KEYS = Object.values(STORAGE_KEYS);
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { error: null };

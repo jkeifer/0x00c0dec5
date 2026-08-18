@@ -83,6 +83,7 @@ export function Header({ diagnostics }: HeaderProps = {}) {
   const { open: guideOpen, toggleOpen: toggleGuide } = useGuide();
   const [checkpointLabel, setCheckpointLabel] = useState('Save checkpoint');
   const [canRestore, setCanRestore] = useState(() => hasCheckpoint());
+  const [restoreLabel, setRestoreLabel] = useState('Restore');
   const [shareLabel, setShareLabel] = useState('Share');
   const [aboutOpen, setAboutOpen] = useState(false);
   // Local label state only — the theme itself lives in CSS vars keyed off
@@ -104,7 +105,15 @@ export function Header({ diagnostics }: HeaderProps = {}) {
   }
 
   function handleRestoreCheckpoint() {
-    restoreCheckpoint();
+    const restored = restoreCheckpoint();
+    if (!restored) {
+      // F6: the checkpoint existed (button was enabled) but failed
+      // validation on load — say so instead of silently no-oping, mirroring
+      // the checkpointLabel/shareLabel timed-message pattern.
+      setCanRestore(false);
+      setRestoreLabel('Restore failed');
+      setTimeout(() => setRestoreLabel('Restore'), 1200);
+    }
   }
 
   function handleClearConfig() {
@@ -215,7 +224,7 @@ export function Header({ diagnostics }: HeaderProps = {}) {
             cursor: canRestore ? 'pointer' : 'default',
           }}
         >
-          Restore
+          {restoreLabel}
         </button>
         <button
           type="button"

@@ -3,7 +3,7 @@ import type { DtypeKey } from '../../types/dtypes.ts';
 import { CODEC_REGISTRY, outputDtypeFor, stepWarnings } from '../../engine/codecs.ts';
 import { DTYPE_REGISTRY, getDtype } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
-import { inputStyle } from '../shared/controlStyles.ts';
+import { inputStyle, clampParamValue } from '../shared/controlStyles.ts';
 import { NumberInput } from '../shared/NumberInput.tsx';
 
 interface CodecPipelineEditorProps {
@@ -39,27 +39,15 @@ function computeRunningDtypes(steps: CodecStep[], inputDtype: DtypeKey): DtypeKe
   let dtype = inputDtype;
   for (const step of steps) {
     const codec = CODEC_REGISTRY[step.codec];
-    if (codec) {
+    // F31: a disabled step is a pass-through in the dtype flow — its output
+    // dtype must not affect the next step's input (CLAUDE.md pitfall 3). We
+    // still push an entry per step index so the display stays index-aligned.
+    if (codec && step.enabled !== false) {
       dtype = outputDtypeFor(codec, dtype);
     }
     dtypes.push(dtype);
   }
   return dtypes;
-}
-
-/**
- * UI-15: number param inputs used `parseFloat(v) || 0`, so clearing the
- * field (or typing something non-numeric mid-edit) set the param to 0 even
- * when the param's `min` is 1 (e.g. delta's `order`) — an out-of-range value
- * silently reached the pipeline. Clamp into [min, max] instead, falling back
- * to `min` (if set) or the param's own default when the input doesn't parse.
- */
-function clampParamValue(raw: string, min: number | undefined, max: number | undefined, fallback: number): number {
-  const parsed = parseFloat(raw);
-  let value = Number.isNaN(parsed) ? fallback : parsed;
-  if (min !== undefined && value < min) value = min;
-  if (max !== undefined && value > max) value = max;
-  return value;
 }
 
 const codecEntries = Object.values(CODEC_REGISTRY);
@@ -82,6 +70,15 @@ export function CodecPipelineEditor({
     onChange(steps.filter((_, i) => i !== index));
   }
 
+  function toggleStep(index: number) {
+    // F31: absent enabled = enabled, so the first toggle writes `false`; the
+    // next writes `true` (not `undefined`) — explicit re-enable reads cleanly.
+    const newSteps = steps.map((s, i) =>
+      i === index ? { ...s, enabled: s.enabled === false } : s,
+    );
+    onChange(newSteps);
+  }
+
   function updateParam(index: number, paramKey: string, value: number | string) {
     const newSteps = steps.map((s, i) => {
       if (i !== index) return s;
@@ -97,12 +94,24 @@ export function CodecPipelineEditor({
     for (const [k, def] of Object.entries(codec.params)) {
       defaultParams[k] = def.default;
     }
-    // SW-7: auto-default Byte Shuffle's elementSize to the *input* dtype's
-    // size at add time, rather than the codec's static default (4) — a step
-    // added after, say, an int16 variable should start out matching the
-    // element boundary instead of immediately showing a mismatch warning.
-    if (codecKey === 'byte-shuffle') {
-      defaultParams.elementSize = getDtype(inputDtype).size;
+    // SW-7: seed any `elementSize` param from the dtype size at add time rather
+    // than the codec's static default (4) — a step added after, say, an int16
+    // variable should start out matching the element boundary instead of
+    // immediately showing a mismatch warning. Byte Shuffle and Delta both have
+    // one and it means the same thing in both: where elements begin.
+    //
+    // Seed from the running dtype at this point in the pipeline, not the
+    // variable's own: an earlier entropy codec or shuffle makes the stream
+    // uint8, and uint8 is one byte — which is the right element size for bytes
+    // that no longer have elements in them. That falls out of `outputDtypeFor`
+    // now that it degrades on `traceMode`; it needed a separate traceMode check
+    // back when a shuffle still claimed to emit its pre-shuffle dtype.
+    if ('elementSize' in codec.params) {
+      // Computed here rather than read off the component-level `runningDtypes`:
+      // that const lives past the empty-pipeline early return, so the first
+      // codec you ever add would hit its temporal dead zone.
+      const running = computeRunningDtypes(steps, inputDtype)[steps.length];
+      defaultParams.elementSize = getDtype(running).size;
     }
     onChange([...steps, { codec: codecKey, params: defaultParams }]);
   }
@@ -126,6 +135,7 @@ export function CodecPipelineEditor({
         const codec = CODEC_REGISTRY[step.codec];
         if (!codec) return null;
 
+        const enabled = step.enabled !== false;
         const prevDtype = runningDtypes[i];
         const currentDtype = runningDtypes[i + 1];
         // Task 4.3 (UI-4, SW-7): `stepWarnings` is the single source of truth
@@ -148,6 +158,7 @@ export function CodecPipelineEditor({
               display: 'flex',
               flexDirection: 'column',
               gap: spacing.xs,
+              opacity: enabled ? 1 : 0.45,
             }}
           >
             {/* Header row */}
@@ -170,7 +181,7 @@ export function CodecPipelineEditor({
                 {codec.label}
               </span>
               <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
-                {DTYPE_REGISTRY[currentDtype]?.label ?? currentDtype}
+                →{DTYPE_REGISTRY[currentDtype]?.label ?? currentDtype}
               </span>
               <button
                 onClick={() => moveStep(i, -1)}
@@ -187,6 +198,16 @@ export function CodecPipelineEditor({
                 style={{ ...btnStyle, opacity: i === steps.length - 1 ? 0.3 : 1 }}
               >
                 v
+              </button>
+              <button
+                onClick={() => toggleStep(i)}
+                data-testid={`codec-enabled-${variableSlot}-${i}`}
+                aria-label={`${enabled ? 'Disable' : 'Enable'} ${codec.label}`}
+                aria-pressed={enabled}
+                title={enabled ? 'Disable this step (kept, but skipped)' : 'Enable this step'}
+                style={{ ...btnStyle, color: enabled ? colors.accent : colors.textTertiary }}
+              >
+                {enabled ? '⏻' : '○'}
               </button>
               <button onClick={() => removeStep(i)} aria-label={`Remove ${codec.label}`} style={btnStyle}>
                 x

@@ -3,9 +3,9 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import type { Variable } from '../../types/state.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
 import { formatValue, formatLogicalValue } from '../../engine/elements.ts';
-import { flatIndexToCoords } from '../../engine/chunk.ts';
+import { flatIndexToCoords, coordsToFlatIndex } from '../../engine/chunk.ts';
 import { makeTraceId, parseTraceId } from '../../engine/trace.ts';
-import { elementInChunk, chunkIdForElement, type ValueArray } from '../../engine/layout.ts';
+import { chunkOriginForChunkId, chunkIdForElement, type ValueArray } from '../../engine/layout.ts';
 import { hoverHighlightFor } from './hoverHighlight.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
@@ -111,10 +111,10 @@ export function TableView({ variables, shape, paneId, values, chunkShape, interl
   }, [shape]);
 
   // Scroll to hovered trace from other pane (value-level or chunk-level).
-  // Chunk-level fallback: find the first (variable, row) pair that belongs to
-  // the hovered chunk via elementInChunk — replaces the old chunkTraceMap
-  // membership Set with the same pure-math check TableView's cell rendering
-  // uses below.
+  // Chunk-level fallback (F10): parse the chunkId directly into its origin
+  // element's coords via chunkOriginForChunkId (chunkIdForElement's inverse)
+  // instead of scanning every (variable, row) pair with elementInChunk — at
+  // 144,769 rows × 5 vars that scan was ~724K calls per mouseenter.
   const hoveredRowIndex = useMemo(() => {
     if (hoverSource === paneId) return null;
     // Try exact traceId first
@@ -122,14 +122,11 @@ export function TableView({ variables, shape, paneId, values, chunkShape, interl
       const idx = traceIdToRowIndex(hoveredTraceId);
       if (idx !== null) return idx;
     }
-    // Fall back to chunk-level: find the first row belonging to the chunk.
+    // Fall back to chunk-level: compute the chunk's origin row directly.
     if (hoveredChunkId) {
-      for (const col of columns) {
-        for (let row = 0; row < col.values.length; row++) {
-          const coords = flatIndexToCoords(row, shape);
-          if (elementInChunk(hoveredChunkId, col.variable.name, coords, chunkShape)) return row;
-        }
-      }
+      const variableNames = columns.map((col) => col.variable.name);
+      const origin = chunkOriginForChunkId(hoveredChunkId, chunkShape, variableNames);
+      if (origin) return coordsToFlatIndex(origin, shape);
     }
     return null;
   }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, traceIdToRowIndex, columns, shape, chunkShape]);

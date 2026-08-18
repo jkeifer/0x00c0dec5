@@ -24,6 +24,7 @@
   --warning-dim: #d19a6615;
   --success: #98c379;
   --error: #e06c75;
+  --error-dim: #e06c7515;
 
   --pane-accent-left: #58a6ff;
   --pane-accent-right: #d19a66;
@@ -78,6 +79,7 @@
 
   --warning: #9a6700;
   --warning-dim: rgba(154, 103, 0, 0.08);
+  --error-dim: rgba(207, 34, 46, 0.08);
   --success: #1a7f37;
   --error: #cf222e;
 

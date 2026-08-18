@@ -1,10 +1,6 @@
 import { colors, fontSizes, spacing, radii } from '../../theme.ts';
 import type { PipelineStage, ReadFileResult, VariableStats } from '../../types/pipeline.ts';
-import type { Variable } from '../../types/state.ts';
-import type { CodecStep } from '../../types/codecs.ts';
-import type { DtypeKey } from '../../types/dtypes.ts';
 import { formatByteCount } from '../../engine/bytes.ts';
-import { stepWarnings } from '../../engine/codecs.ts';
 
 function formatEntropy(entropy: number): string {
   return `${entropy.toFixed(2)} b/B`;
@@ -15,68 +11,29 @@ interface PipelineStripProps {
   readResult: ReadFileResult;
   variableStats: Map<string, VariableStats>;
   /**
-   * Task 4.3 (UI-4): codec pipeline config, needed to compute the Encoded
-   * stage's warning icon via `stepWarnings` (the same helper
-   * `CodecPipelineEditor` uses for its per-step ⚠). All four are optional so
-   * existing callers/tests that only care about stage stats keep working —
-   * the warning icon simply doesn't render without them.
+   * S1 (overhaul-plan.md F1/F22): warnings for the Encoded stage's ⚠ icon,
+   * computed in the worker (pipelineCompute.ts's computeEncodedStage) against
+   * the SAME config the shown Encoded stage's bytes came from — replaces the
+   * old live-`state.*`-vs-stale-stats zip this component used to do itself.
+   * Optional so existing callers/tests that only care about stage stats keep
+   * working — the warning icon simply doesn't render without it.
    */
-  variables?: Variable[];
-  fieldPipelines?: Record<string, CodecStep[]>;
-  chunkPipeline?: CodecStep[];
-  interleaving?: 'row' | 'column';
+  codecWarnings?: string[];
   /** Task 13 (perf plan): true while the worker is computing a newer state.
    *  Optional so existing callers/tests that don't care about the indicator
    *  keep working — it simply doesn't render without it. */
   computing?: boolean;
 }
 
-/**
- * Mirrors `CodecSection`'s per-mode dtype/pipeline resolution (the same rules
- * that decide which editor a variable sees) to collect every warning that
- * would show a ⚠ somewhere in the codec section, for the Encoded stage's
- * strip-level icon (design.md: "The same warning icon appears on the
- * corresponding node in the pipeline strip").
- */
-function collectEncodedWarnings(
-  variables: Variable[],
-  fieldPipelines: Record<string, CodecStep[]>,
-  chunkPipeline: CodecStep[],
-  interleaving: 'row' | 'column',
-): string[] {
-  if (interleaving === 'column') {
-    return variables.flatMap((v) =>
-      stepWarnings(fieldPipelines[v.id] ?? [], v.typeAssignment.storageDtype),
-    );
-  }
-
-  const dtypes = variables.map((v) => v.typeAssignment.storageDtype);
-  const mixedDtypes = new Set(dtypes).size > 1;
-  const inputDtype: DtypeKey = mixedDtypes
-    ? 'uint8'
-    : variables.length > 0
-      ? variables[0].typeAssignment.storageDtype
-      : 'uint8';
-  return stepWarnings(chunkPipeline, inputDtype);
-}
-
 export function PipelineStrip({
   stages,
   readResult,
   variableStats,
-  variables,
-  fieldPipelines,
-  chunkPipeline,
-  interleaving,
+  codecWarnings = [],
   computing,
 }: PipelineStripProps) {
   // Check if any variable has lossy type assignment
   const hasLossyTyping = Array.from(variableStats.values()).some((s) => s.isLossy);
-
-  const codecWarnings =
-    variables && fieldPipelines && chunkPipeline && interleaving
-      ? collectEncodedWarnings(variables, fieldPipelines, chunkPipeline, interleaving)
-      : [];
 
   return (
     <div
