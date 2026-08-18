@@ -15,7 +15,7 @@ import type { CodecStep } from '../types/codecs.ts';
 import { loadState, saveState, loadActiveModel, saveActiveModel } from './persistence.ts';
 import { type PresetKey, resolvePreset, saveCustomPreset, loadCustomPreset } from './presets.ts';
 import { consumeShareHash, loadCheckpoint } from './share.ts';
-import { curatedVariable } from '../datasets/registry.ts';
+import { curatedVariable, DATASET_SEED_ENTRIES } from '../datasets/registry.ts';
 
 export type AppAction =
   // SET_DATA_MODEL only sets `state.dataModel` — it is intentionally pure
@@ -129,6 +129,13 @@ export function reducer(state: AppState, action: AppAction): AppState {
               v.typeAssignment = catalog.kind === 'number'
                 ? { storageDtype: catalog.dtype! }
                 : { storageDtype: 'char16' };
+              // Seed dataset-level metadata (attribution/spatial/units) as plain custom
+              // entries — visible, editable, deletable; never clobbers an existing key.
+              for (const seed of DATASET_SEED_ENTRIES[action.changes.source.datasetId] ?? []) {
+                if (!draft.metadata.customEntries.some((e) => e.key === seed.key)) {
+                  draft.metadata.customEntries.push({ ...seed });
+                }
+              }
             }
           }
         }

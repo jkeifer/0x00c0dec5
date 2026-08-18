@@ -57,6 +57,18 @@
       {
         "key": "license",
         "value": "U.S. Government work — public domain"
+      },
+      {
+        "key": "crs",
+        "value": "EPSG:4326"
+      },
+      {
+        "key": "bbox",
+        "value": "[75, 20, 92.05, 37.05]"
+      },
+      {
+        "key": "transform",
+        "value": "[75, 0.0166667, 0, 37.05, 0, -0.0166667]"
       }
     ],
     "serialization": "binary",

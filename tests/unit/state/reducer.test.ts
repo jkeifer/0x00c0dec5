@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { reducer } from '../../../src/state/useAppState.ts';
 import { DEFAULT_STATE, type AppState, type Variable } from '../../../src/types/state.ts';
 import type { CodecStep } from '../../../src/types/codecs.ts';
+import { DATASET_SEED_ENTRIES } from '../../../src/datasets/registry.ts';
 
 /** Minimal Map-backed localStorage mock — the vitest node environment has no localStorage.
  * (Mirrors the mock in persistence.test.ts — SET_DATA_MODEL calls saveState/loadState
@@ -274,6 +275,59 @@ describe('UPDATE_VARIABLE', () => {
     });
     expect(result.variables[0].name).toBe('renamed');
     expect(result.variables[0].source).toEqual({ datasetId: 'etopo-dem', variableName: 'elevation' });
+  });
+
+  it('binding a curated source seeds attribution + spatial custom entries', () => {
+    const v = makeVariable({ id: 'v1', name: 'elevation' });
+    const state = makeState({ dataModel: 'array', variables: [v], fieldPipelines: { v1: [] } });
+    const result = reducer(state, {
+      type: 'UPDATE_VARIABLE',
+      id: 'v1',
+      changes: { source: { datasetId: 'etopo-dem', variableName: 'elevation' } },
+    });
+    for (const seed of DATASET_SEED_ENTRIES['etopo-dem']) {
+      expect(result.metadata.customEntries).toContainEqual(seed);
+    }
+  });
+
+  it('seeding never clobbers an existing key and is idempotent', () => {
+    const v = makeVariable({ id: 'v1', name: 'elevation' });
+    const state = makeState({
+      dataModel: 'array',
+      variables: [v],
+      fieldPipelines: { v1: [] },
+      metadata: { ...DEFAULT_STATE.metadata, customEntries: [{ key: 'crs', value: 'EPSG:9999' }] },
+    });
+    const once = reducer(state, {
+      type: 'UPDATE_VARIABLE',
+      id: 'v1',
+      changes: { source: { datasetId: 'etopo-dem', variableName: 'elevation' } },
+    });
+    expect(once.metadata.customEntries.filter((e) => e.key === 'crs')).toEqual([
+      { key: 'crs', value: 'EPSG:9999' },
+    ]);
+    const twice = reducer(once, {
+      type: 'UPDATE_VARIABLE',
+      id: 'v1',
+      changes: { source: { datasetId: 'etopo-dem', variableName: 'elevation' } },
+    });
+    expect(twice.metadata.customEntries).toEqual(once.metadata.customEntries);
+  });
+
+  it('clearing a source keeps seeded entries', () => {
+    const v = makeVariable({ id: 'v1', name: 'elevation' });
+    const state = makeState({ dataModel: 'array', variables: [v], fieldPipelines: { v1: [] } });
+    const bound = reducer(state, {
+      type: 'UPDATE_VARIABLE',
+      id: 'v1',
+      changes: { source: { datasetId: 'etopo-dem', variableName: 'elevation' } },
+    });
+    const cleared = reducer(bound, {
+      type: 'UPDATE_VARIABLE',
+      id: 'v1',
+      changes: { source: null },
+    });
+    expect(cleared.metadata.customEntries).toEqual(bound.metadata.customEntries);
   });
 
   // Fixed by Phase 3.1 (D5, id-keyed pipelines) — was `it.fails` under SW-1.

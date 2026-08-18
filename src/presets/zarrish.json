@@ -64,6 +64,18 @@
       {
         "key": "license",
         "value": "Open data — NASA JPL PO.DAAC"
+      },
+      {
+        "key": "crs",
+        "value": "EPSG:4326"
+      },
+      {
+        "key": "bbox",
+        "value": "[-150, -5, -139.77, 5.23]"
+      },
+      {
+        "key": "transform",
+        "value": "[-150, 0.01, 0, 5.23, 0, -0.01]"
       }
     ],
     "serialization": "json",
