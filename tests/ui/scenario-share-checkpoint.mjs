@@ -22,7 +22,7 @@ const h = createHarness('scenario-share-checkpoint');
 async function setShape(page, value) {
   const input = page.locator('[data-testid="shape-input"]');
   await input.fill(String(value));
-  await input.dispatchEvent('change');
+  await input.blur(); // shape inputs commit on blur, not per keystroke
   await page.waitForTimeout(150);
 }
 

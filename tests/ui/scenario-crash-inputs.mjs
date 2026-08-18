@@ -82,7 +82,7 @@ async function main() {
       fieldPipelines: {
         a: [
           { codec: 'scale-offset', params: {} },
-          { codec: 'delta', params: { order: 1 } },
+          { codec: 'delta', params: {} },
         ],
       },
       chunkPipeline: [],
@@ -215,6 +215,36 @@ async function main() {
       'chunkShape [0] seed does not hang navigation and clamps to a valid (nonzero) grid',
       navErr === null && rendered && !boundary && chunkClamped,
       `navErr=${navErr} rendered=${rendered} boundary=${boundary} chunkGridMatch=${chunkGridMatch ? chunkGridMatch[0] : 'none'}`,
+    );
+    await page.context().close();
+  }
+
+  // ── Over-HARD_ELEMENT_CAP seed (F29): a persisted shape whose total values
+  // exceed pipelineCompute.ts's HARD_ELEMENT_CAP (32,000,000). The old
+  // crash-loop bug let an oversized shape get persisted mid-typing, then
+  // every reload crashed until storage was cleared by hand. persistence.ts's
+  // migrateState now runs pipelineCapError against the seed and drops the
+  // whole save to defaults rather than loading it (see the comment at
+  // persistence.ts's shape/pipelineCapError check) — so a fresh load
+  // recovers to the same starter-variable defaults as the garbage-fields
+  // case above, never reaching a worker compute that could throw.
+  {
+    const { page, issues } = await newContext(browser, { fresh: true });
+    await seedStateAndReload(page, {
+      '0x00c0dec5-state-tabular': { shape: [40_000_000] },
+    });
+    await page.waitForTimeout(1200);
+    await shot(page, 'crash-inputs-over-hard-cap');
+    const rendered = await bodyRendered(page);
+    const boundary = await boundaryShown(page);
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const starterVars = ['temperature', 'pressure', 'humidity'].every((n) => bodyText.includes(n));
+    const shapeValue = await page.locator('[data-testid="shape-input"]').inputValue().catch(() => null);
+
+    h.check(
+      'over-HARD_ELEMENT_CAP seed falls back to defaults without crashing',
+      rendered && !boundary && starterVars && shapeValue === '32',
+      `rendered=${rendered} boundary=${boundary} starters=${starterVars} shapeValue=${shapeValue} pageerrors=${issues.pageerror.length}`,
     );
     await page.context().close();
   }

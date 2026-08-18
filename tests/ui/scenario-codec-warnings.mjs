@@ -1,8 +1,11 @@
 // Regression scenario: codec applicability warnings (task 4.3, UI-4/SW-7).
 //
 // Verifies:
-//  1. Adding delta to a float32 variable (temperature) shows a ⚠ in the
-//     CodecPipelineEditor step AND in the PipelineStrip's Encoded stage node.
+//  1. Adding delta to a float32 variable (temperature) shows NO ⚠ — by
+//     design (see docs/design.md's Codec Pipeline table and F12 in
+//     docs/overhaul-plan.md): Delta is plain modular integer arithmetic,
+//     exact on every dtype, so `applicableTo` is `() => true` and there is
+//     no float-specific advisory in `stepWarnings` (src/engine/codecs.ts).
 //  2. Adding byte-shuffle with an elementSize that doesn't match the input
 //     dtype's size shows a ⚠ with the "element size doesn't match" message.
 //  3. Adding delta to humidity (uint16 — integer dtype, exact/lossless) shows
@@ -59,35 +62,16 @@ async function main() {
   await openSidebarSection(page, 'codecs');
   await shot(page, 'codec-warnings-00-initial-codecs-section');
 
-  // ── 1. Delta on temperature (float32) — should warn ──
+  // ── 1. Delta on temperature (float32) — no warning by design (F12) ──
   await addCodec(page, 'temperature', 'Delta');
   await page.waitForTimeout(200);
 
   const tempWarningIcon = page.locator('[data-testid="codec-warning-temperature-0"]');
   const tempWarningVisible = await tempWarningIcon.count();
-  h.check('editor: delta on temperature (float32) shows ⚠', tempWarningVisible > 0);
-
-  let tempWarningTitle = '';
-  if (tempWarningVisible > 0) {
-    tempWarningTitle = (await tempWarningIcon.getAttribute('title')) || '';
-  }
-  h.check(
-    'editor: temperature ⚠ tooltip mentions lossy',
-    /lossy/i.test(tempWarningTitle),
-    tempWarningTitle,
-  );
+  h.check('editor: delta on temperature (float32) shows no ⚠ (by design)', tempWarningVisible === 0);
 
   const stripWarningAfterTemp = await page.locator('[data-testid="pipeline-stage-encoded-warning"]').count();
-  h.check('strip: Encoded stage shows ⚠ after delta-on-temperature', stripWarningAfterTemp > 0);
-  let stripTitleAfterTemp = '';
-  if (stripWarningAfterTemp > 0) {
-    stripTitleAfterTemp = (await page.locator('[data-testid="pipeline-stage-encoded-warning"]').getAttribute('title')) || '';
-  }
-  h.check(
-    'strip: Encoded ⚠ tooltip mentions lossy',
-    /lossy/i.test(stripTitleAfterTemp),
-    stripTitleAfterTemp,
-  );
+  h.check('strip: Encoded stage shows no ⚠ after delta-on-temperature (by design)', stripWarningAfterTemp === 0);
 
   await shot(page, 'codec-warnings-01-delta-temperature');
 

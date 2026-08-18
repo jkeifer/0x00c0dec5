@@ -124,11 +124,11 @@ async function main() {
   await waitForPipelineIdle(page, 30_000);
 
   h.check('(1) attribution hint appears after picking a curated source', (await page.locator('[data-testid="variable-source-attribution-0"]').innerText()).trim().length > 0);
-  // logicalType-family controls locked: the type select is the first <select>
-  // in the "Logical type + params" row — query relative to the row.
+  // Generation controls are hidden (not merely disabled) on a curated row: the
+  // source select is then the row's only <select>.
   const row0 = page.locator('[data-testid="variable-row-0"]');
-  const logicalTypeSelectDisabled = await row0.locator('select').nth(1).isDisabled(); // 0 = source select
-  h.check('(1) logicalType select disabled while a curated source is bound', logicalTypeSelectDisabled);
+  h.check('(1) generation controls hidden while a curated source is bound', (await row0.locator('select').count()) === 1);
+  h.check('(1) generation-mode select gone while a curated source is bound', (await page.locator('[data-testid="generation-mode-0"]').count()) === 0);
   h.check('(1) variable-name-0 STILL EDITABLE with a curated source bound', !(await page.locator('[data-testid="variable-name-0"]').isDisabled()));
   h.check('(1) shape-input STILL EDITABLE with a curated source bound', !(await page.locator('[data-testid="shape-input"]').isDisabled()));
 
@@ -153,14 +153,13 @@ async function main() {
   );
   await shot(page, 'curated-variables-1-ghcn-tmax');
 
-  // Back to custom: hint gone, unlocked, values regenerate.
+  // Back to custom: hint gone, generation controls back, values regenerate.
   await sourceSelect0.selectOption('custom');
   await page.waitForTimeout(200);
   await waitForPipelineIdle(page, 30_000);
 
   h.check('(1) attribution hint gone after reverting to custom', (await page.locator('[data-testid="variable-source-attribution-0"]').count()) === 0);
-  const logicalTypeSelectDisabledAfter = await row0.locator('select').nth(1).isDisabled();
-  h.check('(1) logicalType select re-enabled after reverting to custom', !logicalTypeSelectDisabledAfter);
+  h.check('(1) generation controls return after reverting to custom', (await page.locator('[data-testid="generation-mode-0"]').count()) === 1);
   const readStatus1b = await readStatusText(page);
   h.check(
     '(1) pipeline recomputes with generated values after reverting to custom',
@@ -202,8 +201,11 @@ async function main() {
   }
 
   // Crop: [200, 200] is smaller than sst-field's real natural shape (1024x1024).
+  // Shape inputs commit on blur (not per keystroke), so blur after each fill.
   await page.locator('[data-testid="shape-input-0"]').fill('200');
+  await page.locator('[data-testid="shape-input-0"]').blur();
   await page.locator('[data-testid="shape-input-1"]').fill('200');
+  await page.locator('[data-testid="shape-input-1"]').blur();
   await page.waitForTimeout(300);
   await waitForPipelineIdle(page, 60_000);
 
@@ -216,7 +218,9 @@ async function main() {
 
   // Tile: [1100, 1100] is larger than 1024 on both dims -> wraps (tiles).
   await page.locator('[data-testid="shape-input-0"]').fill('1100');
+  await page.locator('[data-testid="shape-input-0"]').blur();
   await page.locator('[data-testid="shape-input-1"]').fill('1100');
+  await page.locator('[data-testid="shape-input-1"]').blur();
   await page.waitForTimeout(500);
   await waitForPipelineIdle(page, 90_000);
 
@@ -418,11 +422,8 @@ async function main() {
           (els) => els.map((el) => el.value ?? el.textContent ?? ''),
         );
         h.check(
-          '(5) GeoTIFFesque: 3 variables present (elevation + 2 generated bands)',
-          geotiffVarNames.length === 3 &&
-            geotiffVarNames.includes('elevation') &&
-            geotiffVarNames.includes('slope') &&
-            geotiffVarNames.includes('hillshade'),
+          '(5) GeoTIFFesque: single real elevation band (no generated bands)',
+          geotiffVarNames.length === 1 && geotiffVarNames.includes('elevation'),
           geotiffVarNames.join(', '),
         );
         const typedBytes = await stageByteCount(page, 1);

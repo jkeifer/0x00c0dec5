@@ -14,7 +14,7 @@
 //      — the byte-count drop is the hard assertion).
 //   3. Load "Basically Parquet" via the preset dropdown. Assert footer
 //      placement + trailer locator active, read-status success.
-//   4. Download the file, read bytes from disk: first 4 bytes === 00 C0 DE C5.
+//   4. Download the file, read bytes from disk: first 4 bytes === PAR1 (50415231).
 //   5. Toggle include-metadata OFF -> read-status failure w/ educational
 //      message; ON -> success again.
 //   6. Save checkpoint. Change shape, rename a variable, add a codec step.
@@ -57,34 +57,32 @@ async function stageStats(page, index) {
   return { text, byteCount, byteUnit, entropy };
 }
 
-async function addCodecToHumidity(page, codecValue) {
+async function addCodecToVariable(page, varName, codecValue) {
   const codecsSection = page.locator('[data-testid="sidebar-section-codecs"]');
   await codecsSection.scrollIntoViewIfNeeded();
-  // Column mode (default): each variable gets its own row, an outer <div>
-  // whose first child holds a <span> with the variable's exact name text,
-  // followed by a CodecPipelineEditor <select>. Task cl-10: presets can add
-  // variables ahead of humidity (Basically Parquet now has 4, with humidity
-  // last), so a fixed nth() index into "all selects in the section" is no
-  // longer safe once a preset is active — match the row by the variable
-  // name span's EXACT text (not hasText substring, which could
+  // Column mode: each variable gets its own row, an outer <div> whose first
+  // child holds a <span> with the variable's exact name text, followed by a
+  // CodecPipelineEditor <select>. A fixed nth() index into "all selects in
+  // the section" isn't safe once a preset is active — match the row by the
+  // variable name span's EXACT text (not hasText substring, which could
   // false-positive on a name that's a substring of another), then narrow to
   // the candidate div containing exactly one <select> (the tightest
   // ancestor: the whole-section div and the bare name-row div both match
-  // "has a humidity span" too, but hold 3+ or 0 selects respectively).
-  const humidityCandidates = codecsSection
+  // "has the name span" too, but hold 3+ or 0 selects respectively).
+  const rowCandidates = codecsSection
     .locator('div')
-    .filter({ has: page.locator('span', { hasText: /^humidity$/ }) });
-  const candidateCount = await humidityCandidates.count();
-  let humidityRow = null;
+    .filter({ has: page.locator('span', { hasText: new RegExp(`^${varName}$`) }) });
+  const candidateCount = await rowCandidates.count();
+  let varRow = null;
   for (let i = 0; i < candidateCount; i++) {
-    const candidate = humidityCandidates.nth(i);
+    const candidate = rowCandidates.nth(i);
     if ((await candidate.locator('select').count()) === 1) {
-      humidityRow = candidate;
+      varRow = candidate;
       break;
     }
   }
-  if (!humidityRow) throw new Error('addCodecToHumidity: could not locate humidity\'s codec row');
-  await humidityRow.locator('select').first().selectOption(codecValue);
+  if (!varRow) throw new Error(`addCodecToVariable: could not locate ${varName}'s codec row`);
+  await varRow.locator('select').first().selectOption(codecValue);
   await page.waitForTimeout(400);
   // Project 4's eager Pyodide init keeps the worker busy for the first few
   // seconds after boot, so early recomputes can land well after a flat wait —
@@ -95,6 +93,10 @@ async function addCodecToHumidity(page, codecValue) {
 async function selectPreset(page, value) {
   await page.locator('[data-testid="preset-select"]').selectOption(value);
   await page.waitForTimeout(600);
+  // The format presets fetch real curated data and run Pyodide codecs over
+  // 723k values — the recompute takes seconds, and reading status after a
+  // flat wait sees the stale last-good result. Wait for actual idle.
+  await waitForPipelineIdle(page, 120_000);
 }
 
 async function setIncludeMetadata(page, on) {
@@ -102,12 +104,13 @@ async function setIncludeMetadata(page, on) {
     .locator('[data-testid="include-metadata-toggle"] button', { hasText: on ? /^Yes$/ : /^No$/ })
     .click();
   await page.waitForTimeout(500);
+  await waitForPipelineIdle(page, 120_000);
 }
 
 async function setShape(page, value) {
   const input = page.locator('[data-testid="shape-input"]');
   await input.fill(String(value));
-  await input.dispatchEvent('change');
+  await input.blur(); // shape inputs commit on blur, not per keystroke
   await page.waitForTimeout(200);
 }
 
@@ -165,11 +168,11 @@ async function main() {
     encodedBefore.text.replace(/\n/g, ' | '),
   );
 
-  await addCodecToHumidity(page, 'delta');
+  await addCodecToVariable(page, 'humidity', 'delta');
   const humidityStepsAfterDelta = await page.locator('[data-testid^="codec-step-humidity-"]').count();
   h.check('beat2: delta codec step added to humidity', humidityStepsAfterDelta === 1, `count=${humidityStepsAfterDelta}`);
 
-  await addCodecToHumidity(page, 'rle');
+  await addCodecToVariable(page, 'humidity', 'rle');
   const humidityStepsAfterRle = await page.locator('[data-testid^="codec-step-humidity-"]').count();
   h.check('beat2: rle codec step added to humidity', humidityStepsAfterRle === 2, `count=${humidityStepsAfterRle}`);
 
@@ -197,8 +200,8 @@ async function main() {
   h.check('beat2: ErrorBoundary not shown', !(await boundaryShown(page)));
   await shot(page, 'talk-arc-2');
 
-  // ─── Beat 3: load "Basically Parquet", assert footer+trailer, read success ───
-  await selectPreset(page, 'basically-parquet');
+  // ─── Beat 3: load "Parquet-adjacent", assert footer+trailer, read success ───
+  await selectPreset(page, 'parquet-adjacent');
 
   const parquetReadText = await readStatusText(page);
   h.check(
@@ -225,7 +228,9 @@ async function main() {
   h.check('beat3: ErrorBoundary not shown', !(await boundaryShown(page)));
   await shot(page, 'talk-arc-3');
 
-  // ─── Beat 4: download the file, verify first 4 bytes === 00 C0 DE C5 ───
+  // ─── Beat 4: download the file, verify first 4 bytes === PAR1 magic ───
+  // (the Parquet-adjacent preset's magic is 50415231 "PAR1", not the app's
+  // default 00C0DEC5 — the preset rename/rework changed this beat's magic)
   await openSidebarSection(page, 'write');
   const downloadBtn = page.locator('[data-testid="download-file-0"]').first();
   const hasDownloadBtn = (await downloadBtn.count()) > 0;
@@ -241,8 +246,8 @@ async function main() {
     magicHex = bytes.slice(0, 4).toString('hex');
   }
   h.check(
-    'beat4: downloaded file bytes START WITH the magic number 00C0DEC5',
-    magicHex === '00c0dec5',
+    'beat4: downloaded file bytes START WITH the preset magic 50415231 (PAR1)',
+    magicHex === '50415231',
     `first 4 bytes = ${magicHex}`,
   );
 
@@ -273,7 +278,7 @@ async function main() {
   // ─── Beat 6: checkpoint / restore across three config changes ───
   const shapeBefore = await page.locator('[data-testid="shape-input"]').inputValue();
   const varName0Before = await page.locator('[data-testid="variable-name-0"]').inputValue();
-  const codecStepsBefore = await page.locator('[data-testid^="codec-step-humidity-"]').count();
+  const codecStepsBefore = await page.locator('[data-testid^="codec-step-tmax-"]').count();
 
   await page.locator('[data-testid="save-checkpoint"]').click();
   await page.waitForTimeout(150);
@@ -297,8 +302,8 @@ async function main() {
   // Change 3: add a codec step (byte-shuffle, to humidity — its pipeline
   // already has delta+rle from beat 2, so this both changes count from its
   // own pre-restore baseline and confirms restore un-adds it).
-  await addCodecToHumidity(page, 'byte-shuffle');
-  const codecStepsAfterChange = await page.locator('[data-testid^="codec-step-humidity-"]').count();
+  await addCodecToVariable(page, 'tmax', 'byte-shuffle');
+  const codecStepsAfterChange = await page.locator('[data-testid^="codec-step-tmax-"]').count();
   h.check(
     'beat6: a codec step was added to humidity before restore',
     codecStepsAfterChange === codecStepsBefore + 1,
@@ -325,7 +330,7 @@ async function main() {
     `expected=${varName0Before} got=${varName0AfterRestore}`,
   );
 
-  const codecStepsAfterRestore = await page.locator('[data-testid^="codec-step-humidity-"]').count();
+  const codecStepsAfterRestore = await page.locator('[data-testid^="codec-step-tmax-"]').count();
   h.check(
     'beat6: codec step count reverted after restore',
     codecStepsAfterRestore === codecStepsBefore,

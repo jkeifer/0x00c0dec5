@@ -7,7 +7,7 @@
 //    section (data-guide-active + computed outline, section in view);
 //  - collapse to the 48px presenter rail — guide-next still advances;
 //  - close via expand + guide-close removes the panel;
-//  - seeded ui-prefs {guideOpen:true, guideStep:4} resumes on step 5/10;
+//  - seeded ui-prefs {guideOpen:true, guideStep:2} resumes on step 3/10;
 //  - `?presenter` starts the panel open but collapsed to the rail.
 //
 // Run: node tests/ui/scenario-guide.mjs   (dev server must be running)
@@ -19,7 +19,7 @@ const h = createHarness('scenario-guide');
 
 // Must mirror src/components/guide/steps.ts (section slug per step, in order).
 const STEP_SECTIONS = [
-  null, 'schema', 'chunk', 'interleave', 'typing', 'codecs', 'metadata', 'write', 'read', null,
+  null, 'schema', 'typing', 'chunk', 'interleave', 'codecs', 'metadata', 'write', 'read', null,
 ];
 
 async function main() {
@@ -132,18 +132,18 @@ async function main() {
   {
     const { page, issues } = await newContext(browser, { fresh: true });
     await seedStateAndReload(page, {
-      '0x00c0dec5-ui-prefs': JSON.stringify({ guideOpen: true, guideStep: 4 }),
+      '0x00c0dec5-ui-prefs': JSON.stringify({ guideOpen: true, guideStep: 2 }),
     });
     await page.waitForTimeout(500);
     const panel = page.locator('[data-testid="guide-panel"]');
-    h.check('seeded {guideOpen:true, guideStep:4} opens the panel', await panel.isVisible());
+    h.check('seeded {guideOpen:true, guideStep:2} opens the panel', await panel.isVisible());
     h.check(
-      'seeded guide resumes on step 5/10',
-      /5\/10/.test(await panel.innerText()),
+      'seeded guide resumes on step 3/10',
+      /3\/10/.test(await panel.innerText()),
       await panel.innerText(),
     );
     h.check(
-      "step 5 highlights the 'typing' sidebar section",
+      "step 3 highlights the 'typing' sidebar section",
       (await page.locator('[data-testid="sidebar-section-typing"][data-guide-active]').count()) === 1,
     );
     h.check(
