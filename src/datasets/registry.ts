@@ -129,6 +129,46 @@ export const CURATED_VARIABLES: CuratedVariable[] = [
   ),
 ];
 
+/**
+ * Per-dataset metadata.customEntries seeds (provenance + spatial/units facts).
+ * Values are copied VERBATIM from the matching top-level format preset's
+ * customEntries (geotiffesque.json for etopo-dem, zarrish.json for sst-field,
+ * parquet-adjacent.json for ghcn-daily) so a seed and a preset can never
+ * disagree — pinned by tests/unit/datasets/catalog.test.ts. Spatial values
+ * (crs/bbox/transform) mirror the manifest `spatial` block, computed from
+ * each extraction script's own LAT0/LON0/STEP/SIZE constants
+ * (scripts/datasets/etopo-dem.ts, scripts/datasets/sst-field.ts).
+ */
+export const DATASET_SEED_ENTRIES: Record<DatasetId, { key: string; value: string }[]> = {
+  'etopo-dem': [
+    { key: 'source', value: 'NOAA NCEI ETOPO Global Relief (via ERDDAP)' },
+    { key: 'source_url', value: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
+    { key: 'retrieved', value: '2026-07-13' },
+    { key: 'license', value: 'U.S. Government work — public domain' },
+    { key: 'crs', value: 'EPSG:4326' },
+    { key: 'bbox', value: '[75, 20, 92.05, 37.05]' },
+    { key: 'transform', value: '[75, 0.0166667, 0, 37.05, 0, -0.0166667]' },
+  ],
+  'sst-field': [
+    { key: 'source', value: 'JPL MUR SST v4.1 (via NOAA CoastWatch ERDDAP)' },
+    { key: 'source_url', value: 'https://podaac.jpl.nasa.gov/dataset/MUR-JPL-L4-GLOB-v4.1' },
+    { key: 'retrieved', value: '2026-07-13' },
+    { key: 'license', value: 'Open data — NASA JPL PO.DAAC' },
+    { key: 'crs', value: 'EPSG:4326' },
+    { key: 'bbox', value: '[-150, -5, -139.77, 5.23]' },
+    { key: 'transform', value: '[-150, 0.01, 0, 5.23, 0, -0.01]' },
+  ],
+  'ghcn-daily': [
+    { key: 'source', value: 'NOAA NCEI GHCN-Daily (4 US stations)' },
+    { key: 'source_url', value: 'https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily' },
+    { key: 'retrieved', value: '2026-07-13' },
+    { key: 'license', value: 'U.S. Government work — public domain' },
+    { key: 'date_units', value: 'days since 1970-01-01' },
+    { key: 'temperature_units', value: 'degC' },
+    { key: 'precipitation_units', value: 'mm' },
+  ],
+};
+
 /** Resolve a Variable.source ref to its catalog entry, or undefined if it
  * doesn't (or no longer) name a curated variable. */
 export function curatedVariable(ref: { datasetId: DatasetId; variableName: string }): CuratedVariable | undefined {

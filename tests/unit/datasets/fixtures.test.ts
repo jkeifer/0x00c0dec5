@@ -35,6 +35,16 @@ describe.each(DATASETS.map((d) => [d.id] as const))('fixture %s', (id) => {
     expect(entry.dataModel).toBeDefined();
   });
 
+  it('validates an optional spatial block for grid datasets, none for tabular', () => {
+    if (entry.dataModel === 'array') {
+      expect(manifest.spatial).toBeDefined();
+      expect(manifest.spatial!.crs).toBe('EPSG:4326');
+      expect(manifest.spatial!.bbox).toHaveLength(4);
+    } else {
+      expect(manifest.spatial).toBeUndefined();
+    }
+  });
+
   it('decodes per-variable, binds by source, computes, and read-roundtrips codec-free', async () => {
     // One variable row per manifest variable, each bound to its curated source.
     const variables: Variable[] = manifest.variables.map((mv, i) => ({

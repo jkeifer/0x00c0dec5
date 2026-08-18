@@ -52,6 +52,11 @@ const manifest: DatasetManifest = {
     retrieved: today(),
     license: 'Open data — NASA JPL PO.DAAC',
   },
+  spatial: {
+    crs: 'EPSG:4326',
+    bbox: [round2(LON0), round2(LAT0), round2(LON1), round2(LAT1)],
+    transform: [round2(LON0), STEP, 0, round2(LAT1), 0, -STEP],
+  },
   variables: [{
     name: 'sst', kind: 'number', dtype: 'float32', file: 'sst.bin',
     min: round2(min), max: round2(max),

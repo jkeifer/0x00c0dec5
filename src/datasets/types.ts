@@ -44,11 +44,21 @@ export interface ManifestStringVariable {
 
 export type ManifestVariable = ManifestNumericVariable | ManifestStringVariable;
 
+/** Georeferencing for a grid dataset (array model only — tabular datasets
+ * like ghcn-daily have no spatial block). `transform` is the GDAL/affine
+ * 6-tuple [originX, pixelW, 0, originY(top/north), 0, -pixelH]. */
+export interface DatasetSpatial {
+  crs: string;
+  bbox: [number, number, number, number]; // [west, south, east, north]
+  transform?: number[];
+}
+
 /** manifest.json on the data branch — pure data description (spec: data
  * facts live with the data; app-coupled curated config lives in registry.ts). */
 export interface DatasetManifest {
   id: DatasetId;
   shape: number[];
   attribution: DatasetAttribution;
+  spatial?: DatasetSpatial;
   variables: ManifestVariable[];
 }

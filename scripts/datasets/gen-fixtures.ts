@@ -14,6 +14,12 @@ import type { DatasetManifest } from '../../src/datasets/types.ts';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_ROOT = path.join(__dirname, '..', '..', 'tests', 'fixtures', 'datasets');
 const ATT = { source: 'synthetic test fixture', source_url: 'https://example.invalid', retrieved: '2026-07-12', license: 'n/a (generated)' };
+// Spatial blocks describe the REAL extract's geography (data-branch-work/),
+// not the tiny fixture shape — mirrors the extraction scripts' own constants
+// (etopo: LAT0 20, LON0 75, STEP 1/60, SIZE 1024; sst: LAT0 -5, LON0 -150,
+// STEP 0.01, SIZE 1024). Keep in sync with scripts/datasets/{etopo-dem,sst-field}.ts.
+const ETOPO_SPATIAL = { crs: 'EPSG:4326', bbox: [75, 20, 92.05, 37.05] as [number, number, number, number], transform: [75, 0.0166667, 0, 37.05, 0, -0.0166667] };
+const SST_SPATIAL = { crs: 'EPSG:4326', bbox: [-150, -5, -139.77, 5.23] as [number, number, number, number], transform: [-150, 0.01, 0, 5.23, 0, -0.01] };
 
 function dir(id: string): string {
   const d = path.join(FIXTURE_ROOT, id);
@@ -29,7 +35,7 @@ function dir(id: string): string {
   const d = dir('etopo-dem');
   writeInt16Bin(d, 'elevation.bin', vals);
   const m: DatasetManifest = {
-    id: 'etopo-dem', shape: [S, S], attribution: ATT,
+    id: 'etopo-dem', shape: [S, S], attribution: ATT, spatial: ETOPO_SPATIAL,
     variables: [{ name: 'elevation', kind: 'number', dtype: 'int16', file: 'elevation.bin', min: 97, max: 178,
       logicalType: { type: 'integer', min: 97, max: 178, generation: 'smooth' } }],
   };
@@ -44,7 +50,7 @@ function dir(id: string): string {
   const d = dir('sst-field');
   writeFloat32Bin(d, 'sst.bin', vals);
   const m: DatasetManifest = {
-    id: 'sst-field', shape: [S, S], attribution: ATT,
+    id: 'sst-field', shape: [S, S], attribution: ATT, spatial: SST_SPATIAL,
     variables: [{ name: 'sst', kind: 'number', dtype: 'float32', file: 'sst.bin', min: 18, max: 22,
       logicalType: { type: 'continuous', min: 18, max: 22, significantFigures: 6, generation: 'smooth' } }],
   };

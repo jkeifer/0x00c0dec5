@@ -37,6 +37,17 @@ export function validateManifest(raw: unknown, knownIds: readonly string[]): Dat
   if (!isRecord(att) || ['source', 'source_url', 'retrieved', 'license'].some((k) => typeof att[k] !== 'string')) {
     fail('attribution must have source/source_url/retrieved/license strings');
   }
+  if (raw.spatial !== undefined) {
+    const sp = raw.spatial;
+    if (!isRecord(sp) || typeof sp.crs !== 'string') fail('spatial.crs must be a string');
+    if (!Array.isArray(sp.bbox) || sp.bbox.length !== 4 || !sp.bbox.every((n) => typeof n === 'number')) {
+      fail('spatial.bbox must be [west, south, east, north] numbers');
+    }
+    if (sp.transform !== undefined &&
+        (!Array.isArray(sp.transform) || !sp.transform.every((n) => typeof n === 'number'))) {
+      fail('spatial.transform must be a number array');
+    }
+  }
   if (!Array.isArray(raw.variables) || raw.variables.length === 0) fail('variables must be non-empty');
   const names = new Set<string>();
   for (const v of raw.variables) {

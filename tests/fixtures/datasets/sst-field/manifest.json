@@ -10,6 +10,23 @@
     "retrieved": "2026-07-12",
     "license": "n/a (generated)"
   },
+  "spatial": {
+    "crs": "EPSG:4326",
+    "bbox": [
+      -150,
+      -5,
+      -139.77,
+      5.23
+    ],
+    "transform": [
+      -150,
+      0.01,
+      0,
+      5.23,
+      0,
+      -0.01
+    ]
+  },
   "variables": [
     {
       "name": "sst",

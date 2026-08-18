@@ -15,6 +15,10 @@ const LAT0 = 20.0, LON0 = 75.0;
 const STEP = 1 / 60;
 const LAT1 = LAT0 + (SIZE - 1) * STEP;
 const LON1 = LON0 + (SIZE - 1) * STEP;
+// Rounded to 7 significant figures for the manifest's spatial block (and the
+// registry seed, which must match verbatim) — STEP's raw float64 has a long
+// repeating tail that isn't a meaningful pixel-size precision.
+const STEP_R = 0.0166667;
 const DATASET_URL =
   `https://coastwatch.pfeg.noaa.gov/erddap/griddap/etopo180.csv?` +
   `altitude%5B(${LAT0}):(${LAT1})%5D%5B(${LON0}):(${LON1})%5D`;
@@ -50,6 +54,11 @@ const manifest: DatasetManifest = {
     source_url: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model',
     retrieved: today(),
     license: 'U.S. Government work — public domain',
+  },
+  spatial: {
+    crs: 'EPSG:4326',
+    bbox: [LON0, LAT0, LON1, LAT1],
+    transform: [LON0, STEP_R, 0, LAT1, 0, -STEP_R],
   },
   variables: [{
     name: 'elevation', kind: 'number', dtype: 'int16', file: 'elevation.bin',
