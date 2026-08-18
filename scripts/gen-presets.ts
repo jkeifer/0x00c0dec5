@@ -113,6 +113,11 @@ const ETOPO_PROVENANCE = [
   { key: 'source_url', value: 'https://www.ncei.noaa.gov/products/etopo-global-relief-model' },
   { key: 'retrieved', value: '2026-07-13' },
   { key: 'license', value: 'U.S. Government work — public domain' },
+  // Spatial entries: verbatim copies of DATASET_SEED_ENTRIES (registry.ts) so a
+  // seed and a preset can never disagree (pinned by tests/unit/datasets/catalog.test.ts).
+  { key: 'crs', value: 'EPSG:4326' },
+  { key: 'bbox', value: '[75, 20, 92.05, 37.05]' },
+  { key: 'transform', value: '[75, 0.0166667, 0, 37.05, 0, -0.0166667]' },
 ];
 
 const SST_PROVENANCE = [
@@ -120,6 +125,9 @@ const SST_PROVENANCE = [
   { key: 'source_url', value: 'https://podaac.jpl.nasa.gov/dataset/MUR-JPL-L4-GLOB-v4.1' },
   { key: 'retrieved', value: '2026-07-13' },
   { key: 'license', value: 'Open data — NASA JPL PO.DAAC' },
+  { key: 'crs', value: 'EPSG:4326' },
+  { key: 'bbox', value: '[-150, -5, -139.77, 5.23]' },
+  { key: 'transform', value: '[-150, 0.01, 0, 5.23, 0, -0.01]' },
 ];
 
 const GHCN_PROVENANCE = [
@@ -173,9 +181,9 @@ const geotiffesque: AppState = {
     customEntries: [...ETOPO_PROVENANCE],
     serialization: 'binary',
     include: DEFAULT_INCLUDE,
+    enabled: true,
   },
   write: {
-    includeMetadata: true,
     magicNumber: '49492A00', // II*\0
     partitioning: 'single',
     metadataPlacement: 'header',
@@ -226,9 +234,9 @@ const zarrish: AppState = {
     customEntries: [...SST_PROVENANCE],
     serialization: 'json',
     include: DEFAULT_INCLUDE,
+    enabled: true,
   },
   write: {
-    includeMetadata: true,
     magicNumber: '', // zarr chunk files have no magic
     partitioning: 'per-chunk',
     metadataPlacement: 'sidecar',
@@ -308,9 +316,9 @@ const parquetAdjacent: AppState = {
     customEntries: [...GHCN_PROVENANCE],
     serialization: 'binary',
     include: DEFAULT_INCLUDE,
+    enabled: true,
   },
   write: {
-    includeMetadata: true,
     magicNumber: '50415231', // PAR1
     partitioning: 'single',
     metadataPlacement: 'footer',
@@ -357,9 +365,9 @@ const avroesque: AppState = {
     customEntries: [...GHCN_PROVENANCE],
     serialization: 'json',
     include: DEFAULT_INCLUDE,
+    enabled: true,
   },
   write: {
-    includeMetadata: true,
     magicNumber: '4F626A01', // Obj\1
     partitioning: 'single',
     metadataPlacement: 'header',

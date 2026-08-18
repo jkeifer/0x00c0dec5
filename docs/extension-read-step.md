@@ -12,33 +12,34 @@ The core pipeline shows data transforming from readable values to opaque bytes o
 
 ## Changes to the Write Step
 
-### Metadata Inclusion Toggle
+### Metadata Enable Switch (shipped as `metadata.enabled`, not a Write toggle)
 
-Add a toggle to the Write section in the sidebar:
+This extension originally specified an "Include metadata" toggle in the Write section. The shipped mechanism moved and split it (see `docs/design.md`'s Metadata Assembly section for the full rationale):
 
-- **Include metadata**: yes / no (default: **no**)
+- **`metadata.enabled: boolean`** (default: **false**) — the master switch, living in the *Metadata* sidebar section (`metadata-enabled-toggle`), not Write. When off, metadata is never even assembled: the Metadata stage's bytes are a true zero-length `Uint8Array`, and nothing reaches the output file(s).
+- **`write.metadataPlacement` gained `'omit'`** — the placement-level counterpart: metadata *is* assembled (the Metadata stage pane shows real bytes) but Write places it in no file, sidecar included. Both paths produce the same `no-metadata` read failure — deliberately indistinguishable to the reader.
 
-When set to "no," the Write step produces file(s) containing only the magic number (if set) and encoded chunk data. No metadata is written — not as a header, not as a footer, not as a sidecar. The metadata assembly section in the sidebar still shows what *would* be written (so the user can see the metadata they're choosing not to include), but none of it reaches the output file(s).
-
-When set to "yes," metadata is serialized and placed according to the existing metadata configuration (format, placement).
-
-This toggle should be the *first* control in the Write section, above magic number and other options, because it's the most consequential decision.
+The default-off lesson is unchanged: fresh state writes only magic + chunk data, Read fails with `no-metadata`, and enabling metadata is the fix the failure message teaches.
 
 ### State Update
 
-Add to `AppState.write`:
+The shipped state shape (see `docs/design.md`'s State Management section for the authoritative interface):
 
 ```typescript
+metadata: {
+  enabled: boolean;               // default: false — master switch for assembly
+  // ... customEntries, serialization, include (six groups) ...
+};
 write: {
-  includeMetadata: boolean;       // default: false
   magicNumber: string;
   partitioning: "single" | "per-chunk";
-  metadataPlacement: "header" | "footer" | "sidecar";
+  metadataPlacement: "header" | "footer" | "sidecar" | "omit";
   chunkOrder: "row-major" | "column-major";
+  footerLocator: "trailer" | "none";
 };
 ```
 
-Two further options were added to `write`/`metadata` alongside making this extension's Read step actually work end-to-end (see `docs/design.md`'s Write Step section for the full rationale): `write.footerLocator: 'trailer' | 'none'` (only meaningful with `metadataPlacement: 'footer'`) and `metadata.includeChunkIndex: boolean`. Both follow the same philosophy as `includeMetadata` — a user-facing format choice with a visible, honest consequence in the Read step rather than the app quietly making every configuration always readable.
+`write.footerLocator: 'trailer' | 'none'` (only meaningful with `metadataPlacement: 'footer'`) and the granular `metadata.include` groups (which absorbed the earlier `includeChunkIndex` boolean) follow the same philosophy as the enable switch — a user-facing format choice with a visible, honest consequence in the Read step rather than the app quietly making every configuration always readable. Old persisted saves/share links carrying the removed `write.includeMetadata` field are dropped to defaults, not migrated (the project's standing drop-not-migrate policy).
 
 ## The Read Step
 
@@ -92,7 +93,7 @@ The single "no metadata" failure case above generalizes to six distinct failure 
 
 ```typescript
 type ReadFailureReason =
-  | 'no-metadata'        // metadata genuinely absent (includeMetadata = false)
+  | 'no-metadata'        // metadata genuinely absent (metadata.enabled = false, or placement 'omit')
   | 'metadata-not-found' // metadata present but the locator/scanner failed (footerLocator = 'none')
   | 'bad-magic'          // magic mismatch (D2)
   | 'corrupt-metadata'   // metadata located but failed to parse
@@ -109,7 +110,7 @@ interface ReadFailure {
 
 Each reason teaches something different:
 
-- **`no-metadata`** — the original lesson: bytes without a self-description are meaningless. Fix: enable "Include metadata."
+- **`no-metadata`** — the original lesson: bytes without a self-description are meaningless. Fix: enable metadata in the Metadata section (or, if placement is `omit`, actually place it somewhere).
 - **`metadata-not-found`** — metadata was written, but a best-effort scanner (footer placement with no trailer) couldn't pin down its exact boundaries. The lesson is why real formats record an exact length rather than relying on scanning — the message points at Parquet's `[footer][4-byte length]['PAR1']` trailer and the Footer locator option that adds the equivalent to this tool.
 - **`bad-magic`** — the leading (or, with a trailer, trailing) bytes don't match the format's expected magic. The lesson: a reader only understands files it was built for; this is what "the format's magic number" actually buys a real parser (immediate, cheap rejection of the wrong kind of file, or corruption, before wasting effort on the rest of the parse).
 - **`corrupt-metadata`** — metadata was found at the expected location but didn't parse into a usable structure (missing required fields, malformed JSON/binary). The lesson: a reader that finds *something* but can't trust it has to fail rather than guess.
@@ -212,7 +213,7 @@ Additions to existing files:
 
 - `src/types/codecs.ts` — add `decode` and `lossy` to `CodecDefinition`
 - Each codec implementation gets a `decode` function
-- `src/types/state.ts` — add `includeMetadata` to write state
+- `src/types/state.ts` — add the metadata enable switch (shipped as `metadata.enabled`; the originally-planned `write.includeMetadata` was later removed)
 - `src/types/pipeline.ts` — add read stage type (extends `PipelineStage` with diff data)
 
 ### New Components
@@ -268,23 +269,26 @@ Two places in the UI render this log:
   8-row checklist via `ReadProcessView` (`read-process-view`, rows `read-step-{id}`) —
   shown automatically on failure, or on demand on success.
 
-### Five metadata groups
+### Six metadata groups
 
 Metadata inclusion (`state.metadata.include: MetadataIncludeConfig`,
-`src/types/state.ts`) is no longer one `includeMetadata` toggle — it's five
-independent group toggles, each gating a specific set of metadata keys
+`src/types/state.ts`) is not one toggle — it's six independent group toggles
+(all default **off**), each gating a specific set of metadata keys
 (`METADATA_KEY_GROUPS` in `src/engine/metadata.ts`):
 
 | Group | Testid | Keys it gates | Reader step it starves when off |
 |-------|--------|----------------|----------------------------------|
 | `schema` | `include-schema-toggle` | `schema`, `type_assignments`, `logical_types` | `read-schema` — fails `missing-schema` |
-| `layout` | `include-layout-toggle` | `shape`, `chunk_shape`, `chunk_grid`, `chunk_order`, `partitioning`, `interleaving` | `read-layout` — fails `missing-layout` |
+| `layout` | `include-layout-toggle` | `shape`, `chunk_shape`, `chunk_order`, `partitioning`, `interleaving`, `linearization` | `read-layout` — fails `missing-layout` |
 | `codecs` | `include-codecs-toggle` | `codec_pipelines` | `decode-chunks` — see assume-identity below (not a hard failure) |
-| `chunkIndex` | `include-chunk-index-toggle` | `chunk_index` | `locate-chunks` — fails `no-chunk-index` only when a size-changing codec is in play (D3); otherwise offsets are computed from geometry |
-| `descriptive` | `include-descriptive-toggle` | `variable_statistics` + all custom entries | none — the reader never needs this group to reconstruct values |
+| `chunkIndex` | `include-chunk-index-toggle` | `chunk_index` | `locate-chunks` — fails `no-chunk-index` only in single-file mode with a size-changing codec in play (D3); otherwise offsets are computed from geometry, and per-chunk partitioning never needs an index at all |
+| `descriptive` | `include-descriptive-toggle` | `variable_statistics` only (custom entries are written whenever metadata is enabled, ungated) | none — the reader never needs this group to reconstruct values |
+| `endianness` | `include-endianness-toggle` | `byte_order` | none — the reader silently assumes host byte order; a big-endian file reads "successfully" with wrong values (the silent-corruption lesson) |
 
 This replaces the old single-purpose `includeChunkIndex` write option: `chunkIndex`
-above is the same D3 semantics, now one of five groups instead of a standalone flag.
+above is the same D3 semantics, now one of six groups instead of a standalone flag.
+(There is no `chunk_grid` key anymore — it was written but never read, so it was
+deleted from `collectMetadata` entirely.)
 
 ### Assume-identity semantics (codecs group off)
 
@@ -338,7 +342,7 @@ This extension is a single implementation phase that can be done after the main 
 1. Add `decode` and `lossy` to all codec definitions, with tests
 2. Implement `src/engine/decode.ts` (pipeline reversal), with tests
 3. Implement `src/engine/read.ts` (file parsing/reconstruction), with tests
-4. Add `includeMetadata` toggle to Write config UI
+4. Add the metadata enable switch to the UI (shipped as `metadata-enabled-toggle` in the Metadata section, not a Write toggle)
 5. Add Read node to pipeline strip with success/failure indicator
 6. Add ReadStatus sidebar section
 7. Add Read stage to pane dropdown options

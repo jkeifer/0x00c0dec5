@@ -461,11 +461,14 @@ export const STEPS: GuideStep[] = [
       'the write-side decision that caused it. On success, the diff view compares the ' +
       'round-trip against the original values — lossy type assignments and float Delta show ' +
       'up here as per-value differences, honestly attributed to the step that spent the ' +
-      'precision. Five of the Metadata section’s six group toggles (schema, layout, codecs, ' +
-      'chunk index, descriptive) each starve the reader of one specific fact — the sixth, ' +
-      'endianness, misreads silently instead (see the Metadata step) — and the Read pane’s ' +
-      'Process view narrates the eight-step attempt live, so you can watch exactly which step ' +
-      'a missing group stops the reader at.',
+      'precision. The Metadata section’s include groups each starve the reader of one ' +
+      'specific fact, but the consequences differ: schema and layout off stop the read cold ' +
+      'at a named step, chunk index and codecs off only fail when a size-changing codec makes ' +
+      'the missing fact unrecoverable (otherwise the reader computes or assumes its way ' +
+      'through — sometimes to silently wrong values), descriptive off costs nothing but ' +
+      'statistics, and endianness misreads silently instead (see the Metadata step). The ' +
+      'Read pane’s Process view narrates the eight-step attempt live, so you can watch ' +
+      'exactly where — and whether — each missing group stops the reader.',
     tryIt:
       'Turn on "Include metadata" in Write and watch Read flip from no-metadata to OK. Then ' +
       'corrupt the magic input (change one hex digit) and watch it fail with bad-magic — the ' +
