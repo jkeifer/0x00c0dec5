@@ -341,8 +341,10 @@ sorted + delta + RLE shrinks vs raw; stepped + RLE shrinks; random + RLE inflate
 
 Built-ins are checked-in JSON files at `src/presets/*.json` conforming to the persisted
 `AppState` shape, loaded through the Phase 0.4 validate/merge loader — they double as loader
-regression fixtures. Custom slot at localStorage key `0x00c0dec5-preset-custom`; loading any
-built-in first snapshots current state to the custom slot. Presets never touch the other data
+regression fixtures. Custom slot at localStorage key `customPresetKey(model)` (per data model,
+`0x00c0dec5-preset-custom-{model}` — `src/state/presets.ts`; the old single-slot
+`0x00c0dec5-preset-custom` key is kept as a read-only legacy fallback); loading any built-in
+first snapshots current state to that model's custom slot. Presets never touch the other data
 model's saved state.
 
 ---

@@ -283,7 +283,7 @@ interface ParamDef {
 }
 ```
 
-`isLossy` is a **predicate over the input dtype**, not a plain boolean — this deviates from `docs/extension-read-step.md`'s original `lossy: boolean` field (see that doc's own note on the deviation). A single boolean cannot express Delta's actual behavior: after removing an early clamping bug, Delta's encode/decode is an exact modular round-trip for every integer dtype (typed-array writes wrap mod 2^N, so a negative diff on an unsigned dtype is not clamped away — it wraps and un-wraps exactly), but Delta is still lossy on float dtypes, because each difference gets re-rounded to the float's own precision. `isLossy(dtype)` is the minimum shape that can say "exact for integers, lossy for floats."
+`isLossy` is a **predicate over the input dtype**, not a plain boolean — this deviates from `docs/extension-read-step.md`'s original `lossy: boolean` field (see that doc's own note on the deviation). It is currently `() => false` on every codec: the one dtype-dependent case was Delta on floats, and Delta is now plain modular integer arithmetic (it differences raw bit patterns — exact, if meaningless, on every dtype). Lossiness lives entirely on `Variable.typeAssignment` (scale/offset, bit-rounding) instead, with its own stats. The predicate shape survives only because `isPipelineLossy` (`src/engine/read.ts`) still asks; a genuinely lossy codec would need it.
 
 ### The Curated Codec Set
 
@@ -293,14 +293,14 @@ Earlier drafts split codecs into an "educational" tier (hand-rolled, always avai
 
 Whether a codec's `encode`/`decode` is hand-rolled locally or delegates to numcodecs-via-Pyodide is an implementation detail carried on `CodecDefinition.runtime` (`'pyodide'` when true, `undefined` for local). Pyodide-backed entries render disabled (with a `(loading…)`/`(unavailable)` suffix) until the runtime reports ready — see "Codec Runtime" below — but nothing else about them differs from local codecs: same registry, same params/warnings/dtype-flow machinery, same picker position.
 
-**Reordering codecs** (rearrange bytes for better compressibility, dtype-preserving; `isLossy` varies):
+**Reordering codecs** (rearrange bytes for better compressibility; never lossy). *Dtype-preserving only when they leave elements where they were* — Delta and Zigzag rewrite values in place, but the shuffles move bytes out of their elements and so report `uint8`, same as an entropy codec (see "Dtype Flow" below):
 
 | Codec | Params | Input → Output | isLossy | Description |
 |-------|--------|---------------|---------|-------------|
-| Delta | order: number (1-3) | any non-float → same | float dtypes only | Store value-to-value differences via typed-array arithmetic (wraps mod 2^N for integers — exact round-trip on every integer dtype, including unsigned). Lossy only on float dtypes, where each difference is re-rounded to float precision. `applicableTo` returns false for float dtypes, surfacing the ⚠ warning there. |
+| Delta | elementSize: number (1-16, bytes) | any → same | never | Store value-to-value differences as **plain modular integer arithmetic** over unsigned elements of `elementSize` bytes. Subtraction is byte-wise with a borrow (little-endian), so the wrap is exact at any size and encode/decode are perfect inverses on any byte stream — no clamping (that was DC-2, where clamping a negative diff on an unsigned dtype broke reversibility). Signedness never enters into it: two's complement makes `(a − b) mod 2^N` bit-identical for the signed and unsigned reading of a width, so Delta needs the element size and nothing else about the dtype. There is **no `order` param** — a second-order delta is just Delta twice, which the pipeline already expresses as two steps whose intermediate bytes are visible. `applicableTo` is `() => true`: Delta warns on nothing, since the only thing it could warn about is an element-size mismatch, and a mismatch against the *declared* dtype is exactly right after a shuffle. |
 | Zigzag | — | signed int8/16/32 → same | never | Maps signed integers to unsigned so small magnitudes get small byte values (0→0, −1→1, 1→2, −2→3, …) — the transform Parquet applies before RLE/bit-packing. Bijective, byte width unchanged. `applicableTo` is signed-integer-only; other dtypes warn (advisory, not blocked). |
-| Byte Shuffle | elementSize: number (1-8) | any → same | never | Transpose bytes by position within each element (Parquet calls this BYTE_STREAM_SPLIT). `applicableTo` returns false for 1-byte dtypes (nothing to transpose). A **separate** param-aware warning (not expressible via `applicableTo`, which only sees the dtype) fires when `elementSize` doesn't match the actual input dtype's size — this is the "shuffle needs to know the element boundary" lesson; garbled output is intentional, not blocked. |
-| Bit Shuffle | — | any multi-byte → same | never | Byte Shuffle one level finer: transposes the *bits* of a block of elements into bit planes (all elements' bit 0, then bit 1, …) rather than whole bytes. Slowly varying data yields long constant bit runs — this is the transform inside blosc/bitshuffle, pulled out as its own standalone, bijective step. |
+| Byte Shuffle | elementSize: number (1-16, bytes) | any → **uint8** | never | Transpose bytes by position within each element (Parquet calls this BYTE_STREAM_SPLIT). `applicableTo` returns false for 1-byte dtypes (nothing to transpose). A **separate** param-aware warning (not expressible via `applicableTo`, which only sees the dtype) fires when `elementSize` doesn't match the actual input dtype's size — this is the "shuffle needs to know the element boundary" lesson; garbled output is intentional, not blocked. |
+| Bit Shuffle | elementSize: number (1-16, bytes) | any multi-byte → **uint8** | never | Byte Shuffle one level finer: transposes the *bits* of a block of elements into bit planes (all elements' bit 0, then bit 1, …) rather than whole bytes. Slowly varying data yields long constant bit runs — this is the transform inside blosc/bitshuffle, pulled out as its own standalone, bijective step. Takes the same `elementSize` param as Delta and Byte Shuffle; it used to read the width off the input dtype, which stopped being possible once its own output reported `uint8`. |
 
 **Entropy/compression codecs** (compress redundancy; always applicable, byte-wise; output dtype collapses to `uint8`):
 
@@ -318,14 +318,14 @@ All entropy/compression codecs collapse the output dtype to `uint8` — this is 
 
 ### Codec Applicability and Warnings
 
-Codecs declare which dtypes they're applicable to via `applicableTo()`. When a codec is applied to an inapplicable dtype (e.g., Delta on a float, or Byte Shuffle on a 1-byte dtype), the UI shows a warning but does **not** prevent the operation. The result may be garbage (or, for Delta on float, merely re-rounded) — and that's intentional. The user learns through experimentation why certain codecs require certain data layouts.
+Codecs declare which dtypes they're applicable to via `applicableTo()`. When a codec is applied to an inapplicable dtype (e.g., Zigzag on an unsigned dtype, or Byte Shuffle on a 1-byte dtype), the UI shows a warning but does **not** prevent the operation. The result may be garbage — and that's intentional. The user learns through experimentation why certain codecs require certain data layouts.
 
 **Warning UI**: `stepWarnings()` (`src/engine/codecs.ts`) is the single source of truth for both the per-step ⚠ icon in `CodecPipelineEditor` and the Encoded-stage ⚠ icon in the pipeline strip (`pipeline-stage-encoded-warning`). It combines two independent checks:
 
 - `codec.applicableTo(dtype)` at each step's actual running input dtype (computed via the dtype-flow rule below, not re-derived locally).
 - Byte Shuffle's `elementSize` param against the step's actual input dtype size — a mismatch here is a *separate* warning from `applicableTo`, since `applicableTo` never sees the step's params.
 
-Hovering or clicking the icon shows the warning text (e.g., "Delta on Float32 is lossy — differences are re-rounded to float precision each step..." or "Element size 2 doesn't match dtype size 4 — bytes will be grouped incorrectly...").
+Hovering or clicking the icon shows the warning text (e.g., "Zigzag is not applicable to Uint16 input..." or "Element size 2 doesn't match dtype size 4 — bytes will be grouped incorrectly...").
 
 Additionally, when the interleaving is set to row-oriented and the variables have heterogeneous dtypes, the codec section's explanatory callout should note: "Mixed dtypes are interleaved — codecs like Byte Shuffle and Delta that assume uniform element size will produce garbled output. This is a key reason column-oriented formats exist."
 
@@ -337,11 +337,15 @@ Each step in the pipeline editor shows the output dtype as an annotation (e.g., 
 
 ```typescript
 function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey): DtypeKey {
-  return codec.category === 'entropy' ? 'uint8' : inputDtype;
+  // Entropy output is a compressed stream; a codec with a traceMode (the
+  // shuffles) has moved bytes out of their elements. Neither has elements.
+  return codec.category === 'entropy' || codec.traceMode ? 'uint8' : inputDtype;
 }
 ```
 
-Entropy/compression codecs (Dictionary, RLE, Deflate, GZip, Zstd) always collapse the running dtype to `uint8`; reordering codecs (Delta, Zigzag, Byte Shuffle, Bit Shuffle) always preserve it. Each step's `encode()` input dtype is the previous step's `outputDtype` (or the variable's `typeAssignment.storageDtype` for the first step) — this makes it visible when a codec is receiving unexpected input, and keeps the pipeline's dtype bookkeeping in exactly one place.
+A codec's output dtype answers one question: *what are these bytes now?* Two kinds of codec answer `uint8`. Entropy/compression codecs (Dictionary, RLE, Deflate, GZip, Zstd) do, because their output is a compressed stream. **The shuffles do too** (Byte Shuffle, Bit Shuffle), because byte planes and bit planes have no elements in them — reporting the pre-shuffle dtype there was a lie that propagated into the next codec's element size, the ⚠ warnings, and the dtype label on the step, all of which then described elements that no longer existed. Only codecs that rewrite values in place (Delta, Zigzag) preserve the dtype. The rule lives in `outputDtypeFor` and nowhere else — `reverseCodecPipeline` and `isPipelineLossy` used to re-derive it locally and both went stale the day the shuffles changed.
+
+Separately, `encodedChunkMeta` also reports a **`slotDtype`**: what the Encoded pane should draw one slot as. For a positional chunk these differ on purpose — the bytes *are* uint8 planes (`outputDtype`), but the slot the pane draws is the pre-shuffle element a reader ignoring the codec would still try to decode there (`slotDtype`), which is the whole point of the positional mode. They are equal for every pipeline that never degrades. Each step's `encode()` input dtype is the previous step's `outputDtype` (or the variable's `typeAssignment.storageDtype` for the first step) — this makes it visible when a codec is receiving unexpected input, and keeps the pipeline's dtype bookkeeping in exactly one place.
 
 ### Codec Runtime
 
@@ -621,16 +625,20 @@ Every fallback in this chain returns a deep clone of `DEFAULT_STATE`'s data (nev
 
 Switching between "Tabular" and "N-d Array" changes the UI presentation but does not destroy state unnecessarily. The current state is saved before switching, and restored if the user switches back. Each data model has a separate saved state slot, and the switch is recorded so a reload returns to the model that was active (see "Persistent State" above).
 
-### Presets (v2)
+### Presets
 
-Named state snapshots that can be loaded. Built-in presets would replicate real-world formats:
-- "This is basically Parquet" (tabular, column-oriented, per-column codecs, footer metadata)
-- "This is basically GeoTIFF" (2D array, tiled chunks, metadata header)
-- "This is basically Zarr" (N-d array, per-chunk files, sidecar metadata)
+Named state snapshots that can be loaded. Built-in presets replicate real-world formats:
+- "Parquet-adjacent" (tabular, column-oriented, per-column codecs, footer metadata)
+- "Avro-esque" (tabular, row-oriented)
+- "GeoTIFFesque" (2D array, tiled chunks, metadata header)
+- "Zarrish" (N-d array, per-chunk files, sidecar metadata)
 
-A "Custom" preset auto-saves the user's current configuration. Selecting a built-in preset doesn't destroy the custom state.
-
-Not yet built — see `docs/remediation-plan.md` decision D10 for the pinned design once this is implemented.
+Built-ins are checked-in JSON state snapshots (`src/presets/*.json`), loaded via
+`src/state/presets.ts`, which also validates them through the same
+migrate/default-merge/validate pipeline as any persisted state. Loading a built-in preset first
+snapshots the current configuration to a per-data-model "custom" slot so the user can get back to
+what they had; selecting a built-in preset doesn't destroy that custom state. See
+`docs/remediation-plan.md` decision D10 for the pinned design.
 
 ## Data Generation
 
@@ -822,7 +830,7 @@ src/
 - **Virtual scrolling**: all list/table/hex views must virtualize. Only render visible rows + a buffer.
 - **Debounce saves**: state persistence should debounce at ~500ms to avoid thrashing storage on rapid parameter changes.
 - **Codec computation**: for v1, all codecs run in the main thread. If performance is an issue with large datasets, consider moving codec execution to a Web Worker. The LZ codec's O(n×w) complexity may be slow for large inputs.
-- **Maximum data size**: the tool is for learning, not production. `SOFT_ELEMENT_CAP` (`src/components/config/SchemaEditor.tsx`, 8,000,000 total values across all variables) is the advisory ceiling — an `element-cap-warning` banner appears above it, but the app does not stop you. Below that, viewer components switch strategy at their own thresholds rather than degrading: `GridView`'s `MAX_CELLS` (10,000 cells) switches from DOM cells to a canvas render; `HexView`'s `WINDOWED_SECTION_ROWS` (262,144 rows) switches to a windowed view with an overview strip.
+- **Maximum data size**: the tool is for learning, not production, and enforces two tiers. `SOFT_ELEMENT_CAP` (`src/components/config/SchemaEditor.tsx`, 8,000,000 total values across all variables) is advisory — an `element-cap-warning` banner appears above it, but the app does not stop you. Further out, `HARD_ELEMENT_CAP` (32,000,000 total values) and `HARD_CHUNK_CAP` (1,048,576 chunks — `pipelineCapError`, `src/engine/pipelineCompute.ts`) are hard refusals: past either, the compute entries (`computePipelineStages`, `createPipelineComputer`) and `persistence.validateState` refuse the configuration outright with a clear error rather than risk an OOM crash. Below the soft cap, viewer components switch strategy at their own thresholds rather than degrading: `GridView`'s `MAX_CELLS` (10,000 cells) switches from DOM cells to a canvas render; `HexView`'s `WINDOWED_SECTION_ROWS` (262,144 rows) switches to a windowed view with an overview strip.
 
 ## Accessibility
 
@@ -838,7 +846,8 @@ The tool should handle degenerate configurations gracefully rather than crashing
 |----------|----------|
 | Zero variables | GridView shows "No variables defined" (its early-return now happens *after* all hooks run — an earlier draft violated React's rules of hooks here and crashed on delete-then-add-variable; fixed). TableView/FlatView/HexView render their normal (empty) structure. Pipeline stages produce 0-byte or near-empty outputs (magic/metadata bytes may still be present) rather than crashing. |
 | Empty shape (e.g., `[0]` or `[]`) | Cannot actually reach state: the Schema editor's shape inputs clamp to `Math.max(1, parseInt(...) \|\| 1)` per dimension before dispatch, and `SET_SHAPE` independently rejects any shape that is empty or has a non-positive dimension (returning the unchanged state). No warning-border UI exists for shape — the value simply can't go invalid. |
-| Shape with very large dimensions (> `SOFT_ELEMENT_CAP`, 8,000,000 total values) | Advisory only: the Schema section renders an `element-cap-warning` banner, but nothing blocks the configuration. Virtual scrolling, `GridView`'s canvas mode (above `MAX_CELLS`), and `HexView`'s windowed mode (above `WINDOWED_SECTION_ROWS`) keep large element counts from freezing the table/grid/hex/flat views regardless. |
+| Shape with very large dimensions (> `SOFT_ELEMENT_CAP`, 8,000,000 total values) | Advisory below `HARD_ELEMENT_CAP`/`HARD_CHUNK_CAP`: the Schema section renders an `element-cap-warning` banner, but nothing blocks the configuration. Virtual scrolling, `GridView`'s canvas mode (above `MAX_CELLS`), and `HexView`'s windowed mode (above `WINDOWED_SECTION_ROWS`) keep large element counts from freezing the table/grid/hex/flat views regardless. |
+| Shape/variable count exceeding `HARD_ELEMENT_CAP` (32,000,000 total values) or chunk count exceeding `HARD_CHUNK_CAP` (1,048,576 chunks) | Hard refusal: `pipelineCapError` (`src/engine/pipelineCompute.ts`) rejects the configuration with a clear error at every compute entry point (typing, presets, share links, persisted saves), rather than risking an OOM crash. |
 | Chunk shape larger than data shape on any dimension | Clamped per-dimension to the data shape (both in `ChunkConfig`'s input handler and in `SET_CHUNK_SHAPE`/`validateState`) — one chunk on that axis, silently, not an error. |
 | Chunk shape of 0 on any dimension | Rejected outright: `SET_CHUNK_SHAPE` requires every dimension to be a positive integer and returns the unchanged state otherwise; `ChunkConfig`'s input also clamps to a minimum of 1. (An earlier draft let a hand-edited `chunkShape: [0]` reach `computeChunkGrid`, which divides by the chunk dimension and hangs on an infinite loop — fixed by rejecting at the source.) |
 | Chunk shape of 1 on any dimension | Valid (maximally chunked); may produce many chunks. `ChunkConfig` shows the resulting chunk count in the warning color with "— consider larger chunks" once it exceeds 1000. |
@@ -923,10 +932,8 @@ scale/offset and bit-round moved to a separate Type Assignment concept and its o
 
 Features explicitly deferred from v1:
 
-- **Presets**: named state snapshots, built-in format examples ("basically Parquet", "basically Zarr")
 - **Wizard overlay**: guided step-by-step flow overlaid on the workbench
 - **Geo metadata helpers**: CRS picker (EPSG search), affine transform builder
-- **WASM codecs**: zstd, deflate for realistic entropy coding
 - **Data generation modes**: correlated, sorted, constant regions, user upload
 - **File explorer tree**: directory view for partitioned outputs
 - **Chunk ordering visualization**: visual showing which chunks are adjacent in the file vs. spatially adjacent, illustrating access pattern implications
