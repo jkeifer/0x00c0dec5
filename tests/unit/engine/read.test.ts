@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { readFile } from '../../../src/engine/read.ts';
+import { readFile, parseStructure } from '../../../src/engine/read.ts';
 import { computePipelineStages } from '../../../src/hooks/usePipeline.ts';
 import { DEFAULT_STATE, type AppState } from '../../../src/types/state.ts';
 import { generateValues } from '../../../src/engine/generate.ts';
 import { hexToBytes } from '../../../src/engine/bytes.ts';
+import type { MetadataEntry } from '../../../src/engine/metadata.ts';
 
 function stateWith(overrides: Partial<AppState>): AppState {
   return { ...DEFAULT_STATE, ...overrides };
@@ -382,5 +383,38 @@ describe('readFile — JSON and binary metadata formats', () => {
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(true);
+  });
+});
+
+describe('parseStructure — partitioning and chunkOrder', () => {
+  function entriesWith(overrides: Record<string, string>): MetadataEntry[] {
+    const base: Record<string, string> = {
+      schema: JSON.stringify([{ name: 'a', dtype: 'int32', logicalType: 'integer' }]),
+      shape: JSON.stringify([2]),
+      chunk_shape: JSON.stringify([2]),
+    };
+    return Object.entries({ ...base, ...overrides }).map(([key, value]) => ({ key, value }));
+  }
+
+  it('parses explicit per-chunk partitioning and column-major chunk_order', () => {
+    const structure = parseStructure(
+      entriesWith({ partitioning: 'per-chunk', chunk_order: 'column-major' }),
+    );
+    expect(structure.partitioning).toBe('per-chunk');
+    expect(structure.chunkOrder).toBe('column-major');
+  });
+
+  it('defaults to single partitioning and row-major chunk_order when keys are absent', () => {
+    const structure = parseStructure(entriesWith({}));
+    expect(structure.partitioning).toBe('single');
+    expect(structure.chunkOrder).toBe('row-major');
+  });
+
+  it('falls back to defaults for unknown/garbage values', () => {
+    const structure = parseStructure(
+      entriesWith({ partitioning: 'banana', chunk_order: 'banana' }),
+    );
+    expect(structure.partitioning).toBe('single');
+    expect(structure.chunkOrder).toBe('row-major');
   });
 });

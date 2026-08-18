@@ -75,6 +75,15 @@ export interface ParsedStructure {
   /** cl-6: element linearization order within each chunk. Defaults to 'c' when
    * the metadata key is absent (old files), keeping them byte-compatible. */
   linearization: LinearizationOrder;
+  /** Whether each chunk is written per its own values (`'single'`) or values
+   * are laid out per-chunk before being partitioned across files
+   * (`'per-chunk'`). Defaults to `'single'` when the `partitioning` key is
+   * absent (old files). */
+  partitioning: 'single' | 'per-chunk';
+  /** Order chunks are visited when writing/laying out the chunk stream.
+   * Defaults to `'row-major'` when the `chunk_order` key is absent (old
+   * files). */
+  chunkOrder: 'row-major' | 'column-major';
   fieldPipelines: Record<string, CodecStep[]> | null;
   chunkPipeline: CodecStep[] | null;
   chunkIndex: ChunkIndexEntry[] | null;
@@ -246,6 +255,16 @@ export function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructur
     linearizationStr && (LINEARIZATION_ORDERS as string[]).includes(linearizationStr)
       ? (linearizationStr as LinearizationOrder)
       : 'c';
+  // Same allow-list guard pattern as linearization above: absent or unknown
+  // value falls back to the default rather than propagating a bogus string.
+  const partitioningStr = metaMap.get('partitioning');
+  const partitioning: 'single' | 'per-chunk' =
+    partitioningStr === 'single' || partitioningStr === 'per-chunk' ? partitioningStr : 'single';
+  const chunkOrderStr = metaMap.get('chunk_order');
+  const chunkOrder: 'row-major' | 'column-major' =
+    chunkOrderStr === 'row-major' || chunkOrderStr === 'column-major'
+      ? chunkOrderStr
+      : 'row-major';
   const byteOrderStr = metaMap.get('byte_order');
   const byteOrderRecorded = byteOrderStr === 'little' || byteOrderStr === 'big';
   const byteOrder: 'little' | 'big' = byteOrderRecorded
@@ -276,6 +295,8 @@ export function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructur
     chunkShape: JSON.parse(chunkShapeStr),
     interleaving: interleavingStr as 'row' | 'column',
     linearization,
+    partitioning,
+    chunkOrder,
     fieldPipelines,
     chunkPipeline,
     chunkIndex: chunkIndexStr ? JSON.parse(chunkIndexStr) : null,
