@@ -570,15 +570,15 @@ interface AppState {
   fieldPipelines: Record<string, CodecStep[]>;  // keyed by Variable.id (not name — see below)
   chunkPipeline: CodecStep[];                    // per-chunk, used in row mode
   metadata: {
+    enabled: boolean;             // default false — master switch for assembly itself; see "Metadata Assembly" below
     customEntries: { key: string; value: string }[];
     serialization: "json" | "binary";
-    include: MetadataIncludeConfig;  // six granular toggles — see "Metadata UI" below (supersedes the old single includeChunkIndex boolean; chunkIndex is now one of the six groups)
+    include: MetadataIncludeConfig;  // six granular toggles, all default false — see "Metadata UI" below (supersedes the old single includeChunkIndex boolean; chunkIndex is now one of the six groups)
   };
   write: {
-    includeMetadata: boolean;     // default false — see the Read Step extension
     magicNumber: string;          // hex string
     partitioning: "single" | "per-chunk";
-    metadataPlacement: "header" | "footer" | "sidecar";
+    metadataPlacement: "header" | "footer" | "sidecar" | "omit";  // 'omit' assembles but writes metadata nowhere — see "Metadata Assembly" below
     chunkOrder: "row-major" | "column-major";
     footerLocator: "trailer" | "none";  // default 'trailer' — see "Footer Locator" under Write Step
   };
@@ -608,7 +608,7 @@ Two shapes worth calling out because they changed since the tool's first draft:
 The reducer (`src/state/useAppState.ts`) groups actions into three shapes rather than one setter action per field:
 
 1. **Semantic actions** for anything with real validation or structural consequences: `SET_SHAPE` (clamps/pads `chunkShape` to match), `SET_CHUNK_SHAPE` (rejects empty/non-positive/wrong-length shapes, mirroring `SET_SHAPE`), `ADD_VARIABLE`/`REMOVE_VARIABLE`/`UPDATE_VARIABLE`, `SET_INTERLEAVING`, `SET_FIELD_PIPELINE`/`SET_CHUNK_PIPELINE`, and the metadata custom-entry CRUD actions (`ADD_METADATA_ENTRY`/`REMOVE_METADATA_ENTRY`/`UPDATE_METADATA_ENTRY`).
-2. **Three patch actions** for plain-object config sections with no cross-field validation: `UPDATE_WRITE` (merges into `state.write`), `UPDATE_METADATA_CONFIG` (merges into `state.metadata`'s `serialization`/`includeChunkIndex`), `UPDATE_UI` (merges into `state.ui`). These replaced roughly a dozen one-field setter actions from earlier drafts.
+2. **Three patch actions** for plain-object config sections with no cross-field validation: `UPDATE_WRITE` (merges into `state.write`), `UPDATE_METADATA_CONFIG` (merges into `state.metadata`'s `serialization`/`include`/`enabled`), `UPDATE_UI` (merges into `state.ui`). These replaced roughly a dozen one-field setter actions from earlier drafts.
 3. **`SET_DATA_MODEL`** is intentionally a pure, storage-free reducer case — it only flips `state.dataModel`. The actual model-switch sequence (save the outgoing model's state, load the incoming model's state or default, force `dataModel` onto the resolved state, record the new active model, then swap it in) lives in a `switchDataModel()` wrapper exposed alongside `dispatch`, which dispatches a `REPLACE_STATE` action with the fully-resolved state. Keeping storage I/O out of the reducer body matters under React StrictMode, which double-invokes reducers.
 
 ### Migration Behavior
@@ -650,61 +650,92 @@ Generation is simple: uniform random within the dtype's range. The seed ensures 
 
 ## Metadata Assembly
 
-The metadata view is a dedicated section in the sidebar (and potentially a selectable stage in the pipeline) that shows all accumulated metadata:
+The metadata view is a dedicated section in the sidebar (and a selectable stage in the pipeline) that shows all accumulated metadata.
+
+### Enable Metadata (master switch)
+
+`state.metadata.enabled: boolean`, **default `false`**, gates metadata *assembly* itself — a level above every include toggle below. When off, `collectMetadata()` (`src/engine/metadata.ts`) is never consulted and the Metadata stage's bytes are a true zero-length `Uint8Array`, not a serialized empty object — nothing is assembled, not even the `metadata_format` envelope key. Everything else in the Metadata section dims when this is off. This is distinct from `write.metadataPlacement === 'omit'` (see Write Step below): that path *does* assemble real metadata bytes, then discards them at the write step rather than never building them — a different lesson ("the writer had the description and threw it away") that happens to produce the identical `no-metadata` read failure, since the reader can't distinguish "never assembled" from "assembled but discarded" any more than a real reader could.
 
 ### Auto-Collected Metadata
-Generated automatically from the pipeline configuration:
-- **Schema**: variable names, dtypes, variable count
-- **Shape**: dataset dimensions
-- **Chunk layout**: chunk shape, chunk count, chunk grid dimensions
-- **Chunk index**: byte offsets mapping chunk coordinates to file positions (generated at write time)
-- **Codec pipelines**: per-variable or per-chunk, with all parameters
-- **Byte order**: endianness
+Generated automatically from the pipeline configuration, each key gated by one of the six include groups below (`METADATA_KEY_GROUPS`, `src/engine/metadata.ts`):
+- **Schema** (`schema` group): `schema` (variable names + storage dtypes), `type_assignments`, `logical_types`
+- **Layout** (`layout` group): `shape`, `chunk_shape`, `chunk_order`, `partitioning`, `interleaving`, `linearization` (array model, ndim > 1 only)
+- **Codecs** (`codecs` group): `codec_pipelines`, per-variable or per-chunk, with all active (non-disabled) parameters
+- **Chunk index** (`chunkIndex` group): `chunk_index` — byte offsets mapping chunk coordinates to file positions (generated at write time)
+- **Descriptive** (`descriptive` group): `variable_statistics` only — see the include-toggle note below for why custom entries are no longer part of this group
+- **Endianness** (`endianness` group): `byte_order`
+
+`metadata_format` is an envelope key describing the metadata blob's own serialization and is always written whenever metadata is enabled, ungated by any include group — a reader needs it to know how to parse everything else. There is no `chunk_grid` entry: an earlier draft wrote one, but it was never read (`parseStructure` recomputes the grid from `shape` × `chunk_shape`), so it was deleted — every entry the file carries is one the reader (or a human) actually uses.
 
 ### User-Defined Metadata
-Arbitrary key-value string pairs. The UI provides an "add entry" button. For geospatial use cases, this is where CRS (as a WKT or PROJ string) and affine transform coefficients would be added. The tool does not interpret these values — they're opaque strings that get serialized alongside the structural metadata.
+Arbitrary key-value string pairs, written whenever metadata is enabled — ungated by any include toggle, including `descriptive` (clicking "+ Entry" is itself the intent; gating it under a default-off group would make the button silently write nothing). The UI provides an "add entry" button. For geospatial use cases, this is where CRS (as a WKT or PROJ string) and affine transform coefficients would be added — and picking a curated spatial source (Schema section) seeds exactly these keys automatically (see "Geospatial + Attribution Seeding" below). The tool does not interpret these values — they're opaque strings that get serialized alongside the structural metadata.
 
 This is pedagogically powerful for the geospatial audience: it shows that "geo" formats are just regular data formats with a few extra metadata keys. The CRS isn't magic — it's a string in a metadata dictionary.
+
+**A custom entry whose key matches an auto-collected key replaces that entry's value in place — override-wins, not renamed.** `collectMetadata()` builds the auto-collected entries first, then walks `state.metadata.customEntries`: if a custom key matches an existing entry's key, that entry's value is overwritten in place (position in the list preserved); otherwise the custom entry is appended. Duplicate custom keys: last one in the list wins. This means users can lie to the reader outright — a custom entry keyed `shape` with a fabricated value overrides the real one, and Read trusts it, same as every other real reader trusts its file's metadata unconditionally. (An earlier design instead renamed colliding custom keys by prefixing `user_`, so nothing could ever be overwritten; that machinery — `dedupeCustomKey`, decision DC-5 — is gone. Override-wins fits the tool's broader philosophy better: every include toggle already lets a user honestly starve the reader of a fact, and a lying custom entry is the same family of lesson.) `MetadataEditor` surfaces an informational note (not a warning) on a custom row whose key currently overrides an auto-collected one, naming the key. The only warning border left on a custom-entry row is for an empty key.
 
 ### Serialization
 The user chooses how metadata is serialized via a radio toggle:
 
 **JSON** (default): The metadata object is serialized as pretty-printed JSON text, then encoded to UTF-8 bytes. The sidebar shows a read-only preview of the JSON (truncated if long, expandable). This is the recommended default because users can read it.
 
-**Binary**: A simple length-prefixed binary format designed to be pedagogically transparent — the user can see the structure in the hex view. The format is:
+**Binary**: a TIFF-flavored tag format (`src/engine/metadataBinary.ts`) designed to make "you need the spec to read this" concrete — key *names* do not appear in the bytes for any registered key, only for user-defined (custom) entries. All framing is fixed little-endian, independent of `state.byteOrder` (which only governs chunk data), the same way TIFF's own `II`/`MM` marker is itself fixed-endian framing around a byte-order-dependent payload.
 
 ```
-[4 bytes] entry count (uint32 LE)
-For each entry:
-  [4 bytes] key length in bytes (uint32 LE)
-  [N bytes] key (UTF-8)
-  [4 bytes] value length in bytes (uint32 LE)
-  [M bytes] value (UTF-8 for strings, or raw bytes for numeric arrays)
+[u16 entry count]
+per entry: [u16 tag] [u8 type] [u32 payloadLength] [payload]
 ```
 
-The auto-collected metadata entries use well-known keys: `"schema"`, `"shape"`, `"chunk_shape"`, `"chunk_index"`, `"codec_pipelines"`, `"byte_order"`. User-defined entries use their literal key strings; a custom entry whose key matches an auto-generated key overrides that entry's value in place (last write wins on duplicate custom keys too). Values for structured entries (schema, codec pipelines) are JSON-encoded strings within the binary container — this is intentionally a hybrid to keep the binary format simple while still supporting nested structure.
+**Tags** — a fixed table, not derived from key strings at runtime:
+
+| tag | key | tag | key |
+|-----|-----|-----|-----|
+| 0 | (custom key — see below) | 8 | codec_pipelines |
+| 1 | schema | 9 | chunk_index |
+| 2 | shape | 10 | type_assignments |
+| 3 | chunk_shape | 11 | logical_types |
+| 4 | chunk_order | 12 | variable_statistics |
+| 5 | partitioning | 13 | metadata_format |
+| 6 | interleaving | 14 | byte_order |
+| 7 | linearization | | |
+
+Tag `0` is reserved for any key with no registered tag (i.e. every custom entry, plus any future auto-collected key that hasn't been assigned one yet). Its payload carries the key inline: `[u16 keyLen][key utf8][value bytes]`. Every registered tag's payload is the value bytes directly — no key, no length-prefixed name, just the tag number and the reader's own copy of this table.
+
+**Type byte** (`u8`) — the type is authoritative on decode; each registered key has one native type it prefers, with type `0` (string) as the universal fallback:
+
+- `0` — UTF-8 string. Used for entries that stay JSON-in-a-string (`codec_pipelines`, `type_assignments`, `logical_types`, `variable_statistics` — genuinely nested config not worth a bespoke binary shape), for every custom entry's value, and as the fallback for any registered key whose current value doesn't fit its native type.
+- `1` — u32 array: `shape`, `chunk_shape`. Payload is `[u32 × n]`, little-endian, `n` derived from `payloadLength / 4`.
+- `2` — enum code (one byte): `chunk_order`, `partitioning`, `interleaving`, `linearization`, `byte_order`, `metadata_format`. Each enum key has its own fixed string→code table (`ENUM_TABLES`, `src/engine/metadataBinary.ts`) — order is part of the spec and never changes.
+- `3` — packed chunk index: `[u8 ndim][u32 entryCount]` then per entry `[u32 × ndim coords][u32 offset][u32 size][u8 varNameLen][varName utf8]` (`varNameLen` 0 = no `variableName`, i.e. row-mode chunks). Because every offset/size field is a fixed-width `u32`, a binary-serialized chunk index needs no header/footer convergence dance — the metadata's own length doesn't affect where chunk data starts, the way it can for JSON (see "Header Metadata and Offset Convergence" below).
+- `4` — schema table: `[u16 varCount]` then per variable `[u8 nameLen][name utf8][u8 dtypeCode]`, `dtypeCode` from a fixed `DtypeKey` code table (`DTYPE_CODE_TABLE`, `src/engine/metadataBinary.ts`).
+
+**Encoding a value that doesn't fit its key's native type falls back to type `0` (string).** A custom override on a registered key — e.g. the user sets `interleaving` to the literal string `"banana"` — can't be enum-encoded (it's not in the table), so it's written as a plain string instead. The lie stays writable; the reader chokes on it honestly at parse time (`parseStructure`), not at the writer. **Decoding always re-stringifies through the type byte**, not the tag: `JSON.stringify` on native-decoded values reproduces the exact string `collectMetadata` would have emitted (chunk-index object key order is always `coords, offset, size`, then `variableName` only when present), so a binary round-trip is byte-for-byte equivalent to the JSON path at the `MetadataEntry[]` level. Decoding self-reports total bytes consumed (each record is self-describing via its own length prefix), which is how `headerByteLength` is derived for binary header metadata — no re-serialize-and-measure trick needed.
 
 The sidebar preview for binary mode shows the entry list with key names and byte sizes, plus total serialized size.
 
+### Metadata Stage "Entries" View
+
+The Metadata stage's pane offers three view modes, `[Entries, Hex, Flat]` — **Entries is first**, so it's the default. It renders a key/value table parsed from that stage's own actual serialized bytes (not from `collectMetadata`'s pre-serialize output) — in binary mode, each row additionally shows its numeric tag and type code, making the "you need the spec" lesson concrete: the same bytes, decoded, show exactly what a reader with the tag table sees versus what a hex dump alone shows. Per the "no engine compute from components" rule (see CLAUDE.md pitfall 8), the worker includes the parsed entries directly in the Metadata stage's payload; the component only renders them. Disabled metadata renders an empty state ("metadata is disabled — nothing is assembled"); enabled with zero entries (e.g. every include group off and no custom entries) renders "no entries".
+
 ### Metadata UI
 
-The Metadata section in the sidebar contains:
+The Metadata section in the sidebar, top to bottom:
 
-1. **Auto-collected entries** (read-only): a collapsible list showing each auto-collected metadata key, its value (or a summary for large values like chunk index), and byte size. These update automatically as the pipeline configuration changes.
+1. **Enable Metadata** toggle (`metadata-enabled-toggle`) — the master switch described above.
 
-2. **Custom entries**: an editable list of key-value pairs. Each row has a text input for the key, a text input for the value, and a delete button. An "Add entry" button appends a new blank row. For the geospatial use case, the presenter would add entries like `crs` = `EPSG:4326` and `transform` = `[1.0, 0.0, 0.0, 0.0, -1.0, 90.0]`.
+2. **Granular include toggles**: six independent on/off toggles (`state.metadata.include: MetadataIncludeConfig`, `src/types/state.ts`), **all default `false`**. Labels only — no per-toggle hint text describing the consequence; the Read section's step-progress line is the feedback loop instead, so the discovery is live rather than spoiled: `include-schema-toggle`, `include-layout-toggle`, `include-codecs-toggle`, `include-chunk-index-toggle` (the `chunk_index` group specifically — see "Chunk Index" under Write Step below), `include-descriptive-toggle` (gates `variable_statistics` only — see the custom-entries note above for why user-defined entries are no longer part of this group), and `include-endianness-toggle`. The first five gate metadata the reader (see the Read Step extension) genuinely *needs*: turning one off makes the reader stop at a specific, named step, with the read status reporting exactly where and why. **`include-endianness-toggle` is different in kind, not just in what it gates.** Omitting `byte_order` does not fail the read at all — the reader falls back to assuming the *host's* byte order (little-endian, in every browser) and proceeds normally. If the file was actually written big-endian, the read *succeeds*, silently, with every multi-byte value wrong. This is deliberate: it's the one metadata toggle in the tool that demonstrates silent data corruption rather than an honest failure, and the Read-stage's process view narrates the assumption explicitly ("byte order not recorded — assuming host (little-endian)") so the lesson is visible even when the numbers alone wouldn't tip you off.
 
-   **Custom keys that collide with an auto-collected key are renamed, not silently dropped.** Once metadata entries collapse into a flat key→value object at serialization, a custom entry keyed e.g. `shape` would otherwise overwrite the real auto-collected `shape` entry with last-write-wins semantics — corrupting the file's self-description with no warning. Instead, `collectMetadata()` (`src/engine/metadata.ts`) deterministically renames any colliding custom key by prefixing `user_` (repeating the prefix if the user's own key is already `user_<autoKey>`, so the rename itself can never introduce a fresh collision). Auto keys always keep their name; no information is lost, but the written key may differ from what was typed. `MetadataEditor` surfaces a warning on the affected row showing the resulting key.
+3. **Auto-collected entries** (read-only): a collapsible list showing each auto-collected metadata key, its value (or a summary for large values like chunk index), and byte size. These update automatically as the pipeline configuration changes.
 
-3. **Serialization toggle**: radio group for JSON / Binary.
+4. **"+ Entry" button, then custom entries beneath it**: an editable list of key-value pairs. Each row has a text input for the key, a text input for the value, and a delete button. For the geospatial use case, the presenter would add entries like `crs` = `EPSG:4326` and `transform` = `[1.0, 0.0, 0.0, 0.0, -1.0, 90.0]`. A row whose key currently overrides an auto-collected entry shows the informational note described above; an empty key still shows the warning border.
 
-4. **Granular include toggles**: six independent on/off toggles (`state.metadata.include: MetadataIncludeConfig`, `src/types/state.ts`), each starving a specific group of auto-collected metadata keys when off: `include-schema-toggle`, `include-layout-toggle`, `include-codecs-toggle`, `include-chunk-index-toggle` (the `chunk_index` group specifically — see "Chunk Index" under Write Step below), `include-descriptive-toggle`, and `include-endianness-toggle`. The first five gate metadata the reader (see the Read Step extension) genuinely *needs*: turning one off makes the reader stop at a specific, named step, with the read status reporting exactly where and why. **`include-endianness-toggle` is different in kind, not just in what it gates.** Omitting `byte_order` does not fail the read at all — the reader falls back to assuming the *host's* byte order (little-endian, in every browser) and proceeds normally. If the file was actually written big-endian, the read *succeeds*, silently, with every multi-byte value wrong. This is deliberate: it's the one metadata toggle in the tool that demonstrates silent data corruption rather than an honest failure, and the Read-stage's process view narrates the assumption explicitly ("byte order not recorded — assuming host (little-endian)") so the lesson is visible even when the numbers alone wouldn't tip you off.
+5. **Serialization toggle**: radio group for JSON / Binary.
 
-5. **Serialized size**: displays the total byte count of the serialized metadata.
+6. **Serialized size**: displays the total byte count of the serialized metadata (0 bytes when metadata is disabled).
 
-The Metadata Assembly also appears as a selectable stage in the pipeline strip and pane dropdowns. When selected, the pane shows the serialized metadata bytes in hex or flat view — so you can see exactly what the metadata looks like as bytes.
+The Metadata Assembly also appears as a selectable stage in the pipeline strip and pane dropdowns. When selected, the pane shows the serialized metadata as a key/value Entries table (default), or the raw bytes in hex or flat view.
 
-Serialized metadata bytes are then placed according to the Write step's configuration (header, footer, or sidecar).
+Serialized metadata bytes are then placed according to the Write step's configuration (header, footer, sidecar, or omit).
 
 ## Write Step
 
@@ -712,13 +743,13 @@ The write step assembles the final file(s). It combines:
 
 1. **Magic number** (optional): user-defined bytes at the start of the file. Also written at the end of every file (single-file and per-chunk alike) so the Read step (see the Read Step extension) has a trailing marker to check when a trailer is in play. Default: `00 C0 DE C5` (the tool's own name as a hex literal — and itself a demonstration of the concept).
 
-2. **Metadata bytes**: the serialized metadata from the Metadata Assembly step, placed as header (before data), footer (after data), or in a separate sidecar file. Only written at all when `write.includeMetadata` is true — see the Read Step extension for the default-false rationale.
+2. **Metadata bytes**: the serialized metadata from the Metadata Assembly step, placed as header (before data), footer (after data), in a separate sidecar file, or **omitted** (`write.metadataPlacement: "header" | "footer" | "sidecar" | "omit"`). Assembly and placement are two independent switches: `metadata.enabled` (default `false`) controls whether metadata is *assembled* at all — off means the Metadata stage's bytes are truly zero-length, not just unplaced — while `metadataPlacement === 'omit'` assembles real metadata bytes (visible in the Metadata stage pane) and then writes them into no file. Both produce the same `no-metadata` Read failure, and deliberately so: a reader has no way to distinguish "the writer never built a description" from "the writer built one and threw it away," any more than a real reader could. See the Read Step extension for the failure-taxonomy rationale.
 
 3. **Chunk data**: the encoded bytes from the codec pipeline, ordered according to the chunk ordering setting (row-major or column-major).
 
-4. **Chunk index**: a table of byte offsets for each chunk (`coords`/`offset`/`size`, plus `variableName` in column mode). This is part of the metadata and is critical for random access — see "Chunk Index" below for the user-facing toggle and what happens without it.
+4. **Chunk index**: a table of byte offsets for each chunk (`coords`/`offset`/`size`, plus `variableName` in column mode). This is part of the metadata and is critical for random access in single-file mode — see "Chunk Index" below for the user-facing toggle, the per-chunk-partitioning exception, and what happens without it when one's actually needed.
 
-5. **Partitioning**: in "single file" mode, everything goes in one file. In "per-chunk" mode, each chunk is a separate file (named `{variable}_chunk_{coords}` in column mode or `chunk_{coords}` in row mode), and metadata (when included) lives in its own `metadata` sidecar file. This mirrors zarr's directory structure.
+5. **Partitioning**: in "single file" mode, everything goes in one file. In "per-chunk" mode, each chunk is a separate file (named `{variable}_chunk_{coords}` in column mode or `chunk_{coords}` in row mode), and metadata (when included and not omitted) lives in its own `metadata` sidecar file. This mirrors zarr's directory structure.
 
 The output is one or more "virtual files" displayed in a file explorer view (`data-testid="file-explorer"`, entries `file-entry-{i}`). Each file shows its name, size, and byte content (viewable in the hex/flat viewers).
 
@@ -733,22 +764,27 @@ Footer and sidecar placement don't need this: chunk data is written starting rig
 When `write.metadataPlacement === 'footer'`, a second option controls **how a reader is expected to find the footer**: `write.footerLocator: 'trailer' | 'none'` (default `'trailer'`), shown in the Write sidebar section only in that placement.
 
 - **`'trailer'`**: the file layout is `[magic][chunks][metadata][u32 LE metadata-length][magic]` — this is exactly how Parquet works (`[footer][4-byte length]['PAR1']`; the help text says so directly). The reader seeks to `end − magicLen − 4`, reads the length, and slices the metadata exactly. Works identically for JSON and binary metadata.
-- **`'none'`**: the layout stays the plain `[magic][chunks][metadata][magic]` with no length recorded anywhere. The reader falls back to a best-effort backward scan: for JSON, a string-literal-aware brace scan (so an unbalanced `{`/`}` inside a custom metadata *value* — e.g. a WKT string — doesn't throw off the boundary); for binary, a bounded plausibility scan looking for a 4-byte little-endian value that looks like a small positive entry count. **Scanning may legitimately fail** — that's the intended lesson, not a bug, and the failure mode is deliberately narrow: no further heuristics are layered on to make it succeed more often. On failure, the Read step reports `metadata-not-found` (see the Read Step extension's failure taxonomy) with a message that names the Footer locator option as the fix.
+- **`'none'`**: the layout stays the plain `[magic][chunks][metadata][magic]` with no length recorded anywhere. The reader falls back to a best-effort backward scan: for JSON, a string-literal-aware brace scan (so an unbalanced `{`/`}` inside a custom metadata *value* — e.g. a WKT string — doesn't throw off the boundary); for binary, a bounded plausibility scan over the new tag-record framing — a plausible `[u16 count]` in `1..999` at some candidate offset, whose records then walk cleanly to the end of the buffer — bounded to the trailing 64 KiB of the file (`scanBinaryBackward`, `src/engine/readLocate.ts`) rather than scanning the whole file, since this app never realistically writes metadata larger than that. **Scanning may legitimately fail** — that's the intended lesson, not a bug, and the failure mode is deliberately narrow: no further heuristics are layered on to make it succeed more often. On failure, the Read step reports `metadata-not-found` (see the Read Step extension's failure taxonomy) with a message that names the Footer locator option as the fix.
 
 This is a genuine user-facing format decision, following the tool's philosophy that the user makes format decisions and the Read step shows the consequence — rather than the app quietly making footer metadata always locatable.
 
 ### Chunk Index (D3)
 
-A new Metadata option, `metadata.includeChunkIndex: boolean` (default `true`), controls whether the `chunk_index` entry (coords/offset/size per chunk) is written into metadata at all.
+The `include-chunk-index-toggle` Metadata option (`state.metadata.include.chunkIndex`, one of the six `MetadataIncludeConfig` groups, default `false`) controls whether the `chunk_index` entry (coords/offset/size per chunk) is written into metadata at all.
 
-- **`true`** (default): current/expected behavior — the reader locates each chunk directly from the index.
-- **`false`**: `chunk_index` is omitted entirely. The Read step then attempts to **compute** chunk offsets itself, from `chunkShape × dtype size` in row-major chunk order — but this is only possible when *every* codec pipeline in play is size-preserving (Delta, Byte Shuffle — not RLE or LZ, whose encoded size isn't derivable from the input shape alone). When a size-changing codec is present with no index, the Read step fails with reason `no-chunk-index`, explaining that variable-size chunks are unlocatable without an index — arguably the tool's clearest lesson in why real chunked/columnar formats (Zarr, Parquet) always carry one.
+**Per-chunk partitioning needs no chunk index, regardless of this toggle.** When `write.partitioning === 'per-chunk'`, each chunk is already its own file — `makePerChunkFileReader` (`src/engine/readReassemble.ts`) resolves each chunk by its filename's encoded coordinates and never consults `entry.offset`/`entry.size`. `resolveChunkIndex` (`src/engine/read.ts`) checks the reader's parsed `partitioning` before applying any size-changing-codec check: per-chunk partitioning synthesizes coords-only index entries for every chunk (offset/size fields present but unused, written as `0`) unconditionally, with no `no-chunk-index` failure possible regardless of what codecs are in play. This is arguably the sharper form of the lesson: Zarr's own per-chunk-file layout is exactly why *it* gets away without a chunk index at all.
 
-Reassembly always keys chunks by coordinates — taken from real index entries when present, or from the computed row-major layout when absent — never from filename parsing or raw byte-offset order.
+**Single-file mode** is where the toggle actually matters:
+- **On**: the reader locates each chunk directly from the recorded index.
+- **Off**: `chunk_index` is omitted entirely. The Read step then attempts to **compute** chunk offsets itself, from `chunkShape × dtype size` in the recorded `chunk_order` (row-major or column-major — see below), but this is only possible when *every* codec pipeline in play is size-preserving (Delta, Byte Shuffle — not RLE or LZ, whose encoded size isn't derivable from the input shape alone). When a size-changing codec is present with no index, the Read step fails with reason `no-chunk-index`, explaining that variable-size chunks are unlocatable without an index — arguably the tool's clearest lesson in why real chunked/columnar formats (Zarr, Parquet) always carry one.
+
+**`chunk_order` is now actually read**, closing a real bug: `parseStructure` parses the `chunk_order` metadata key (`'row-major' | 'column-major'`, default `'row-major'` when the key is absent — matching pre-existing files) into `ParsedStructure`, and single-file synthetic-offset computation enumerates chunk coordinates in that recorded order rather than always assuming row-major. Previously, `chunk_order` was written but never parsed, so a file with column-major chunk order plus a missing chunk index plus size-preserving codecs would read *successfully with silently scrambled chunk placement* — wrong data, no error. `partitioning` is parsed the same way (`'single' | 'per-chunk'`, default `'single'` when absent), and reader selection now keys off this parsed value rather than `dataFiles.length === 1` (which mis-selected the single-file reader for the legitimate one-chunk-per-chunk-file edge case); when the `partitioning` key itself is absent, reader selection falls back to the old file-count heuristic.
+
+Reassembly always keys chunks by coordinates — taken from real index entries when present, or from the computed layout (in the recorded `chunk_order`) when absent — never from filename parsing or raw byte-offset order.
 
 ### Reader Knows the Magic Number (D2)
 
-The Read step extension originally specified that the reader "operates only on what's in the file — it does not have access to the pipeline configuration." That still holds for everything *except* the magic number: `readFile(files, formatSpec: { magic: Uint8Array })` is handed the configured magic as part of the "format definition" it was built to understand — exactly as a real Parquet reader is compiled knowing to expect `PAR1`, or a TIFF reader knows `II*\0`. This is a deliberate, narrow exception to the "reader has no config access" rule, scoped to magic only; every other structural fact (shape, dtypes, chunking, codecs) still comes exclusively from the file's own metadata.
+The Read step extension originally specified that the reader "operates only on what's in the file — it does not have access to the pipeline configuration." That still holds for everything *except* the magic number: `readFile(files, formatSpec: { magic: Uint8Array })` is handed the configured magic as part of the "format definition" it was built to understand — exactly as a real Parquet reader is compiled knowing to expect `PAR1`, or a TIFF reader knows `II*\0`. This is a deliberate, narrow exception to the "reader has no config access" rule, scoped to magic only; every other structural fact (shape, dtypes, chunking, partitioning, chunk order, codecs) still comes exclusively from the file's own metadata.
 
 With the magic known, the reader **verifies** it — both the leading magic, and the trailing magic when a footer trailer is in play — rather than blindly stripping `magic.length` bytes from each end and hoping for the best. A mismatch is its own failure reason, `bad-magic`, with a message that draws the Parquet/TIFF analogy directly: this reader only understands files it was built for, and a mismatch means either the wrong kind of file or file corruption before the reader ever got to interpret contents. This closes a real gap: without verification, a reader that merely strips N bytes from each end has no way to detect that those weren't actually magic bytes at all, and would silently attempt to parse garbage as if it were the real payload.
 
@@ -860,9 +896,11 @@ The tool should handle degenerate configurations gracefully rather than crashing
 | Shape dimensions changed (e.g., from 1-d to 2-d) while chunk shape is still 1-d | `SET_SHAPE` pads `chunkShape` with the new dimensions' full extent (new dims default to no splitting) and clamps existing dims that shrank; `validateState`'s merge-time fallback does the equivalent clamp/pad for a stale persisted `chunkShape`. |
 | Odd-length or non-hex magic-number input | `hexToBytes` (`src/engine/bytes.ts`) is the single tolerant implementation used by both write and read: it strips non-hex characters and drops a trailing unpaired nibble rather than throwing. `WriteConfig`'s magic input (`data-testid="magic-input"`) shows a warning border for non-hex characters, but no input can crash the pipeline. |
 | Stale/corrupt/outdated `localStorage` | `loadState()` runs migrate → deep-merge-over-defaults → structural validation (see State Management → Migration Behavior) before the app ever sees the result; anything unrecoverable (e.g. a corrupt shape) resets to a full default state rather than reaching the engine with missing fields. |
-| `write.includeMetadata = false` | The Write stage omits metadata entirely (not even a placeholder) — only magic + chunk data. The Read stage fails with reason `no-metadata`, prompting the user to enable it. This is the read extension's central lesson and is the default. |
+| `metadata.enabled = false` (default) | `collectMetadata` is never called; the Metadata stage's bytes are a true zero-length `Uint8Array`. The Write stage places nothing — only magic + chunk data. The Read stage fails with reason `no-metadata`, prompting the user to enable it. This is the read extension's central lesson and is the default. |
+| `write.metadataPlacement = 'omit'` with `metadata.enabled = true` | Metadata *is* assembled (real bytes, visible in the Metadata stage pane and its Entries view) but Write places it in no file, sidecar included. Read still fails with `no-metadata` — indistinguishable from the disabled case, which is itself the honest behavior: a reader can't tell "never built" from "built and discarded." |
 | Metadata present but its locator/scanner can't find it (`footerLocator: 'none'`) | Read fails with reason `metadata-not-found`, distinct from `no-metadata` — the message explains that metadata was written but a best-effort scan couldn't pin it down, and names the Footer locator "trailer" option as the fix. |
-| Chunk index omitted (`includeChunkIndex: false`) with a size-changing codec (RLE/LZ) in play | Read fails with reason `no-chunk-index` rather than attempting (and silently getting wrong) a computed offset guess. |
+| Chunk index omitted (`include.chunkIndex = false`, its default) with a size-changing codec (RLE/LZ) in play, single-file partitioning | Read fails with reason `no-chunk-index` rather than attempting (and silently getting wrong) a computed offset guess. |
+| Chunk index omitted with per-chunk partitioning | Read still succeeds regardless of codec — each chunk file is its own chunk, so there is nothing for an index to locate; `resolveChunkIndex` synthesizes coords-only entries unconditionally. |
 | Magic number mismatch on read | Read fails with reason `bad-magic` before any attempt to locate metadata or reconstruct values. |
 
 ## Open Questions for Implementation
