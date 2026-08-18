@@ -41,11 +41,11 @@ async function main() {
   await dtypeSelects.first().selectOption('int8');
   await page.waitForTimeout(300);
 
-  // ── 2. Enable "Include metadata" so Read succeeds. ──
-  const writeSection = page.locator('[data-testid="sidebar-section-write"]');
-  await writeSection.scrollIntoViewIfNeeded();
-  const includeMetadataYes = page.locator('[data-testid="include-metadata-toggle"] button', { hasText: /^Yes$/ });
-  await includeMetadataYes.click();
+  // ── 2. Enable metadata so Read succeeds. ──
+  const metadataSection = page.locator('[data-testid="sidebar-section-metadata"]');
+  await metadataSection.scrollIntoViewIfNeeded();
+  const metadataEnabledYes = page.locator('[data-testid="metadata-enabled-toggle"] button', { hasText: /^Yes$/ });
+  await metadataEnabledYes.click();
   await page.waitForTimeout(400);
   // Project 4's eager Pyodide init keeps the worker busy for the first few
   // seconds after boot — wait for the pipeline to actually go idle before

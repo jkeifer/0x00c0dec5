@@ -16,22 +16,20 @@ interface MetadataEditorProps {
   onRemoveEntry: (index: number) => void;
   onUpdateEntry: (index: number, key?: string, value?: string) => void;
   onIncludeChange: (key: keyof MetadataIncludeConfig, value: boolean) => void;
+  onEnabledChange: (enabled: boolean) => void;
 }
 
-// Task 5 (read plan): one row per metadata.include group (Task 1), each with
-// a testid and a one-line consequence hint naming the read step the reader
-// stops at without it. Driven as a map, not five copy-pasted blocks.
-const INCLUDE_GROUPS: { key: keyof MetadataIncludeConfig; testid: string; label: string; hint: string }[] = [
-  { key: 'schema', testid: 'include-schema-toggle', label: 'Include Schema', hint: 'without this, the reader stops at: read schema' },
-  { key: 'layout', testid: 'include-layout-toggle', label: 'Include Layout', hint: 'without this, the reader stops at: read layout' },
-  { key: 'codecs', testid: 'include-codecs-toggle', label: 'Include Codecs', hint: 'without this, the reader stops at: decode chunks (or reads garbage)' },
-  { key: 'chunkIndex', testid: 'include-chunk-index-toggle', label: 'Include Chunk Index', hint: 'without this, the reader stops at: locate chunks (single-file entropy configs)' },
-  { key: 'descriptive', testid: 'include-descriptive-toggle', label: 'Include Descriptive', hint: 'without this, the reader loses: nothing — the reader doesn\'t need it' },
-  // Task cl-9: 6th group, gating byte_order (Task cl-8). Its failure mode is
-  // NOT a hard-failed read step (that's why the hint reads differently from
-  // the five above) — off, a big-endian file reads successfully with wrong
-  // values, because the reader silently assumes host byte order.
-  { key: 'endianness', testid: 'include-endianness-toggle', label: 'Include Endianness', hint: 'off: the reader assumes the host\'s byte order — reads may silently succeed with wrong values.' },
+// Task 5 (read plan) / Task 8 (metadata redesign): one row per
+// metadata.include group (Task 1), label + Radio only — the per-group
+// consequence hints were spoilers and are deleted (brief: "labels only —
+// no spoilers"). Driven as a map, not six copy-pasted blocks.
+const INCLUDE_GROUPS: { key: keyof MetadataIncludeConfig; testid: string; label: string }[] = [
+  { key: 'schema', testid: 'include-schema-toggle', label: 'Include Schema' },
+  { key: 'layout', testid: 'include-layout-toggle', label: 'Include Layout' },
+  { key: 'codecs', testid: 'include-codecs-toggle', label: 'Include Codecs' },
+  { key: 'chunkIndex', testid: 'include-chunk-index-toggle', label: 'Include Chunk Index' },
+  { key: 'descriptive', testid: 'include-descriptive-toggle', label: 'Include Descriptive' },
+  { key: 'endianness', testid: 'include-endianness-toggle', label: 'Include Endianness' },
 ];
 
 /**
@@ -77,6 +75,7 @@ export function MetadataEditor({
   onRemoveEntry,
   onUpdateEntry,
   onIncludeChange,
+  onEnabledChange,
 }: MetadataEditorProps) {
   const [autoExpanded, setAutoExpanded] = useState(false);
 
@@ -86,16 +85,21 @@ export function MetadataEditor({
   // `state` with `customEntries` cleared gives exactly the auto-only entries
   // (the "Auto-collected" display), without a second bespoke collection path
   // that could drift from what `collectMetadata` actually does.
+  const metadataDisabled = !state.metadata.enabled;
+
   const autoEntries = useMemo(
     () =>
-      collectMetadata(
-        { ...state, metadata: { ...state.metadata, customEntries: [] } },
-        [],
-        undefined,
-        state.metadata.include.chunkIndex ? buildPlaceholderChunkIndex(state) : undefined,
-      ),
+      metadataDisabled
+        ? []
+        : collectMetadata(
+            { ...state, metadata: { ...state.metadata, customEntries: [] } },
+            [],
+            undefined,
+            state.metadata.include.chunkIndex ? buildPlaceholderChunkIndex(state) : undefined,
+          ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
+      metadataDisabled,
       state.variables,
       state.shape,
       state.chunkShape,
@@ -112,7 +116,7 @@ export function MetadataEditor({
   // Override-wins (spec §2): a custom entry whose key matches an auto-collected
   // key replaces that entry's value in place rather than being renamed away, so
   // the row's note here is just "does this key match one collectMetadata already
-  // emitted" — the full rework (dedicated override UI) is Task 8.
+  // emitted".
   const customKeyInfo = useMemo(() => {
     return metadata.customEntries.map((entry) => {
       if (!entry.key) return { overrides: false };
@@ -121,29 +125,66 @@ export function MetadataEditor({
   }, [autoEntries, metadata.customEntries]);
 
   // Task 2.11 (UI-7): the full entry set Write will actually embed — auto
-  // entries plus `collectMetadata`'s own DC-5-renamed custom entries. Do NOT
-  // append `metadata.customEntries` again here (that was the double-count
+  // entries plus `collectMetadata`'s own override-applied custom entries. Do
+  // NOT append `metadata.customEntries` again here (that was the double-count
   // bug): `collectMetadata` already includes them.
   const allEntries = useMemo(
-    () => collectMetadata(
-      state,
-      [],
-      undefined,
-      state.metadata.include.chunkIndex ? buildPlaceholderChunkIndex(state) : undefined,
-    ),
-    [state],
+    () =>
+      metadataDisabled
+        ? []
+        : collectMetadata(
+            state,
+            [],
+            undefined,
+            state.metadata.include.chunkIndex ? buildPlaceholderChunkIndex(state) : undefined,
+          ),
+    [metadataDisabled, state],
   );
   const serializedSize = useMemo(
-    () => serializeMetadata(allEntries, metadata.serialization).length,
-    [allEntries, metadata.serialization],
+    () => (metadataDisabled ? 0 : serializeMetadata(allEntries, metadata.serialization).length),
+    [metadataDisabled, allEntries, metadata.serialization],
   );
-  const chunkIndexIsEstimate = state.metadata.include.chunkIndex;
-  const metadataDisabled = !state.metadata.enabled;
+  const chunkIndexIsEstimate = !metadataDisabled && state.metadata.include.chunkIndex;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
+      {/* Enable metadata — master switch, section owns it now (Task 8) */}
+      <div data-testid="metadata-enabled-toggle" style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+        <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Enable Metadata</span>
+        <Radio
+          options={[
+            { value: 'yes', label: 'Yes' },
+            { value: 'no', label: 'No' },
+          ]}
+          value={metadata.enabled ? 'yes' : 'no'}
+          onChange={(v) => onEnabledChange(v === 'yes')}
+          size="sm"
+          testIdPrefix="metadata-enabled-toggle-opt"
+        />
+      </div>
+
+      {/* Metadata include-group toggles (Task 5, read plan) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
+        {INCLUDE_GROUPS.map(({ key, testid, label }) => (
+          <div key={key} data-testid={testid} style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>{label}</span>
+            <Radio
+              options={[
+                { value: 'yes', label: 'Yes' },
+                { value: 'no', label: 'No' },
+              ]}
+              value={state.metadata.include[key] ? 'yes' : 'no'}
+              onChange={(v) => onIncludeChange(key, v === 'yes')}
+              size="sm"
+              disabled={metadataDisabled}
+              testIdPrefix={`${testid}-opt`}
+            />
+          </div>
+        ))}
+      </div>
+
       {/* Auto-collected entries */}
-      <div>
+      <div style={{ opacity: metadataDisabled ? 0.5 : 1 }}>
         <button
           onClick={() => setAutoExpanded(!autoExpanded)}
           style={{
@@ -189,8 +230,23 @@ export function MetadataEditor({
         )}
       </div>
 
-      {/* Custom entries */}
+      {/* Custom entries — "+ Entry" precedes the rows it adds to (Task 8) */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+        <button
+          onClick={onAddEntry}
+          disabled={metadataDisabled}
+          style={{
+            ...inputStyle(),
+            cursor: metadataDisabled ? 'default' : 'pointer',
+            color: colors.accent,
+            background: 'transparent',
+            textAlign: 'center',
+            fontSize: fontSizes.xs,
+            opacity: metadataDisabled ? 0.5 : 1,
+          }}
+        >
+          + Entry
+        </button>
         {metadata.customEntries.map((entry, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
@@ -198,90 +254,51 @@ export function MetadataEditor({
                 type="text"
                 value={entry.key}
                 placeholder="key"
+                disabled={metadataDisabled}
                 onChange={(e) => onUpdateEntry(i, e.target.value, undefined)}
                 data-testid={`metadata-custom-key-${i}`}
                 style={{
                   ...inputStyle(),
                   flex: 1,
                   minWidth: 0,
-                  borderColor: !entry.key
-                    ? colors.warning
-                    : customKeyInfo[i]?.overrides
-                      ? colors.warning
-                      : colors.border,
+                  borderColor: !entry.key ? colors.warning : colors.border,
+                  opacity: metadataDisabled ? 0.5 : 1,
                 }}
               />
               <input
                 type="text"
                 value={entry.value}
                 placeholder="value"
+                disabled={metadataDisabled}
                 onChange={(e) => onUpdateEntry(i, undefined, e.target.value)}
-                style={{ ...inputStyle(), flex: 1, minWidth: 0 }}
+                style={{ ...inputStyle(), flex: 1, minWidth: 0, opacity: metadataDisabled ? 0.5 : 1 }}
               />
               <button
                 onClick={() => onRemoveEntry(i)}
+                disabled={metadataDisabled}
                 aria-label={entry.key ? `Remove metadata entry ${entry.key}` : 'Remove metadata entry'}
                 style={{
                   background: 'transparent',
                   border: 'none',
                   color: colors.textTertiary,
-                  cursor: 'pointer',
+                  cursor: metadataDisabled ? 'default' : 'pointer',
                   fontSize: fontSizes.sm,
                   padding: `0 ${spacing.xs}px`,
                   lineHeight: 1,
+                  opacity: metadataDisabled ? 0.5 : 1,
                 }}
               >
                 x
               </button>
             </div>
             {customKeyInfo[i]?.overrides && (
-              <span data-testid={`metadata-key-collision-warning-${i}`} style={{ fontSize: fontSizes.xs, color: colors.warning }}>
+              <span data-testid={`metadata-key-override-note-${i}`} style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
                 overrides auto-collected {entry.key}
               </span>
             )}
           </div>
         ))}
       </div>
-
-      {/* Metadata include-group toggles (Task 5, read plan) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
-        {metadataDisabled && (
-          <span style={{ fontSize: fontSizes.xs, color: colors.warning }}>
-            metadata is not being written — enable "Include Metadata" in Write to change these
-          </span>
-        )}
-        {INCLUDE_GROUPS.map(({ key, testid, label, hint }) => (
-          <div key={key} data-testid={testid} style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
-            <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>{label}</span>
-            <Radio
-              options={[
-                { value: 'yes', label: 'Yes' },
-                { value: 'no', label: 'No' },
-              ]}
-              value={state.metadata.include[key] ? 'yes' : 'no'}
-              onChange={(v) => onIncludeChange(key, v === 'yes')}
-              size="sm"
-              disabled={metadataDisabled}
-              testIdPrefix={`${testid}-opt`}
-            />
-            <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>{hint}</span>
-          </div>
-        ))}
-      </div>
-
-      <button
-        onClick={onAddEntry}
-        style={{
-          ...inputStyle(),
-          cursor: 'pointer',
-          color: colors.accent,
-          background: 'transparent',
-          textAlign: 'center',
-          fontSize: fontSizes.xs,
-        }}
-      >
-        + Entry
-      </button>
 
       {/* Serialization toggle */}
       <Radio
@@ -292,6 +309,7 @@ export function MetadataEditor({
         value={metadata.serialization}
         onChange={(v) => onSerializationChange(v as 'json' | 'binary')}
         size="sm"
+        disabled={metadataDisabled}
       />
 
       <div data-testid="metadata-serialized-size" style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>

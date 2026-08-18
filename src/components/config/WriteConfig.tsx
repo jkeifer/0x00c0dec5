@@ -5,16 +5,10 @@ import { inputStyle } from '../shared/controlStyles.ts';
 
 interface WriteConfigProps {
   write: AppState['write'];
-  // Metadata redesign Task 1 (controller ruling R1): the "Include Metadata"
-  // toggle now reads/writes the metadata master switch (`state.metadata.enabled`)
-  // directly rather than the removed `write.includeMetadata`. A later task
-  // removes this toggle from WriteConfig entirely.
-  metadataEnabled: boolean;
   onMagicChange: (magicNumber: string) => void;
   onPartitioningChange: (partitioning: 'single' | 'per-chunk') => void;
-  onMetadataPlacementChange: (placement: 'header' | 'footer' | 'sidecar') => void;
+  onMetadataPlacementChange: (placement: 'header' | 'footer' | 'sidecar' | 'omit') => void;
   onChunkOrderChange: (order: 'row-major' | 'column-major') => void;
-  onMetadataEnabledChange: (enabled: boolean) => void;
   onFooterLocatorChange: (footerLocator: 'trailer' | 'none') => void;
 }
 
@@ -29,32 +23,16 @@ const warningTextStyle: React.CSSProperties = {
 
 export function WriteConfig({
   write,
-  metadataEnabled,
   onMagicChange,
   onPartitioningChange,
   onMetadataPlacementChange,
   onChunkOrderChange,
-  onMetadataEnabledChange,
   onFooterLocatorChange,
 }: WriteConfigProps) {
   const hexValid = isValidHex(write.magicNumber);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
-      {/* Include metadata — first control, most consequential */}
-      <div data-testid="include-metadata-toggle" style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
-        <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Include Metadata</span>
-        <Radio
-          options={[
-            { value: 'yes', label: 'Yes' },
-            { value: 'no', label: 'No' },
-          ]}
-          value={metadataEnabled ? 'yes' : 'no'}
-          onChange={(v) => onMetadataEnabledChange(v === 'yes')}
-          size="sm"
-        />
-      </div>
-
       {/* Magic number */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
         <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Magic Number</span>
@@ -100,10 +78,11 @@ export function WriteConfig({
             { value: 'header', label: 'Header' },
             { value: 'footer', label: 'Footer' },
             { value: 'sidecar', label: 'Sidecar' },
+            { value: 'omit', label: 'Omit' },
           ]}
           value={write.metadataPlacement}
           onChange={(v) =>
-            onMetadataPlacementChange(v as 'header' | 'footer' | 'sidecar')
+            onMetadataPlacementChange(v as 'header' | 'footer' | 'sidecar' | 'omit')
           }
           size="sm"
         />

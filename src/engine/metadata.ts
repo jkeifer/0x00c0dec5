@@ -178,13 +178,6 @@ export function collectMetadata(
   return entries;
 }
 
-/** Auto keys the current custom entries would override — UI note only. */
-export function overriddenAutoKeys(state: AppState): Set<string> {
-  const autoKeys = new Set(Object.keys(METADATA_KEY_GROUPS));
-  autoKeys.add('metadata_format');
-  return new Set(state.metadata.customEntries.map((e) => e.key).filter((k) => autoKeys.has(k)));
-}
-
 /** Serialize metadata entries as pretty-printed JSON → UTF-8 bytes. */
 export function serializeMetadataJSON(entries: MetadataEntry[]): Uint8Array {
   const obj: Record<string, string> = {};

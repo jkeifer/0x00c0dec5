@@ -15,10 +15,10 @@ const STAGES = ['linearized', 'encoded', 'metadata', 'write', 'read'];
 async function main() {
   const { browser, page } = await launch({ fresh: true });
 
-  // Read fails by default (includeMetadata is off in the starter config) —
+  // Read fails by default (metadata.enabled is off in the starter config) —
   // enable it so the 'read' case below exercises the success path (mixed
   // magic/metadata/chunk traces reconstructed) rather than the failure panel.
-  await page.click('[data-testid="include-metadata-toggle"] >> text=Yes');
+  await page.click('[data-testid="metadata-enabled-toggle"] >> text=Yes');
   await page.waitForTimeout(300);
 
   for (const stageName of STAGES) {

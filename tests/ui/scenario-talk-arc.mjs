@@ -101,7 +101,7 @@ async function selectPreset(page, value) {
 
 async function setIncludeMetadata(page, on) {
   await page
-    .locator('[data-testid="include-metadata-toggle"] button', { hasText: on ? /^Yes$/ : /^No$/ })
+    .locator('[data-testid="metadata-enabled-toggle"] button', { hasText: on ? /^Yes$/ : /^No$/ })
     .click();
   await page.waitForTimeout(500);
   await waitForPipelineIdle(page, 120_000);

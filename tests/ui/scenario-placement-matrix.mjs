@@ -39,7 +39,7 @@ async function readStatusText(page) {
 
 async function setIncludeMetadata(page, on) {
   await page
-    .locator('[data-testid="include-metadata-toggle"] button', { hasText: on ? /^Yes$/ : /^No$/ })
+    .locator('[data-testid="metadata-enabled-toggle"] button', { hasText: on ? /^Yes$/ : /^No$/ })
     .click();
   await page.waitForTimeout(500);
 }

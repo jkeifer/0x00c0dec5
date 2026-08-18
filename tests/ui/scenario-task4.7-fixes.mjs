@@ -24,10 +24,10 @@ async function main() {
   const { browser, page } = await launch();
 
   // ── UI-16: HoverBar structural-trace labels ──────────────────────────
-  // Metadata is off by default (write.includeMetadata: false) — turn it on
+  // Metadata is off by default (metadata.enabled: false) — turn it on
   // so a 'metadata' trace actually exists in the Write stage's bytes.
   await page
-    .locator('[data-testid="sidebar-section-write"] [data-testid="include-metadata-toggle"] button', { hasText: /^Yes$/ })
+    .locator('[data-testid="sidebar-section-metadata"] [data-testid="metadata-enabled-toggle"] button', { hasText: /^Yes$/ })
     .click();
   await page.waitForTimeout(300);
 
