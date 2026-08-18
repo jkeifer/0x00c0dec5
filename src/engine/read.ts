@@ -80,6 +80,11 @@ export interface ParsedStructure {
    * (`'per-chunk'`). Defaults to `'single'` when the `partitioning` key is
    * absent (old files). */
   partitioning: 'single' | 'per-chunk';
+  /** Whether the `partitioning` entry was actually present in the metadata.
+   * When false, reader selection falls back to the `dataFiles.length === 1`
+   * heuristic (old files carried no partitioning key). Mirrors
+   * `byteOrderRecorded`. */
+  partitioningRecorded: boolean;
   /** Order chunks are visited when writing/laying out the chunk stream.
    * Defaults to `'row-major'` when the `chunk_order` key is absent (old
    * files). */
@@ -258,8 +263,8 @@ export function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructur
   // Same allow-list guard pattern as linearization above: absent or unknown
   // value falls back to the default rather than propagating a bogus string.
   const partitioningStr = metaMap.get('partitioning');
-  const partitioning: 'single' | 'per-chunk' =
-    partitioningStr === 'single' || partitioningStr === 'per-chunk' ? partitioningStr : 'single';
+  const partitioningRecorded = partitioningStr === 'single' || partitioningStr === 'per-chunk';
+  const partitioning: 'single' | 'per-chunk' = partitioningRecorded ? partitioningStr : 'single';
   const chunkOrderStr = metaMap.get('chunk_order');
   const chunkOrder: 'row-major' | 'column-major' =
     chunkOrderStr === 'row-major' || chunkOrderStr === 'column-major'
@@ -296,6 +301,7 @@ export function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructur
     interleaving: interleavingStr as 'row' | 'column',
     linearization,
     partitioning,
+    partitioningRecorded,
     chunkOrder,
     fieldPipelines,
     chunkPipeline,
@@ -365,7 +371,7 @@ export function reconstruct(
   // play is size-preserving; throws NoChunkIndexError otherwise.
   const resolvedChunkIndex = resolveChunkIndex(
     structure.chunkIndex,
-    { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline },
+    { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, partitioning: structure.partitioning, chunkOrder: structure.chunkOrder },
     magicBytes.length + chunkDataStart,
   );
   recorder.ok('locate-chunks', `${resolvedChunkIndex.length} chunk(s) located`);
@@ -384,9 +390,14 @@ export function reconstruct(
     byteOrder,
   };
 
-  const getChunkBytes = dataFiles.length === 1
-    ? makeSingleFileChunkReader(dataFiles[0].bytes)
-    : makePerChunkFileReader(dataFiles, magicBytes);
+  // Reader selection by recorded partitioning; when the `partitioning` key
+  // was absent (old files), fall back to the pre-Task-5 file-count heuristic.
+  const perChunk = structure.partitioningRecorded
+    ? structure.partitioning === 'per-chunk'
+    : dataFiles.length > 1;
+  const getChunkBytes = perChunk
+    ? makePerChunkFileReader(dataFiles, magicBytes)
+    : makeSingleFileChunkReader(dataFiles[0].bytes);
   const reconstructedValues = reconstructValues(context, getChunkBytes);
   recorder.ok(
     'decode-chunks',

@@ -121,30 +121,74 @@ export function makePerChunkFileReader(dataFiles: VirtualFile[], magicBytes: Uin
   };
 }
 
+/** Order chunk coords the way `write.ts`'s `orderChunks` lays them out for a
+ * single file: row-major keeps `enumerateChunkCoords` order; column-major
+ * sorts so the LAST dimension varies slowest (comparing dims high→low, first
+ * differing dim wins) — mirror of the column-major comparator there, so a
+ * synthetic index enumerates chunks in exactly the written byte order. */
+function orderCoordsForChunkOrder(
+  coordsList: number[][],
+  chunkGrid: number[],
+  chunkOrder: 'row-major' | 'column-major',
+): number[][] {
+  if (chunkOrder !== 'column-major' || chunkGrid.length <= 1) return coordsList;
+  return [...coordsList].sort((a, b) => {
+    for (let d = chunkGrid.length - 1; d >= 0; d--) {
+      if (a[d] !== b[d]) return a[d] - b[d];
+    }
+    return 0;
+  });
+}
+
 /**
  * D3: when `chunk_index` is absent from metadata (`includeChunkIndex` off),
- * compute synthetic entries instead — possible only when every codec
- * pipeline in play is size-preserving. Any size-changing (entropy: rle/lz)
- * codec means encoded chunk size can't be derived from chunkShape x dtype
- * size alone, and nothing else records where a chunk starts — throws
- * `NoChunkIndexError`, mapped by the caller to 'no-chunk-index'.
+ * compute synthetic entries instead.
  *
- * Offsets assume chunks are laid out back-to-back in row-major chunk order;
- * column-major `chunkOrder` requires a real index to reassemble.
+ * Per-chunk partitioning: chunks are resolved by FILENAME from coords (see
+ * `makePerChunkFileReader`), which ignores offset/size entirely, so a
+ * synthetic index only needs coords (and variableName in column mode) — with
+ * NO size-changing-codec check, since size is never consulted.
+ *
+ * Single-file partitioning: offsets are derived from chunk geometry x dtype
+ * size, laid out back-to-back in `chunkOrder` (row- or column-major) so they
+ * match what `write.ts` wrote. Only possible when every codec pipeline in
+ * play is size-preserving; any size-changing (entropy: rle/lz) codec makes
+ * offsets underivable and throws `NoChunkIndexError` (mapped to
+ * 'no-chunk-index').
  */
 export function resolveChunkIndex(
   chunkIndex: ChunkIndexEntry[] | null,
   // `linearization` intentionally excluded: chunk byte SIZE (and thus offset)
   // depends only on chunk geometry x dtype size, not on intra-chunk element
   // order, so this function never needs it.
-  ctx: Omit<ReassemblyContext, 'chunkIndex' | 'totalElements' | 'codecInfoPresent' | 'linearization' | 'byteOrder'>,
+  ctx: Omit<ReassemblyContext, 'chunkIndex' | 'totalElements' | 'codecInfoPresent' | 'linearization' | 'byteOrder'>
+    & { partitioning: 'single' | 'per-chunk'; chunkOrder: 'row-major' | 'column-major' },
   magicLength: number,
 ): ChunkIndexEntry[] {
   if (chunkIndex) return chunkIndex;
 
-  const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline } = ctx;
+  const { schema, shape, chunkShape, interleaving, fieldPipelines, chunkPipeline, partitioning, chunkOrder } = ctx;
   const chunkGrid = computeChunkGrid(shape, chunkShape);
-  const coordsList = enumerateChunkCoords(chunkGrid);
+  const coordsList = orderCoordsForChunkOrder(enumerateChunkCoords(chunkGrid), chunkGrid, chunkOrder);
+
+  // Per-chunk files are matched by filename (coords/variableName), not offset,
+  // so a coords-only synthetic index suffices regardless of codec — no size,
+  // no NoChunkIndexError.
+  if (partitioning === 'per-chunk') {
+    const entries: ChunkIndexEntry[] = [];
+    if (interleaving === 'column') {
+      for (const varInfo of schema) {
+        for (const coords of coordsList) {
+          entries.push({ coords, offset: 0, size: 0, variableName: varInfo.name });
+        }
+      }
+    } else {
+      for (const coords of coordsList) {
+        entries.push({ coords, offset: 0, size: 0 });
+      }
+    }
+    return entries;
+  }
 
   if (interleaving === 'column') {
     for (const varInfo of schema) {

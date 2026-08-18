@@ -358,6 +358,135 @@ describe('readFile — 2-D multi-chunk reassembly (task 2.1)', () => {
   });
 });
 
+describe('readFile — Task 5: synthetic index, chunk order, reader selection', () => {
+  // Common: include.chunkIndex OFF so resolveChunkIndex must synthesize.
+  const includeNoChunkIndex = {
+    schema: true, layout: true, codecs: true,
+    chunkIndex: false, descriptive: true, endianness: true,
+  };
+
+  it('per-chunk files + size-changing codec + no chunk index: read succeeds', () => {
+    // per-chunk reader resolves chunks by FILENAME from coords and ignores
+    // offset/size, so a size-changing (rle) codec must NOT trip the
+    // no-chunk-index guard. Pre-fix this throws NoChunkIndexError.
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [8],
+      chunkShape: [4],
+      variables: [
+        {
+          id: 'temp', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'integer', min: 0, max: 5, generation: 'random' },
+          typeAssignment: { storageDtype: 'uint8' },
+        },
+      ],
+      fieldPipelines: { temp: [{ codec: 'rle', params: {} }] },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: includeNoChunkIndex },
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const expected = generateValues('temperature', state.variables[0].logicalType, 8) as number[];
+      const actual = result.reconstructedValues.get('temperature')! as number[];
+      expect(actual.length).toBe(expected.length);
+      for (let i = 0; i < expected.length; i++) {
+        expect(actual[i]).toBeCloseTo(expected[i], 4);
+      }
+    }
+  });
+
+  it('single file + column-major chunk order + no chunk index: reconstructs correctly', () => {
+    // >=2 chunks in each of 2 dims so order matters; size-preserving pipeline.
+    // The single file lays chunks out column-major; the synthetic index must
+    // enumerate coords in that same order. Pre-fix the synthetic index is
+    // row-major and values reassemble scrambled.
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [4, 4],
+      chunkShape: [2, 2],
+      variables: [
+        {
+          id: 'humidity', name: 'humidity', color: '#98c379',
+          logicalType: { type: 'integer', min: 0, max: 100, generation: 'random' },
+          typeAssignment: { storageDtype: 'uint16' },
+        },
+      ],
+      fieldPipelines: { humidity: [] },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: includeNoChunkIndex },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'footer', chunkOrder: 'column-major' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const expected = generateValues('humidity', state.variables[0].logicalType, 16);
+      const actual = result.reconstructedValues.get('humidity');
+      expect(actual).toEqual(expected);
+    }
+  });
+
+  it('single chunk, per-chunk partitioning: read succeeds (reader selected by partitioning)', () => {
+    // shape == chunkShape => 1 chunk file. Pre-fix dataFiles.length===1 chose
+    // the single-file reader, which slices by offset/size and mis-reads a
+    // per-chunk file (whose only real offset is past its own leading magic).
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [4],
+      chunkShape: [4],
+      variables: [
+        {
+          id: 'temp', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'integer', min: 0, max: 100, generation: 'random' },
+          typeAssignment: { storageDtype: 'uint16' },
+        },
+      ],
+      fieldPipelines: { temperature: [] },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: includeNoChunkIndex },
+      write: { ...DEFAULT_STATE.write, partitioning: 'per-chunk' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const expected = generateValues('temperature', state.variables[0].logicalType, 4);
+      const actual = result.reconstructedValues.get('temperature');
+      expect(actual).toEqual(expected);
+    }
+  });
+
+  it('single file + entropy codec + no chunk index still fails no-chunk-index', () => {
+    // Unchanged lesson: single-file mode DOES need offsets, and a size-changing
+    // codec makes them underivable without a real index.
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [8],
+      chunkShape: [4],
+      variables: [
+        {
+          id: 'temp', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'integer', min: 0, max: 5, generation: 'random' },
+          typeAssignment: { storageDtype: 'uint8' },
+        },
+      ],
+      fieldPipelines: { temp: [{ codec: 'rle', params: {} }] },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: includeNoChunkIndex },
+      write: { ...DEFAULT_STATE.write, partitioning: 'single', metadataPlacement: 'footer' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.reason).toBe('no-chunk-index');
+    }
+  });
+});
+
 describe('readFile — JSON and binary metadata formats', () => {
   it('reads JSON metadata successfully', () => {
     const state = deepMerge(DEFAULT_STATE, {
