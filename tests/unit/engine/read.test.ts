@@ -5,6 +5,9 @@ import { DEFAULT_STATE, type AppState } from '../../../src/types/state.ts';
 import { generateValues } from '../../../src/engine/generate.ts';
 import { hexToBytes } from '../../../src/engine/bytes.ts';
 import type { MetadataEntry } from '../../../src/engine/metadata.ts';
+import { locateMetadata } from '../../../src/engine/readLocate.ts';
+import { encodeMetadataBinary } from '../../../src/engine/metadataBinary.ts';
+import type { VirtualFile } from '../../../src/types/pipeline.ts';
 
 function stateWith(overrides: Partial<AppState>): AppState {
   return { ...DEFAULT_STATE, ...overrides };
@@ -545,5 +548,77 @@ describe('parseStructure — partitioning and chunkOrder', () => {
     );
     expect(structure.partitioning).toBe('single');
     expect(structure.chunkOrder).toBe('row-major');
+  });
+});
+
+// Task 7 fix: scanBinaryBackward must stay a BOUNDED window from the end (the
+// footer='none' blob always ends at end-of-data, so its start is at most its
+// own length back), never a whole-file walk — the unbounded version was
+// measured at ~O(n²) (85s on a 4MB chunk-only file) on a path that runs
+// unconditionally for any single-file read whose trailer/header probes miss.
+describe('locateMetadata — binary backward scan is a bounded window (perf guard)', () => {
+  const MAGIC = new Uint8Array([0xaa, 0x55]);
+
+  /** Deterministic junk that never starts a JSON object, never ends in '}',
+   * and (verified by these tests passing) never coincidentally decodes as a
+   * full-consuming binary metadata frame. */
+  function junk(n: number): Uint8Array {
+    const out = new Uint8Array(n);
+    let s = 12345;
+    for (let i = 0; i < n; i++) {
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      out[i] = (s >> 16) & 0xff;
+    }
+    if (n > 0) out[n - 1] = 0x00; // not '}' — keep the JSON footer path out of play
+    return out;
+  }
+
+  function singleFile(payload: Uint8Array): VirtualFile[] {
+    const bytes = new Uint8Array(MAGIC.length * 2 + payload.length);
+    bytes.set(MAGIC, 0);
+    bytes.set(payload, MAGIC.length);
+    bytes.set(MAGIC, MAGIC.length + payload.length);
+    return [{ name: 'data', bytes, layout: undefined } as unknown as VirtualFile];
+  }
+
+  it('binary metadata LARGER than the window is not recognized (proves the scan is bounded)', () => {
+    // ~80KB blob > the 64KiB window: starts further back from the end than the
+    // scan reaches. An unbounded scan would find it (metadata-not-found); the
+    // bounded scan must honestly report no-metadata.
+    const blob = encodeMetadataBinary([{ key: 'x', value: 'a'.repeat(80000) }]);
+    expect(blob.length).toBeGreaterThan(65536);
+    const payload = new Uint8Array(1000 + blob.length);
+    payload.set(junk(1000), 0);
+    payload.set(blob, 1000);
+    const files = singleFile(payload);
+    const result = locateMetadata(files, files, MAGIC);
+    expect(result.entries).toBeNull();
+    if (result.entries === null) expect(result.reason).toBe('no-metadata');
+  });
+
+  it('binary metadata WITHIN the window is spotted as plausible but never returned (D1 lesson)', () => {
+    const blob = encodeMetadataBinary([
+      { key: 'shape', value: '[16]' },
+      { key: 'metadata_format', value: 'binary' },
+    ]);
+    const payload = new Uint8Array(1000 + blob.length);
+    payload.set(junk(1000), 0);
+    payload.set(blob, 1000);
+    const files = singleFile(payload);
+    const result = locateMetadata(files, files, MAGIC);
+    expect(result.entries).toBeNull(); // never returns entries — the lesson
+    if (result.entries === null) expect(result.reason).toBe('metadata-not-found');
+  });
+
+  it('a 4MB chunk-only file completes the scan quickly and reports no-metadata', () => {
+    const files = singleFile(junk(4 * 1024 * 1024));
+    const t0 = performance.now();
+    const result = locateMetadata(files, files, MAGIC);
+    const elapsed = performance.now() - t0;
+    expect(result.entries).toBeNull();
+    if (result.entries === null) expect(result.reason).toBe('no-metadata');
+    // Unbounded scan took ~85s here; the bounded window takes single-digit ms.
+    // Generous bound to keep CI noise out.
+    expect(elapsed).toBeLessThan(250);
   });
 });

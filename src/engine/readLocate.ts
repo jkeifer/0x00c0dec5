@@ -237,7 +237,7 @@ function scanBinaryForward(dataBytes: Uint8Array, start: number): ScanResult {
   const count = view.getUint16(start, true);
   if (count <= 0 || count >= 1000) return NOT_FOUND;
   try {
-    const { entries, bytesConsumed } = decodeMetadataBinary(dataBytes.slice(start));
+    const { entries, bytesConsumed } = decodeMetadataBinary(dataBytes.subarray(start));
     if (entries.length > 0) {
       return {
         entries: entries.map(({ key, value }) => ({ key, value })),
@@ -272,18 +272,36 @@ function scanBinaryForward(dataBytes: Uint8Array, start: number): ScanResult {
  * never accidentally forms. We still refuse to return the decoded entries: the
  * point is a reader can't KNOW this candidate is the metadata versus a
  * coincidence without a first-class locator (trailer/index), so the honest
- * outcome is metadata-not-found, not a successful read. Scans every offset (no
- * fixed window) because the metadata can be arbitrarily far from the end;
- * read is not on a hot path and files here are small.
+ * outcome is metadata-not-found, not a successful read.
+ *
+ * The scan is a BOUNDED window from the end, not a whole-file walk: footer
+ * metadata is written immediately before the trailing magic (already stripped
+ * here), so the blob always ENDS at end-of-data and its start can be at most
+ * its own length back from the end. The window therefore only needs to cover
+ * the largest metadata blob worth recognizing — and the bound is what keeps
+ * this path cheap, because it runs unconditionally for ANY single-file read
+ * whose trailer/header probes miss (including the default metadata-disabled
+ * state, recomputed in the worker on every chunk-byte change). An unbounded
+ * scan was measured at ~O(n²) (85s on a 4MB chunk-only file); the bounded
+ * window is O(window). Probes use subarray views, never .slice(), so no
+ * probe copies the tail.
  */
+// ponytail: 64 KiB covers any metadata this app realistically writes (default
+// full-state binary blob is ~1KB; chunk_index grows it by ~13B/chunk). A
+// footer='none' blob bigger than the window degrades to 'no-metadata' instead
+// of 'metadata-not-found' — raise the bound if that lesson ever needs to
+// survive pathological chunk counts.
+const BINARY_BACKWARD_SCAN_WINDOW = 65536;
+
 function scanBinaryBackward(dataBytes: Uint8Array): ScanResult {
   if (dataBytes.length < 2) return NOT_FOUND;
   const view = new DataView(dataBytes.buffer, dataBytes.byteOffset, dataBytes.byteLength);
-  for (let start = dataBytes.length - 2; start >= 0; start--) {
+  const lo = Math.max(0, dataBytes.length - BINARY_BACKWARD_SCAN_WINDOW);
+  for (let start = dataBytes.length - 2; start >= lo; start--) {
     const count = view.getUint16(start, true);
     if (count <= 0 || count >= 1000) continue;
     try {
-      const { entries, bytesConsumed } = decodeMetadataBinary(dataBytes.slice(start));
+      const { entries, bytesConsumed } = decodeMetadataBinary(dataBytes.subarray(start));
       if (entries.length > 0 && bytesConsumed === dataBytes.length - start) {
         return { entries: null, plausible: true };
       }
