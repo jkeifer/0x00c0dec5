@@ -73,10 +73,10 @@ export interface Variable {
  */
 export interface MetadataIncludeConfig {
   schema: boolean; // schema, type_assignments, logical_types
-  layout: boolean; // shape, chunk_shape, chunk_grid, chunk_order, partitioning, interleaving
+  layout: boolean; // shape, chunk_shape, chunk_order, partitioning, interleaving
   codecs: boolean; // codec_pipelines
   chunkIndex: boolean; // chunk_index (absorbs legacy includeChunkIndex — D3 semantics unchanged)
-  descriptive: boolean; // variable_statistics + ALL customEntries
+  descriptive: boolean; // variable_statistics only (customEntries are ungated — metadata redesign Task 2)
   /**
    * Task cl-8: gates the `byte_order` metadata entry. Its OWN group, NOT part
    * of `layout`, because its failure mode is unique: unlike every other group

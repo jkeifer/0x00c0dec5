@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { AppState } from '../../types/state.ts';
 import type { MetadataIncludeConfig } from '../../types/state.ts';
-import { collectMetadata, serializeMetadata, dedupeCustomKey, type ChunkIndexEntry } from '../../engine/metadata.ts';
+import { collectMetadata, serializeMetadata, type ChunkIndexEntry } from '../../engine/metadata.ts';
 import { computeChunkGrid, enumerateChunkCoords } from '../../engine/chunk.ts';
 import { pipelineCapError } from '../../engine/pipelineCompute.ts';
 import { Radio } from '../shared/Radio.tsx';
@@ -109,18 +109,14 @@ export function MetadataEditor({
     ],
   );
 
-  // DC-5: collect the auto keys once so custom-entry rows can show the same
-  // collision warning that `collectMetadata`'s serialization-time renaming
-  // will actually apply — computed the same way (claimed-keys accumulate as
-  // we walk the custom entries in order, so a later entry can also collide
-  // with an earlier renamed one).
+  // Override-wins (spec §2): a custom entry whose key matches an auto-collected
+  // key replaces that entry's value in place rather than being renamed away, so
+  // the row's note here is just "does this key match one collectMetadata already
+  // emitted" — the full rework (dedicated override UI) is Task 8.
   const customKeyInfo = useMemo(() => {
-    const claimed = new Set(autoEntries.map((e) => e.key));
     return metadata.customEntries.map((entry) => {
-      if (!entry.key) return { collides: false, finalKey: entry.key };
-      const before = claimed.has(entry.key);
-      const finalKey = dedupeCustomKey(entry.key, claimed);
-      return { collides: before, finalKey };
+      if (!entry.key) return { overrides: false };
+      return { overrides: autoEntries.some((a) => a.key === entry.key) };
     });
   }, [autoEntries, metadata.customEntries]);
 
@@ -210,7 +206,7 @@ export function MetadataEditor({
                   minWidth: 0,
                   borderColor: !entry.key
                     ? colors.warning
-                    : customKeyInfo[i]?.collides
+                    : customKeyInfo[i]?.overrides
                       ? colors.warning
                       : colors.border,
                 }}
@@ -238,9 +234,9 @@ export function MetadataEditor({
                 x
               </button>
             </div>
-            {customKeyInfo[i]?.collides && (
+            {customKeyInfo[i]?.overrides && (
               <span data-testid={`metadata-key-collision-warning-${i}`} style={{ fontSize: fontSizes.xs, color: colors.warning }}>
-                key collides with auto metadata; will be written as {customKeyInfo[i].finalKey}
+                overrides auto-collected {entry.key}
               </span>
             )}
           </div>

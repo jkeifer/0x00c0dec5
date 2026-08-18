@@ -42,7 +42,7 @@ function collectFor(state: AppState) {
 
 const GROUP_KEYS: Record<string, string[]> = {
   schema: ['schema', 'type_assignments', 'logical_types'],
-  layout: ['shape', 'chunk_shape', 'chunk_grid', 'chunk_order', 'partitioning', 'interleaving'],
+  layout: ['shape', 'chunk_shape', 'chunk_order', 'partitioning', 'interleaving'],
   codecs: ['codec_pipelines'],
   chunkIndex: ['chunk_index'],
   endianness: ['byte_order'],
@@ -67,10 +67,10 @@ describe('collectMetadata group filtering', () => {
     });
   }
 
-  it('descriptive off omits variable_statistics AND custom entries', () => {
+  it('descriptive off omits variable_statistics but NOT custom entries', () => {
     const off = collectFor(stateWith({ descriptive: false })).map((e) => e.key);
     expect(off).not.toContain('variable_statistics');
-    expect(off).not.toContain('author');
+    expect(off).toContain('author');
   });
 
   it('metadata_format envelope key is always present regardless of toggles', () => {

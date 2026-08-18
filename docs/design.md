@@ -682,7 +682,7 @@ For each entry:
   [M bytes] value (UTF-8 for strings, or raw bytes for numeric arrays)
 ```
 
-The auto-collected metadata entries use well-known keys: `"schema"`, `"shape"`, `"chunk_shape"`, `"chunk_grid"`, `"chunk_index"`, `"codec_pipelines"`, `"byte_order"`. User-defined entries use their literal key strings. Values for structured entries (schema, codec pipelines) are JSON-encoded strings within the binary container — this is intentionally a hybrid to keep the binary format simple while still supporting nested structure.
+The auto-collected metadata entries use well-known keys: `"schema"`, `"shape"`, `"chunk_shape"`, `"chunk_index"`, `"codec_pipelines"`, `"byte_order"`. User-defined entries use their literal key strings; a custom entry whose key matches an auto-generated key overrides that entry's value in place (last write wins on duplicate custom keys too). Values for structured entries (schema, codec pipelines) are JSON-encoded strings within the binary container — this is intentionally a hybrid to keep the binary format simple while still supporting nested structure.
 
 The sidebar preview for binary mode shows the entry list with key names and byte sizes, plus total serialized size.
 

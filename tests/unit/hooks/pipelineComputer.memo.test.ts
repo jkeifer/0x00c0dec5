@@ -43,9 +43,9 @@ const metadataChanged: AppState = {
   ...DEFAULT_STATE,
   metadata: {
     ...DEFAULT_STATE.metadata,
-    // descriptive gates custom-entry collection in collectMetadata (metadata
-    // redesign Task 1: DEFAULT_STATE.metadata.include now defaults every
-    // group off) — must be on for the "hello" sanity check below.
+    // Custom entries are ungated (metadata redesign Task 2), so `descriptive`
+    // doesn't need to be on for the "hello" sanity check below — left on here
+    // anyway since this test isn't exercising include-group filtering.
     include: { ...DEFAULT_STATE.metadata.include, descriptive: true },
     customEntries: [{ key: 'note', value: 'hello' }],
   },

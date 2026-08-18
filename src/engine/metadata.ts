@@ -1,6 +1,5 @@
 import type { AppState, MetadataIncludeConfig } from '../types/state.ts';
 import type { VariableStats } from '../types/pipeline.ts';
-import { computeChunkGrid } from './chunk.ts';
 import { activeSteps } from './codecs.ts';
 
 export interface MetadataEntry {
@@ -21,7 +20,7 @@ export interface MetadataEntry {
  */
 export const METADATA_KEY_GROUPS: Record<string, keyof MetadataIncludeConfig> = {
   schema: 'schema', type_assignments: 'schema', logical_types: 'schema',
-  shape: 'layout', chunk_shape: 'layout', chunk_grid: 'layout',
+  shape: 'layout', chunk_shape: 'layout',
   chunk_order: 'layout', partitioning: 'layout', interleaving: 'layout',
   linearization: 'layout',
   codec_pipelines: 'codecs',
@@ -67,12 +66,6 @@ export function collectMetadata(
   // Chunk shape
   if (include.layout) {
     entries.push({ key: 'chunk_shape', value: JSON.stringify(state.chunkShape) });
-  }
-
-  // Chunk grid
-  if (include.layout) {
-    const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
-    entries.push({ key: 'chunk_grid', value: JSON.stringify(chunkGrid) });
   }
 
   // Chunk index (byte offsets) — D3: user-facing toggle. When off, the reader
@@ -171,44 +164,24 @@ export function collectMetadata(
     entries.push({ key: 'byte_order', value: state.byteOrder });
   }
 
-  // Append custom entries, gated on `descriptive` (same group as
-  // variable_statistics — both are "descriptive" content layered on top of
-  // the structural self-description). DC-5: a custom entry whose key
-  // collides with one of the auto-generated keys above would otherwise
-  // silently shadow it once entries collapse into a key->value object at
-  // serialization (last write wins), corrupting the file's self-description
-  // (e.g. a custom `shape` key overwriting the real dataset shape).
-  // Deterministically rename any colliding custom key to `user_<key>`
-  // (re-prefixing again if the user's own key is literally already
-  // `user_<autoKey>`, so the rename itself can never introduce a new
-  // collision) — auto keys always win their name, and no information is
-  // lost. MetadataEditor surfaces a warning on these rows.
-  if (include.descriptive) {
-    const autoKeys = new Set(entries.map((e) => e.key));
-    for (const entry of state.metadata.customEntries) {
-      if (entry.key) {
-        entries.push({ key: dedupeCustomKey(entry.key, autoKeys), value: entry.value });
-      }
-    }
+  // Custom entries: override-wins (spec §2). A custom key matching an existing
+  // entry replaces its value in place — users can lie to the reader; the include
+  // toggles already let them starve it. Duplicate custom keys: last wins.
+  for (const entry of state.metadata.customEntries) {
+    if (!entry.key) continue;
+    const existing = entries.find((e) => e.key === entry.key);
+    if (existing) existing.value = entry.value;
+    else entries.push({ key: entry.key, value: entry.value });
   }
 
   return entries;
 }
 
-/**
- * DC-5: rename `key` to avoid colliding with an auto-generated metadata key,
- * by prefixing `user_` repeatedly until it no longer collides with anything
- * already claimed (auto keys, or an earlier custom entry that already claimed
- * the prefixed name). Exported so `MetadataEditor` can show the same
- * resulting key in its collision warning.
- */
-export function dedupeCustomKey(key: string, claimedKeys: Set<string>): string {
-  let candidate = key;
-  while (claimedKeys.has(candidate)) {
-    candidate = `user_${candidate}`;
-  }
-  claimedKeys.add(candidate);
-  return candidate;
+/** Auto keys the current custom entries would override — UI note only. */
+export function overriddenAutoKeys(state: AppState): Set<string> {
+  const autoKeys = new Set(Object.keys(METADATA_KEY_GROUPS));
+  autoKeys.add('metadata_format');
+  return new Set(state.metadata.customEntries.map((e) => e.key).filter((k) => autoKeys.has(k)));
 }
 
 /** Serialize metadata entries as pretty-printed JSON → UTF-8 bytes. */

@@ -166,13 +166,16 @@ describe('collectMetadata', () => {
     expect(keys).toContain('schema');
     expect(keys).toContain('shape');
     expect(keys).toContain('chunk_shape');
-    expect(keys).toContain('chunk_grid');
     expect(keys).toContain('codec_pipelines');
     expect(keys).toContain('byte_order');
     expect(keys).toContain('interleaving');
     expect(keys).toContain('metadata_format');
     expect(keys).toContain('chunk_order');
     expect(keys).toContain('partitioning');
+  });
+
+  it('no chunk_grid entry is ever written', () => {
+    expect(collectMetadata(FULL_STATE, [], undefined).some((e) => e.key === 'chunk_grid')).toBe(false);
   });
 
   it('chunk_order reflects state.write.chunkOrder (task 2.2)', () => {
@@ -253,5 +256,57 @@ describe('collectMetadata', () => {
     const keys = entries.map((e) => e.key);
     expect(keys).not.toContain('');
     expect(keys).toContain('valid');
+  });
+
+  it('custom entry overrides auto entry in place', () => {
+    const state = {
+      ...FULL_STATE,
+      metadata: {
+        ...FULL_STATE.metadata,
+        customEntries: [{ key: 'shape', value: '[999]' }],
+      },
+    };
+    const entries = collectMetadata(state, [], undefined, undefined);
+    const shapeEntries = entries.filter((e) => e.key === 'shape');
+    expect(shapeEntries).toHaveLength(1);
+    expect(shapeEntries[0].value).toBe('[999]');
+    // position preserved: 'shape' still appears before 'chunk_shape'
+    expect(entries.findIndex((e) => e.key === 'shape')).toBeLessThan(
+      entries.findIndex((e) => e.key === 'chunk_shape'),
+    );
+  });
+
+  it('custom entries are written even with descriptive off; stats are not', () => {
+    const state = {
+      ...FULL_STATE,
+      metadata: {
+        ...FULL_STATE.metadata,
+        include: { ...FULL_STATE.metadata.include, descriptive: false },
+        customEntries: [{ key: 'crs', value: 'EPSG:4326' }],
+      },
+    };
+    const someStatsMap = new Map([
+      [state.variables[0].id, { min: 0, max: 1, mean: 0.5, count: 10, clipped: 0, rounded: 0, isLossy: false, nanCount: 0 }],
+    ]);
+    const entries = collectMetadata(state, [], someStatsMap, undefined);
+    expect(entries.some((e) => e.key === 'crs')).toBe(true);
+    expect(entries.some((e) => e.key === 'variable_statistics')).toBe(false);
+  });
+
+  it('duplicate custom keys: last wins', () => {
+    const state = {
+      ...FULL_STATE,
+      metadata: {
+        ...FULL_STATE.metadata,
+        customEntries: [
+          { key: 'a', value: 'first' },
+          { key: 'a', value: 'second' },
+        ],
+      },
+    };
+    const entries = collectMetadata(state, [], undefined, undefined);
+    const aEntries = entries.filter((e) => e.key === 'a');
+    expect(aEntries).toHaveLength(1);
+    expect(aEntries[0].value).toBe('second');
   });
 });

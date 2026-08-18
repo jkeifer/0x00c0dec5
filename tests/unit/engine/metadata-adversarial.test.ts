@@ -77,20 +77,39 @@ describe('metadata adversarial — brace in custom value (RP-2)', () => {
   });
 });
 
-describe('metadata adversarial — custom key shadows an auto key (DC-5)', () => {
-  // FIXED DC-5 (Phase 2 task 2.11) — `collectMetadata` (`src/engine/metadata.ts`)
-  // now deterministically renames a custom entry whose key collides with an
-  // auto-generated key to `user_<key>` (via `dedupeCustomKey`, re-prefixing
-  // again if needed to avoid a secondary collision) before appending it, so a
-  // custom entry keyed `shape` no longer overwrites the real shape JSON.
-  // `MetadataEditor` shows a matching warning on the affected row.
-  it('either reads successfully with correct values or surfaces an explicit shadow warning', () => {
+describe('metadata adversarial — custom key overrides an auto key (spec §2, override-wins)', () => {
+  // CHANGED (metadata redesign Task 2) — `collectMetadata` (`src/engine/metadata.ts`)
+  // no longer renames a colliding custom key; it replaces the auto entry's
+  // value in place instead. Override-wins is deliberate: users can lie to the
+  // reader (the include toggles already let them starve it entirely), so a
+  // custom entry keyed `shape` with a non-JSON value now genuinely corrupts
+  // the shape the reader sees, and the read fails honestly rather than being
+  // silently protected by a rename. `MetadataEditor` shows a warning on the
+  // affected row ("overrides auto-collected {key}").
+  it('overriding shape with a non-JSON value fails the read (no silent protection)', () => {
     const state = stateWithCustomEntries([{ key: 'shape', value: 'not-json-shape' }]);
     const { files } = computePipelineStages(state);
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
-    // Per the task's contract: assert read succeeds with correct values (the
-    // stronger, desired outcome) rather than accepting silent corruption.
+    expect(result.success).toBe(false);
+  });
+
+  // Overriding `schema` the same way corrupts schema parsing too.
+  it('overriding the schema key fails the read (no silent protection)', () => {
+    const state = stateWithCustomEntries([{ key: 'schema', value: 'not-a-schema' }]);
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(false);
+  });
+
+  // A custom entry whose key does NOT match any auto key is pure addition —
+  // no override, no corruption.
+  it('a non-colliding custom key reads successfully with correct values', () => {
+    const state = stateWithCustomEntries([{ key: 'crs', value: 'EPSG:4326' }]);
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
     expect(result.success).toBe(true);
     if (result.success) {
       const totalElements = state.shape.reduce((a, b) => a * b, 1);
@@ -103,16 +122,6 @@ describe('metadata adversarial — custom key shadows an auto key (DC-5)', () =>
         }
       }
     }
-  });
-
-  // Shadowing `schema` is renamed the same way, so dtype/variable-name info
-  // survives intact.
-  it('shadowing the schema key does not silently corrupt the read', () => {
-    const state = stateWithCustomEntries([{ key: 'schema', value: 'not-a-schema' }]);
-    const { files } = computePipelineStages(state);
-    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
-
-    expect(result.success).toBe(true);
   });
 });
 
