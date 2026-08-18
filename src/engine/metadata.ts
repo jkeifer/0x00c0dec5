@@ -1,6 +1,7 @@
 import type { AppState, MetadataIncludeConfig } from '../types/state.ts';
 import type { VariableStats } from '../types/pipeline.ts';
 import { activeSteps } from './codecs.ts';
+import { encodeMetadataBinary, decodeMetadataBinary } from './metadataBinary.ts';
 
 export interface MetadataEntry {
   key: string;
@@ -195,46 +196,15 @@ export function serializeMetadataJSON(entries: MetadataEntry[]): Uint8Array {
 }
 
 /**
- * Serialize metadata entries in a binary length-prefixed format:
- * [4B entry count (uint32 LE)]
- * For each entry:
- *   [4B key length (uint32 LE)][key bytes UTF-8]
- *   [4B value length (uint32 LE)][value bytes UTF-8]
+ * Serialize metadata entries in the TIFF-flavored binary tag format
+ * (`src/engine/metadataBinary.ts`): `[u16 count]` then per entry
+ * `[u16 tag][u8 type][u32 payloadLen][payload]`. Registered keys encode as
+ * their tag with a native, type-specific payload; unregistered keys use tag 0
+ * and carry their key string inline. This is a thin delegation — the framing
+ * and per-type encoders live in `metadataBinary.ts`.
  */
 export function serializeMetadataBinary(entries: MetadataEntry[]): Uint8Array {
-  const encoder = new TextEncoder();
-  const parts: Uint8Array[] = [];
-
-  // Entry count
-  const countBuf = new ArrayBuffer(4);
-  new DataView(countBuf).setUint32(0, entries.length, true);
-  parts.push(new Uint8Array(countBuf));
-
-  for (const entry of entries) {
-    const keyBytes = encoder.encode(entry.key);
-    const valueBytes = encoder.encode(entry.value);
-
-    // Key length + key
-    const keyLenBuf = new ArrayBuffer(4);
-    new DataView(keyLenBuf).setUint32(0, keyBytes.length, true);
-    parts.push(new Uint8Array(keyLenBuf));
-    parts.push(keyBytes);
-
-    // Value length + value
-    const valueLenBuf = new ArrayBuffer(4);
-    new DataView(valueLenBuf).setUint32(0, valueBytes.length, true);
-    parts.push(new Uint8Array(valueLenBuf));
-    parts.push(valueBytes);
-  }
-
-  const totalLength = parts.reduce((acc, p) => acc + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const p of parts) {
-    result.set(p, offset);
-    offset += p.length;
-  }
-  return result;
+  return encodeMetadataBinary(entries);
 }
 
 /** Serialize metadata using the configured format. */
@@ -267,29 +237,13 @@ export function deserializeMetadata(bytes: Uint8Array): MetadataEntry[] {
   return deserializeMetadataBinary(bytes);
 }
 
-/** Deserialize binary metadata back to entries (for testing roundtrip). */
+/**
+ * Deserialize binary metadata back to `MetadataEntry` strings. Delegates the
+ * tag framing + per-type decode to `metadataBinary.ts` and drops the extra
+ * `{tag, type, bytesConsumed}` fields the reader/locator use — parseStructure
+ * only ever sees `{key, value}`. Strict: a malformed blob throws (surfaced as
+ * corrupt-metadata by the locator).
+ */
 export function deserializeMetadataBinary(bytes: Uint8Array): MetadataEntry[] {
-  const decoder = new TextDecoder();
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-
-  let offset = 0;
-  const count = view.getUint32(offset, true);
-  offset += 4;
-
-  const entries: MetadataEntry[] = [];
-  for (let i = 0; i < count; i++) {
-    const keyLen = view.getUint32(offset, true);
-    offset += 4;
-    const key = decoder.decode(bytes.slice(offset, offset + keyLen));
-    offset += keyLen;
-
-    const valueLen = view.getUint32(offset, true);
-    offset += 4;
-    const value = decoder.decode(bytes.slice(offset, offset + valueLen));
-    offset += valueLen;
-
-    entries.push({ key, value });
-  }
-
-  return entries;
+  return decodeMetadataBinary(bytes).entries.map(({ key, value }) => ({ key, value }));
 }

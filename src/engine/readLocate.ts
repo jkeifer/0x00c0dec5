@@ -1,5 +1,6 @@
 import type { VirtualFile, ReadFailureReason } from '../types/pipeline.ts';
-import { deserializeMetadata, serializeMetadataBinary, type MetadataEntry } from './metadata.ts';
+import { deserializeMetadata, type MetadataEntry } from './metadata.ts';
+import { decodeMetadataBinary } from './metadataBinary.ts';
 
 type LocateResult =
   | { entries: MetadataEntry[]; chunkDataStart: number; found: string }
@@ -204,59 +205,90 @@ function tryParseTrailerMetadata(dataBytes: Uint8Array): ScanResult {
 }
 
 function looksLikeBinaryMetadataHeader(bytes: Uint8Array): boolean {
-  if (bytes.length < 4) return false;
+  // Binary metadata (metadataBinary.ts) opens with a u16 LE entry count.
+  if (bytes.length < 2) return false;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const count = view.getUint32(0, true);
+  const count = view.getUint16(0, true);
   return count > 0 && count < 1000;
 }
 
 /**
  * Binary "entry-count plausibility scan", forward direction (header
- * placement — binary metadata always starts with its 4-byte entry count, so
- * this is a direct attempt, not really a scan; "plausible" means a small
- * positive count that also parses).
+ * placement — binary metadata always starts with its u16 entry count, so this
+ * is a direct attempt, not really a scan; "plausible" means a small positive
+ * count). On a plausible count we run the real decoder, which reports exactly
+ * how many bytes the header consumed via `bytesConsumed` — the tag framing is
+ * self-delimiting per record, so no re-serialize trick is needed.
+ *
+ * A binary header sits at offset 0 and, if written, is never truncated by the
+ * chunk data that follows it, so a real header always decodes. We therefore
+ * only report a find (or "plausible") when the decode actually succeeds: a
+ * plausible-looking u16 count that then fails to decode is indistinguishable
+ * from ordinary chunk bytes at offset 0 (e.g. a 3-byte chunk whose first two
+ * bytes read as a small count), and treating that as "metadata present but
+ * unparseable" would misreport every such file as metadata-not-found. This is
+ * stricter than the old u32 heuristic only because a u16 count is far more
+ * common in raw bytes; the intent (report a genuinely-present header) is the
+ * same.
  */
 function scanBinaryForward(dataBytes: Uint8Array, start: number): ScanResult {
-  if (dataBytes.length - start < 4) return NOT_FOUND;
+  if (dataBytes.length - start < 2) return NOT_FOUND;
   const view = new DataView(dataBytes.buffer, dataBytes.byteOffset, dataBytes.byteLength);
-  const count = view.getUint32(start, true);
+  const count = view.getUint16(start, true);
   if (count <= 0 || count >= 1000) return NOT_FOUND;
   try {
-    const entries = deserializeMetadata(dataBytes.slice(start));
+    const { entries, bytesConsumed } = decodeMetadataBinary(dataBytes.slice(start));
     if (entries.length > 0) {
-      // Binary framing has no terminator either — re-serialize to learn how
-      // many bytes the header metadata actually occupied, since there's no
-      // chunk_index to read a real chunk-data-start offset from otherwise.
-      const headerByteLength = start + serializeMetadataBinary(entries).length;
-      return { entries, plausible: true, headerByteLength };
+      return {
+        entries: entries.map(({ key, value }) => ({ key, value })),
+        plausible: true,
+        headerByteLength: start + bytesConsumed,
+      };
     }
-    return { entries: null, plausible: true };
   } catch {
-    return { entries: null, plausible: true };
+    // Plausible count but no valid frame — chunk noise, not a header.
   }
+  return NOT_FOUND;
 }
 
 /**
  * D1: binary "entry-count plausibility scan", backward direction (footer
  * placement with `footerLocator='none'` — no trailer/index to consult). This
- * is the deliberate failure case D1 calls out: binary metadata has no
- * self-describing terminator the way JSON has a closing `}`, so there is no
- * honest way to pin down where it *starts* by inspecting bytes alone — that's
- * the lesson, not a bug. Checks only a small bounded window near the end for
- * an entry-count-shaped value and never treats a match as a real find; it
- * just reports plausibility, distinguishing 'metadata-not-found' from
- * 'no-metadata'.
+ * is the deliberate failure case D1 calls out: binary metadata's start is not
+ * self-describing (unlike JSON's closing `}`, the tag framing gives no marker
+ * you can find by scanning backward from the end), so there is no honest way
+ * to pin down where it *starts* by inspecting bytes alone — that's the lesson,
+ * not a bug. It NEVER returns entries; at most it reports plausibility, which
+ * only upgrades the failure reason from 'no-metadata' to 'metadata-not-found'.
+ *
+ * A bare u16 count in 1..999 is far too weak a signal — such a value occurs
+ * constantly in raw chunk data, so keying on it alone would report every
+ * chunk-only file as "metadata written but unlocatable" (the old u32-count
+ * heuristic only avoided this by the count-shaped value being much rarer, i.e.
+ * by accident). Instead we require a candidate offset where the full tag
+ * framing decodes cleanly AND consumes to exactly end-of-data: that is the
+ * shape real footer='none' binary metadata has — it runs to the end, before
+ * the already-stripped trailing magic — and that pure chunk data essentially
+ * never accidentally forms. We still refuse to return the decoded entries: the
+ * point is a reader can't KNOW this candidate is the metadata versus a
+ * coincidence without a first-class locator (trailer/index), so the honest
+ * outcome is metadata-not-found, not a successful read. Scans every offset (no
+ * fixed window) because the metadata can be arbitrarily far from the end;
+ * read is not on a hot path and files here are small.
  */
-const BINARY_PLAUSIBILITY_WINDOW = 64;
-
 function scanBinaryBackward(dataBytes: Uint8Array): ScanResult {
-  if (dataBytes.length < 4) return NOT_FOUND;
+  if (dataBytes.length < 2) return NOT_FOUND;
   const view = new DataView(dataBytes.buffer, dataBytes.byteOffset, dataBytes.byteLength);
-  const lo = Math.max(0, dataBytes.length - BINARY_PLAUSIBILITY_WINDOW);
-  for (let start = dataBytes.length - 4; start >= lo; start--) {
-    const count = view.getUint32(start, true);
-    if (count > 0 && count < 1000) {
-      return { entries: null, plausible: true };
+  for (let start = dataBytes.length - 2; start >= 0; start--) {
+    const count = view.getUint16(start, true);
+    if (count <= 0 || count >= 1000) continue;
+    try {
+      const { entries, bytesConsumed } = decodeMetadataBinary(dataBytes.slice(start));
+      if (entries.length > 0 && bytesConsumed === dataBytes.length - start) {
+        return { entries: null, plausible: true };
+      }
+    } catch {
+      // Not a real frame at this offset — keep scanning.
     }
   }
   return NOT_FOUND;

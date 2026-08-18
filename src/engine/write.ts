@@ -337,11 +337,15 @@ function computeChunkOffsets(
  * change the JSON's digit count). This is a small fixed-point problem:
  * re-serialize using the previous pass's length as the next pass's assumed
  * header size, until the length stops changing or a bound on iterations is
- * hit. If it genuinely won't settle (e.g. an adversarial serialization that
- * oscillates between lengths forever), pad the JSON metadata with trailing
+ * hit. Only JSON can oscillate: its offsets are decimal, so a larger offset
+ * value can add digits and grow the header. The binary format
+ * (metadataBinary.ts) encodes chunk_index offsets as fixed-width u32s, so its
+ * serialized length is offset-VALUE-independent — it converges on the first
+ * pass by construction. If JSON genuinely won't settle (an adversarial
+ * serialization that oscillates between lengths forever), pad it with trailing
  * whitespace to the largest length seen so the embedded offsets are still
  * exactly correct for the metadata actually written — correctness of the
- * final offsets is asserted before returning.
+ * final offsets is asserted before returning either way.
  */
 const MAX_CONVERGENCE_ITERATIONS = 6;
 

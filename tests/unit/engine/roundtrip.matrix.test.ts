@@ -603,6 +603,25 @@ describe('roundtrip matrix — partitioning single vs per-chunk', () => {
     const result = runRoundTrip(state);
     expectExactRoundTrip(result, ['humidity']);
   });
+
+  // Task 7: per-chunk partitioning + BINARY serialization. Per-chunk writes a
+  // separate `metadata` sidecar (there's no single data file to embed into),
+  // so this exercises the sidecar read path against binary metadata while the
+  // chunks live in per-coord files. Complements the header/footer/sidecar ×
+  // binary matrix above with the per-chunk sidecar placement the brief calls
+  // out explicitly.
+  it('partitioning=per-chunk + binary metadata (per-chunk sidecar) round-trips exactly', () => {
+    const state = stateWith({
+      shape: [4, 4],
+      chunkShape: [2, 2],
+      variables: [uintVar('humidity')],
+      fieldPipelines: { humidity: [] },
+      metadata: { serialization: 'binary' },
+      write: { partitioning: 'per-chunk' },
+    });
+    const result = runRoundTrip(state);
+    expectExactRoundTrip(result, ['humidity']);
+  });
 });
 
 // ─── No-metadata failure path (explicit negative test) ──────────────────

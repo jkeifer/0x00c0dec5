@@ -81,14 +81,71 @@ describe('serializeMetadataBinary / deserializeMetadataBinary roundtrip', () => 
     expect(result).toEqual(entries);
   });
 
-  it('starts with entry count as uint32 LE', () => {
+  it('starts with entry count as uint16 LE (TIFF-flavored tag framing)', () => {
     const entries: MetadataEntry[] = [
       { key: 'a', value: 'b' },
       { key: 'c', value: 'd' },
     ];
     const bytes = serializeMetadataBinary(entries);
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    expect(view.getUint32(0, true)).toBe(2);
+    expect(view.getUint16(0, true)).toBe(2);
+  });
+});
+
+// Task 6 carry-forward: the deferred equivalence pin. Drive GENUINE
+// collectMetadata output — a fully-loaded state (every include group on, array
+// model so `linearization` emits, column interleaving, custom entries, a real
+// chunk index and real per-variable stats) — through
+// encode/decodeMetadataBinary and assert exact {key,value} equality. This is
+// the round-trip the hand-built metadataBinary.test.ts fixtures approximate;
+// here every entry string is exactly what the production serializer emits.
+describe('collectMetadata → binary encode/decode equivalence (Task 6 pin)', () => {
+  it('round-trips a fully-loaded state to identical {key,value} entries', () => {
+    const base = {
+      ...DEFAULT_STATE,
+      dataModel: 'array' as const,
+      shape: [4, 4],
+      chunkShape: [2, 2],
+      linearization: 'morton' as const,
+      byteOrder: 'big' as const,
+      interleaving: 'column' as const,
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        serialization: 'binary' as const,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
+        customEntries: [
+          { key: 'crs', value: 'EPSG:4326' },
+          { key: 'shape', value: '[999,999]' }, // override-wins over the auto shape entry
+        ],
+      },
+    };
+    // Real chunk index (one entry per 2×2 chunk of a 4×4 array).
+    const chunkOffsets = [
+      { coords: [0, 0], offset: 4, size: 64, variableName: base.variables[0].name },
+      { coords: [0, 1], offset: 68, size: 64 },
+      { coords: [1, 0], offset: 132, size: 64 },
+      { coords: [1, 1], offset: 196, size: 64 },
+    ];
+    // Real per-variable stats keyed by Variable.id (as the pipeline emits them).
+    const stats = new Map(
+      base.variables.map((v, i) => [
+        v.id,
+        { min: i, max: i + 9, mean: i + 4.5, count: 16, clipped: 0, rounded: 2, isLossy: true, nanCount: 0 },
+      ]),
+    );
+
+    const entries = collectMetadata(base, [], stats, chunkOffsets);
+    // Sanity: the genuine collector really did emit the exotic keys.
+    const keys = entries.map((e) => e.key);
+    for (const k of ['schema', 'linearization', 'chunk_index', 'variable_statistics', 'byte_order', 'metadata_format', 'crs']) {
+      expect(keys).toContain(k);
+    }
+    // Override-wins: exactly one `shape`, and it's the custom value.
+    expect(entries.filter((e) => e.key === 'shape')).toEqual([{ key: 'shape', value: '[999,999]' }]);
+
+    const decoded = deserializeMetadataBinary(serializeMetadataBinary(entries));
+    expect(decoded).toEqual(entries);
   });
 });
 
@@ -134,7 +191,7 @@ describe('deserializeMetadata (auto-detect)', () => {
     expect(result).toEqual(entries);
   });
 
-  it('detects binary format (starts with uint32 count)', () => {
+  it('detects binary format (not a leading `{`)', () => {
     const entries: MetadataEntry[] = [{ key: 'x', value: 'y' }];
     const bytes = serializeMetadataBinary(entries);
     const result = deserializeMetadata(bytes);
