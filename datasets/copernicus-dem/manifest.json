@@ -1,0 +1,47 @@
+{
+  "id": "copernicus-dem",
+  "shape": [
+    1024,
+    1024
+  ],
+  "attribution": {
+    "source": "Copernicus DEM GLO-30 (via Earth Search / AWS)",
+    "source_url": "https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM",
+    "retrieved": "2026-08-19",
+    "license": "Copernicus DEM — free and open (ESA), attribution required"
+  },
+  "spatial": {
+    "crs": "EPSG:4326",
+    "bbox": [
+      8.2,
+      61.5,
+      8.5,
+      61.8
+    ],
+    "transform": [
+      8.2,
+      0.0002778,
+      0,
+      61.8,
+      0,
+      -0.0002778
+    ]
+  },
+  "variables": [
+    {
+      "name": "elevation",
+      "kind": "number",
+      "dtype": "float32",
+      "file": "elevation.bin",
+      "min": 478.5,
+      "max": 2459,
+      "logicalType": {
+        "type": "decimal",
+        "min": 478.5,
+        "max": 2459,
+        "decimalPlaces": 1,
+        "generation": "smooth"
+      }
+    }
+  ]
+}
