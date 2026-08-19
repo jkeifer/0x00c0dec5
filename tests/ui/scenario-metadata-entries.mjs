@@ -135,9 +135,9 @@ async function main() {
 
   // ── Override lie: a custom entry keyed `shape` replaces the auto entry's
   //    value in place (spec §2, override-wins — no rename-on-collision
-  //    protection). MetadataEditor flags the row with
-  //    metadata-key-override-note-{i}, the Entries view shows the corrupted
-  //    value (not the real shape), and the read fails honestly. ────────────
+  //    protection). The custom-entries list is labeled "Custom / Overrides",
+  //    the Entries view shows the corrupted value (not the real shape), and the
+  //    read fails honestly. ────────────
   await setSerialization(page, 'json');
   await page.locator('[data-testid="sidebar-section-metadata"]').scrollIntoViewIfNeeded();
   await page.locator('[data-testid="sidebar-section-metadata"] button', { hasText: /^\+ Entry$/ }).click();
@@ -149,10 +149,11 @@ async function main() {
   await page.waitForTimeout(300);
   await waitForPipelineIdle(page);
 
-  const overrideNoteVisible = await page
-    .locator(`[data-testid="metadata-key-override-note-${newEntryIndex}"]`)
+  const overridesLabelVisible = await page
+    .locator('[data-testid="sidebar-section-metadata"]')
+    .getByText('Custom / Overrides')
     .count();
-  h.check('override lie: MetadataEditor flags the shape row as overriding an auto key', overrideNoteVisible === 1);
+  h.check('override lie: custom-entries list is labeled "Custom / Overrides"', overridesLabelVisible === 1);
 
   await shot(page, 'metadata-entries-override-lie');
   const overriddenShapeEntryText = await page

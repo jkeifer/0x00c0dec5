@@ -115,7 +115,7 @@ describe('loadState — F31 CodecStep.enabled round-trip', () => {
 });
 
 describe('loadState — default-merge for missing fields', () => {
-  it('fills in missing metadata.enabled and ui.showDiff with defaults', () => {
+  it('fills in missing metadata.enabled and ui.rightPaneView with defaults', () => {
     const partial = {
       dataModel: 'tabular',
       shape: [16],
@@ -135,8 +135,7 @@ describe('loadState — default-merge for missing fields', () => {
         leftPaneStage: 0,
         rightPaneStage: -1,
         leftPaneView: 'table',
-        rightPaneView: 'hex',
-        // showDiff intentionally omitted
+        // rightPaneView intentionally omitted
       },
     };
     localStorage.setItem(TABULAR_KEY, JSON.stringify(partial));
@@ -145,7 +144,7 @@ describe('loadState — default-merge for missing fields', () => {
     expect(result).not.toBeNull();
     expect(result!.metadata.enabled).toBe(DEFAULT_STATE.metadata.enabled);
     expect(result!.write.magicNumber).toBe('DEADBEEF'); // preserved
-    expect(result!.ui.showDiff).toBe(DEFAULT_STATE.ui.showDiff);
+    expect(result!.ui.rightPaneView).toBe(DEFAULT_STATE.ui.rightPaneView);
   });
 
   // Phase 2 tasks 2.3/2.13 (D1/D3): a save from before these fields existed

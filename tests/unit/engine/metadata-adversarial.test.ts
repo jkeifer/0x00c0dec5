@@ -84,8 +84,8 @@ describe('metadata adversarial — custom key overrides an auto key (spec §2, o
   // reader (the include toggles already let them starve it entirely), so a
   // custom entry keyed `shape` with a non-JSON value now genuinely corrupts
   // the shape the reader sees, and the read fails honestly rather than being
-  // silently protected by a rename. `MetadataEditor` shows a warning on the
-  // affected row ("overrides auto-collected {key}").
+  // silently protected by a rename. `MetadataEditor` labels the custom-entries
+  // list "Custom / Overrides" to name this.
   it('overriding shape with a non-JSON value fails the read (no silent protection)', () => {
     const state = stateWithCustomEntries([{ key: 'shape', value: 'not-json-shape' }]);
     const { files } = computePipelineStages(state);

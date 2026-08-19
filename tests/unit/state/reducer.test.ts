@@ -767,20 +767,6 @@ describe('UPDATE_UI', () => {
     expect(result.ui.rightPaneView).toBe('flat');
   });
 
-  it('sets showDiff to true', () => {
-    const state = makeState();
-    const result = reducer(state, { type: 'UPDATE_UI', changes: { showDiff: true } });
-    expect(result.ui.showDiff).toBe(true);
-  });
-
-  it('sets showDiff to false', () => {
-    const state = makeState({
-      ui: { ...DEFAULT_STATE.ui, showDiff: true },
-    });
-    const result = reducer(state, { type: 'UPDATE_UI', changes: { showDiff: false } });
-    expect(result.ui.showDiff).toBe(false);
-  });
-
   it('merges a partial patch without touching sibling fields', () => {
     const state = makeState();
     const result = reducer(state, { type: 'UPDATE_UI', changes: { leftPaneStage: 'linearized' } });
@@ -793,11 +779,11 @@ describe('UPDATE_UI', () => {
     const state = makeState();
     const result = reducer(state, {
       type: 'UPDATE_UI',
-      changes: { leftPaneStage: 'typed', rightPaneStage: 'read', showDiff: true },
+      changes: { leftPaneStage: 'typed', rightPaneStage: 'read', rightPaneView: 'grid' },
     });
     expect(result.ui.leftPaneStage).toBe('typed');
     expect(result.ui.rightPaneStage).toBe('read');
-    expect(result.ui.showDiff).toBe(true);
+    expect(result.ui.rightPaneView).toBe('grid');
   });
 });
 

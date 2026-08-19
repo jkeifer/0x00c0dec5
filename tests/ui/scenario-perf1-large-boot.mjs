@@ -49,7 +49,7 @@ function arrayState(shape) {
       include: { schema: false, layout: false, codecs: false, chunkIndex: false, descriptive: false, endianness: false },
     },
     write: { magicNumber: '00C0DEC5', partitioning: 'single', metadataPlacement: 'header', chunkOrder: 'row-major', footerLocator: 'trailer' },
-    ui: { leftPaneStage: 'values', rightPaneStage: 'values', leftPaneView: 'grid', rightPaneView: 'hex', showDiff: false },
+    ui: { leftPaneStage: 'values', rightPaneStage: 'values', leftPaneView: 'grid', rightPaneView: 'hex' },
   };
 }
 

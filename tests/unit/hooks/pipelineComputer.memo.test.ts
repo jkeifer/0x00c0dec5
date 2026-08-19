@@ -180,7 +180,7 @@ describe('createPipelineComputer delta protocol', () => {
     const warm = compute(DEFAULT_STATE, knownKeysOf(first));
     expect(sentStages(warm)).toEqual([]);
 
-    const uiChanged: AppState = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, showDiff: !DEFAULT_STATE.ui.showDiff } };
+    const uiChanged: AppState = { ...DEFAULT_STATE, ui: { ...DEFAULT_STATE.ui, rightPaneView: 'grid' } };
     const timings: Record<string, number> = {};
     const second = compute(uiChanged, knownKeysOf(warm), (stage, ms) => { timings[stage] = ms; });
     expect(sentStages(second)).toEqual([]);

@@ -88,7 +88,6 @@ function gridCanvasState() {
       rightPaneStage: 'values',
       leftPaneView: 'grid',
       rightPaneView: 'grid',
-      showDiff: false,
     },
   };
 }

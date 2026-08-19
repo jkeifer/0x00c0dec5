@@ -174,7 +174,6 @@
     "leftPaneStage": "values",
     "rightPaneStage": "write",
     "leftPaneView": "table",
-    "rightPaneView": "hex",
-    "showDiff": false
+    "rightPaneView": "hex"
   }
 }

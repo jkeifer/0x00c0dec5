@@ -13,28 +13,34 @@
   "byteOrder": "little",
   "variables": [
     {
-      "id": "etopo-dem-elevation",
+      "id": "copernicus-dem-elevation",
       "name": "elevation",
       "color": "#e06c75",
       "source": {
-        "datasetId": "etopo-dem",
+        "datasetId": "copernicus-dem",
         "variableName": "elevation"
       },
       "logicalType": {
-        "type": "integer",
-        "min": -1485,
-        "max": 8271,
+        "type": "decimal",
+        "min": 478.5,
+        "max": 2459,
+        "decimalPlaces": 1,
         "generation": "smooth"
       },
       "typeAssignment": {
-        "storageDtype": "int16"
+        "storageDtype": "int16",
+        "scale": 10
       }
     }
   ],
   "fieldPipelines": {
-    "etopo-dem-elevation": []
+    "copernicus-dem-elevation": []
   },
   "chunkPipeline": [
+    {
+      "codec": "delta",
+      "params": {}
+    },
     {
       "codec": "deflate",
       "params": {}
@@ -44,19 +50,19 @@
     "customEntries": [
       {
         "key": "source",
-        "value": "NOAA NCEI ETOPO Global Relief (via ERDDAP)"
+        "value": "Copernicus DEM GLO-30 (via Earth Search / AWS)"
       },
       {
         "key": "source_url",
-        "value": "https://www.ncei.noaa.gov/products/etopo-global-relief-model"
+        "value": "https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM"
       },
       {
         "key": "retrieved",
-        "value": "2026-07-13"
+        "value": "2026-08-19"
       },
       {
         "key": "license",
-        "value": "U.S. Government work — public domain"
+        "value": "Copernicus DEM — free and open (ESA), attribution required"
       },
       {
         "key": "crs",
@@ -64,11 +70,11 @@
       },
       {
         "key": "bbox",
-        "value": "[75, 20, 92.05, 37.05]"
+        "value": "[8.2, 61.5, 8.5, 61.8]"
       },
       {
         "key": "transform",
-        "value": "[75, 0.0166667, 0, 37.05, 0, -0.0166667]"
+        "value": "[8.2, 0.0002778, 0, 61.8, 0, -0.0002778]"
       }
     ],
     "serialization": "binary",

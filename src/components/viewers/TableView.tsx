@@ -1,5 +1,5 @@
 import { useRef, useMemo, useEffect, useCallback } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useRowVirtual } from './useRowVirtual.ts';
 import type { Variable } from '../../types/state.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
 import { formatValue, formatLogicalValue } from '../../engine/elements.ts';
@@ -10,7 +10,7 @@ import { hoverHighlightFor } from './hoverHighlight.ts';
 import { useHover } from '../../hooks/useHover.ts';
 import { useContainerWidth } from '../../hooks/useContainerWidth.ts';
 import { colors, displayColor, fonts, fontSizes, spacing } from '../../theme.ts';
-import { isDiffValue, computeDiffSummary, scrollToIndexCentered, type DiffSummary } from './viewerUtils.ts';
+import { isDiffValue, computeDiffSummary, type DiffSummary } from './viewerUtils.ts';
 
 interface TableViewProps {
   variables: Variable[];
@@ -27,7 +27,6 @@ interface TableViewProps {
   chunkShape: number[];
   interleaving: 'row' | 'column';
   diffValues?: Map<string, ValueArray>;
-  showDiff?: boolean;
   isLogicalValues?: boolean; // true for Values/Read stage (float64 logical values) — controls display formatting only
 }
 
@@ -44,7 +43,11 @@ interface ColumnData {
   dtype: DtypeKey;
 }
 
-export function TableView({ variables, shape, paneId, values, chunkShape, interleaving, diffValues, showDiff, isLogicalValues }: TableViewProps) {
+export function TableView({ variables, shape, paneId, values, chunkShape, interleaving, diffValues, isLogicalValues }: TableViewProps) {
+  // Diffs are additive here (a summary line + amber cells + hover Δ, nothing
+  // replaced), so the Read stage always shows them — no toggle. `diffValues`
+  // is present iff this is the Read stage's reconstruction.
+  const showDiff = !!diffValues;
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -77,21 +80,16 @@ export function TableView({ variables, shape, paneId, values, chunkShape, interl
   const hasDiffSummaries = diffSummaries.size > 0;
   const headerHeight = hasDiffSummaries ? HEADER_HEIGHT_WITH_DIFF : HEADER_HEIGHT;
 
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 10,
-    paddingStart: headerHeight,
-    // The sticky header covers the top `headerHeight` px of the viewport, so
-    // a row scrolled under it is NOT actually visible — this makes
-    // scrollToIndexCentered's visibility check (and center math) account for
-    // the occluded strip.
-    scrollPaddingStart: headerHeight,
+  // Fixed-height virtualizer with scroll compression: a single native
+  // scrollbar reaches every row even past the browser's ~2^24 px element-height
+  // cap (~699K rows at 24px) — no windowing, no jump control. `headerPx` keeps
+  // rows clear of the sticky column header sharing this scroll container.
+  const { totalHeight, rows: virtualRows, scrollToIndex } = useRowVirtual({
+    scrollRef: parentRef,
+    rowCount,
+    rowHeight: ROW_HEIGHT,
+    headerPx: headerHeight,
   });
-
-  const virtualizerRef = useRef(virtualizer);
-  virtualizerRef.current = virtualizer;
 
   // Resolve traceId → row index for auto-scroll. Must check parseTraceId's
   // `kind` before treating the remainder as coordinates — a chunk-level id
@@ -131,12 +129,10 @@ export function TableView({ variables, shape, paneId, values, chunkShape, interl
     return null;
   }, [hoveredTraceId, hoveredChunkId, hoverSource, paneId, traceIdToRowIndex, columns, shape, chunkShape]);
 
-  // Auto-scroll: centered when the target row isn't already visible.
+  // Auto-scroll to a cross-pane hovered row (value- or chunk-level).
   useEffect(() => {
-    if (hoveredRowIndex !== null && hoveredRowIndex < rowCount) {
-      scrollToIndexCentered(virtualizerRef.current, hoveredRowIndex);
-    }
-  }, [hoveredRowIndex, rowCount]);
+    if (hoveredRowIndex !== null) scrollToIndex(hoveredRowIndex);
+  }, [hoveredRowIndex, scrollToIndex]);
 
   const containerWidth = useContainerWidth(parentRef);
   const availableWidth = (containerWidth > 0 ? containerWidth : 600) - 50; // subtract row index column
@@ -226,20 +222,20 @@ export function TableView({ variables, shape, paneId, values, chunkShape, interl
       {/* Virtual body */}
       <div
         style={{
-          height: virtualizer.getTotalSize(),
+          height: totalHeight,
           width: '100%',
           position: 'relative',
           minWidth: minTableWidth,
         }}
       >
-        {virtualizer.getVirtualItems().map((virtualRow) => {
+        {virtualRows.map((virtualRow) => {
           const rowIdx = virtualRow.index;
           return (
             <div
-              key={virtualRow.key}
+              key={rowIdx}
               style={{
                 position: 'absolute',
-                top: virtualRow.start,
+                top: virtualRow.top,
                 left: 0,
                 right: 0,
                 height: ROW_HEIGHT,

@@ -19,8 +19,9 @@
 //      (About modal's diagnostics — the only surface a failed *background*
 //      compute has, since a prior good result is retained/stale rather than
 //      replaced); recovery works once unblocked.
-//   5. All four format presets load from the Header preset-select; GeoTIFFesque
-//      still shows 3 variables and Encoded < Typed.
+//   5. All five format presets load from the Header preset-select; the two
+//      single-band elevation DEMs (GeoTIFFesque, COG-esque) show one band and
+//      Encoded < Typed.
 //   6. Zero pageerrors overall.
 //
 // Run: node tests/ui/scenario-curated-variables.mjs   (dev server must be running)
@@ -424,7 +425,7 @@ async function main() {
   await page.waitForTimeout(200);
   await waitForPipelineIdle(page, 30_000);
 
-  // ─── (5) All four format presets load from the Header preset-select ──────
+  // ─── (5) All five format presets load from the Header preset-select ──────
   // Pins the owner's "Parquet preset does not load" report. Presets are
   // model-scoped, so switch to each preset's model first. Each uses a
   // Pyodide-backed codec, so the runtime must be ready. A fresh reload here
@@ -436,7 +437,7 @@ async function main() {
 
   const presetsByModel = [
     { model: 'tabular', presets: ['parquet-adjacent', 'avroesque'] },
-    { model: 'array', presets: ['geotiffesque', 'zarrish'] },
+    { model: 'array', presets: ['geotiffesque', 'cog-esque', 'zarrish'] },
   ];
   for (const { model, presets } of presetsByModel) {
     await page.locator(`[data-testid="model-toggle-${model}"]`).click();
@@ -461,19 +462,21 @@ async function main() {
         readStatus.slice(0, 120).replace(/\n/g, ' '),
       );
 
-      if (key === 'geotiffesque') {
-        const geotiffVarNames = await page.locator('[data-testid^="variable-name-"]').evaluateAll(
+      // Both single-band elevation DEMs (etopo int16 / copernicus float→int16)
+      // should show one 'elevation' band and compress below the Typed stage.
+      if (key === 'geotiffesque' || key === 'cog-esque') {
+        const varNames = await page.locator('[data-testid^="variable-name-"]').evaluateAll(
           (els) => els.map((el) => el.value ?? el.textContent ?? ''),
         );
         h.check(
-          '(5) GeoTIFFesque: single real elevation band (no generated bands)',
-          geotiffVarNames.length === 1 && geotiffVarNames.includes('elevation'),
-          geotiffVarNames.join(', '),
+          `(5) ${key}: single real elevation band (no generated bands)`,
+          varNames.length === 1 && varNames.includes('elevation'),
+          varNames.join(', '),
         );
         const typedBytes = await stageByteCount(page, 1);
         const encodedBytes = await stageByteCount(page, 3);
         h.check(
-          '(5) GeoTIFFesque preset codecs shrink Encoded stage below Typed stage',
+          `(5) ${key} preset codecs shrink Encoded stage below Typed stage`,
           typedBytes !== null && encodedBytes !== null && encodedBytes < typedBytes,
           `typed=${typedBytes} encoded=${encodedBytes}`,
         );

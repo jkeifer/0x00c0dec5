@@ -1,6 +1,7 @@
 import type { AppState } from '../types/state.ts';
 import { validateExternalState } from './persistence.ts';
 import geotiffesqueRaw from '../presets/geotiffesque.json';
+import cogEsqueRaw from '../presets/cog-esque.json';
 import zarrishRaw from '../presets/zarrish.json';
 import parquetAdjacentRaw from '../presets/parquet-adjacent.json';
 import avroesqueRaw from '../presets/avroesque.json';
@@ -17,7 +18,7 @@ import avroesqueRaw from '../presets/avroesque.json';
  * shape change not reflected in these files fails the same way a stale save
  * would — these files double as loader regression fixtures.
  */
-export type PresetKey = 'geotiffesque' | 'zarrish' | 'parquet-adjacent' | 'avroesque';
+export type PresetKey = 'geotiffesque' | 'cog-esque' | 'zarrish' | 'parquet-adjacent' | 'avroesque';
 
 /** `dataModel` mirrors each preset JSON's own declared model so the Header
  * can offer only the presets that belong to the active data model (loading a
@@ -26,11 +27,13 @@ export const PRESET_OPTIONS: { key: PresetKey; label: string; dataModel: AppStat
   { key: 'parquet-adjacent', label: 'Parquet-adjacent', dataModel: 'tabular' },
   { key: 'avroesque', label: 'Avro-esque', dataModel: 'tabular' },
   { key: 'geotiffesque', label: 'GeoTIFFesque', dataModel: 'array' },
+  { key: 'cog-esque', label: 'COG-esque', dataModel: 'array' },
   { key: 'zarrish', label: 'Zarrish', dataModel: 'array' },
 ];
 
 const PRESET_RAW: Record<PresetKey, unknown> = {
   'geotiffesque': geotiffesqueRaw,
+  'cog-esque': cogEsqueRaw,
   'zarrish': zarrishRaw,
   'parquet-adjacent': parquetAdjacentRaw,
   'avroesque': avroesqueRaw,

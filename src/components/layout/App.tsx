@@ -134,7 +134,7 @@ function MainLayout({ result, computing, bootError, runtimeStatus }: {
   }
 
   return (
-    <PipelineProvider pipeline={result} showDiff={state.ui.showDiff} computing={computing} runtimeStatus={runtimeStatus}>
+    <PipelineProvider pipeline={result} computing={computing} runtimeStatus={runtimeStatus}>
       <Group
         orientation="horizontal"
         defaultLayout={mainPersist.defaultLayout}

@@ -40,6 +40,7 @@ import { DEFAULT_STATE } from '../../../src/types/state.ts';
 import type { AppState } from '../../../src/types/state.ts';
 
 import geotiffesqueRaw from '../../../src/presets/geotiffesque.json';
+import cogEsqueRaw from '../../../src/presets/cog-esque.json';
 import zarrishRaw from '../../../src/presets/zarrish.json';
 import parquetAdjacentRaw from '../../../src/presets/parquet-adjacent.json';
 import avroesqueRaw from '../../../src/presets/avroesque.json';
@@ -70,6 +71,7 @@ const ARRAY_KEY = '0x00c0dec5-state-array';
 
 const PRESET_RAW: Record<PresetKey, unknown> = {
   'geotiffesque': geotiffesqueRaw,
+  'cog-esque': cogEsqueRaw,
   'zarrish': zarrishRaw,
   'parquet-adjacent': parquetAdjacentRaw,
   'avroesque': avroesqueRaw,
@@ -77,6 +79,7 @@ const PRESET_RAW: Record<PresetKey, unknown> = {
 
 const PRESET_MODEL: Record<PresetKey, AppState['dataModel']> = {
   'geotiffesque': 'array',
+  'cog-esque': 'array',
   'zarrish': 'array',
   'parquet-adjacent': 'tabular',
   'avroesque': 'tabular',
@@ -85,6 +88,7 @@ const PRESET_MODEL: Record<PresetKey, AppState['dataModel']> = {
 // Expected curated `source` refs per preset (variableName -> datasetId).
 const PRESET_SOURCES: Record<PresetKey, { name: string; datasetId: string }[]> = {
   'geotiffesque': [{ name: 'elevation', datasetId: 'etopo-dem' }],
+  'cog-esque': [{ name: 'elevation', datasetId: 'copernicus-dem' }],
   'zarrish': [{ name: 'sst', datasetId: 'sst-field' }],
   'parquet-adjacent': ['date', 'tmax', 'tmin', 'prcp', 'station'].map((name) => ({ name, datasetId: 'ghcn-daily' })),
   'avroesque': ['date', 'tmax', 'tmin', 'prcp', 'station'].map((name) => ({ name, datasetId: 'ghcn-daily' })),
@@ -212,11 +216,12 @@ describe('resolvePreset', () => {
     }
   });
 
-  it('PRESET_OPTIONS lists exactly the four format presets, model-scoped', () => {
+  it('PRESET_OPTIONS lists exactly the five format presets, model-scoped', () => {
     expect(PRESET_OPTIONS).toEqual([
       { key: 'parquet-adjacent', label: 'Parquet-adjacent', dataModel: 'tabular' },
       { key: 'avroesque', label: 'Avro-esque', dataModel: 'tabular' },
       { key: 'geotiffesque', label: 'GeoTIFFesque', dataModel: 'array' },
+      { key: 'cog-esque', label: 'COG-esque', dataModel: 'array' },
       { key: 'zarrish', label: 'Zarrish', dataModel: 'array' },
     ]);
   });

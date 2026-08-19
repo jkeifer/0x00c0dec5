@@ -35,6 +35,7 @@ export const DATASETS: DatasetRegistryEntry[] = [
   { id: 'etopo-dem', label: 'Terrain elevation (ETOPO)', dataModel: 'array', naturalShape: [1024, 1024] },
   { id: 'sst-field', label: 'Sea-surface temperature (MUR)', dataModel: 'array', naturalShape: [1024, 1024] },
   { id: 'ghcn-daily', label: 'Weather station daily (GHCN)', dataModel: 'tabular', naturalShape: [144769] },
+  { id: 'copernicus-dem', label: 'Terrain elevation (Copernicus GLO-30)', dataModel: 'array', naturalShape: [1024, 1024] },
 ];
 
 export function datasetById(id: string): DatasetRegistryEntry | undefined {
@@ -127,6 +128,15 @@ export const CURATED_VARIABLES: CuratedVariable[] = [
     { type: 'text', min: 0, max: 0, wordSet: 'stations', generation: 'stepped' },
     'NOAA NCEI GHCN-Daily (4 US stations)',
   ),
+  // Copernicus is a FLOAT elevation source (unscaled float32 drop-in), unlike
+  // ETOPO's integer metres — its decimal precision is the vehicle for the
+  // quantise → scale/offset lesson (the COG-esque preset ships that arc).
+  curated(
+    'copernicus-dem', 'elevation', 'number',
+    { type: 'decimal', min: 100, max: 176.5, decimalPlaces: 1, generation: 'smooth' },
+    'Copernicus DEM GLO-30 (via Earth Search / AWS)',
+    'float32',
+  ),
 ];
 
 /**
@@ -166,6 +176,15 @@ export const DATASET_SEED_ENTRIES: Record<DatasetId, { key: string; value: strin
     { key: 'date_units', value: 'days since 1970-01-01' },
     { key: 'temperature_units', value: 'degC' },
     { key: 'precipitation_units', value: 'mm' },
+  ],
+  'copernicus-dem': [
+    { key: 'source', value: 'Copernicus DEM GLO-30 (via Earth Search / AWS)' },
+    { key: 'source_url', value: 'https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM' },
+    { key: 'retrieved', value: '2026-08-19' },
+    { key: 'license', value: 'Copernicus DEM — free and open (ESA), attribution required' },
+    { key: 'crs', value: 'EPSG:4326' },
+    { key: 'bbox', value: '[8.2, 61.5, 8.5, 61.8]' },
+    { key: 'transform', value: '[8.2, 0.0002778, 0, 61.8, 0, -0.0002778]' },
   ],
 };
 

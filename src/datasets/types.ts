@@ -2,7 +2,7 @@ import type { LogicalTypeConfig } from '../types/state.ts';
 
 /** The shipped dataset presets. Adding one: extraction script (scripts/
  * datasets/), registry entry (registry.ts), fixture (tests/fixtures/). */
-export type DatasetId = 'etopo-dem' | 'sst-field' | 'ghcn-daily';
+export type DatasetId = 'etopo-dem' | 'sst-field' | 'ghcn-daily' | 'copernicus-dem';
 
 /** Provenance facts recorded by the extraction script; surfaced in the UI
  * attribution line and seeded into metadata.customEntries on apply. */

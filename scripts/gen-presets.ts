@@ -16,7 +16,7 @@
  *
  * NOTE (round-trip validation): deflate, gzip, and zstd are Pyodide-backed
  * codecs (`runPyodideCodec`) that throw synchronously when the runtime isn't
- * loaded — which node always is. All four format presets authentically use
+ * loaded — which node always is. All five format presets authentically use
  * one of these (that's the point — real GeoTIFF/Zarr/Parquet/Avro compress),
  * so `computePipelineStages` can't round-trip them here. `assertReads` skips
  * the pipeline check for presets whose pipelines touch a Pyodide codec and
@@ -39,7 +39,7 @@ const outDir = path.join(__dirname, '..', 'src', 'presets');
 const fixtureRoot = path.join(__dirname, '..', 'tests', 'fixtures', 'datasets');
 // Hardcoded (rather than imported from registry.ts, which reads import.meta.env
 // and can't run under plain node/tsx).
-const KNOWN_IDS = ['etopo-dem', 'sst-field', 'ghcn-daily'];
+const KNOWN_IDS = ['etopo-dem', 'sst-field', 'ghcn-daily', 'copernicus-dem'];
 
 const PYODIDE_CODECS = new Set(['deflate', 'gzip', 'zstd']);
 
@@ -142,6 +142,16 @@ const GHCN_PROVENANCE = [
   { key: 'precipitation_units', value: 'mm' },
 ];
 
+const COG_PROVENANCE = [
+  { key: 'source', value: 'Copernicus DEM GLO-30 (via Earth Search / AWS)' },
+  { key: 'source_url', value: 'https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM' },
+  { key: 'retrieved', value: '2026-08-19' },
+  { key: 'license', value: 'Copernicus DEM — free and open (ESA), attribution required' },
+  { key: 'crs', value: 'EPSG:4326' },
+  { key: 'bbox', value: '[8.2, 61.5, 8.5, 61.8]' },
+  { key: 'transform', value: '[8.2, 0.0002778, 0, 61.8, 0, -0.0002778]' },
+];
+
 const DEFAULT_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
 
 // ─── GeoTIFFesque (array, the real etopo-dem elevation band) ────────────────
@@ -195,7 +205,6 @@ const geotiffesque: AppState = {
     rightPaneStage: 'write',
     leftPaneView: 'grid',
     rightPaneView: 'hex',
-    showDiff: false,
   },
 };
 
@@ -248,7 +257,63 @@ const zarrish: AppState = {
     rightPaneStage: 'write',
     leftPaneView: 'grid',
     rightPaneView: 'hex',
-    showDiff: false,
+  },
+};
+
+// ─── COG-esque (array, copernicus-dem — the quantisation arc) ────────────────
+//
+// Cloud-Optimized GeoTIFF over the FLOAT Copernicus elevation: the source is
+// float32 metres with real decimals, and this preset walks the compression arc
+// to its destination — scale/offset (×10) quantises the decimals onto a 0.1 m
+// grid AND halves the bytes into int16, then the chunk pipeline does delta
+// (spatial neighbours differ by little) → DEFLATE (entropy). The float+bitround
+// alternative (keepBits on a float32 storageDtype) is the guide's "quantise in
+// float space" branch, deliberately NOT baked here — it's a different
+// storageDtype choice, not a stackable stage. Same TIFF magic/header/tiling as
+// GeoTIFFesque; the lesson is the dtype journey, not the container.
+
+const cogVariables: Variable[] = [
+  {
+    id: 'copernicus-dem-elevation', name: 'elevation', color: colors.palette[0],
+    source: { datasetId: 'copernicus-dem', variableName: 'elevation' },
+    logicalType: { type: 'decimal', min: 478.5, max: 2459, decimalPlaces: 1, generation: 'smooth' },
+    // ×10 → 0.1 m grid; max 2459 m ×10 = 24590 < 32767, so int16 fits with no offset.
+    typeAssignment: { storageDtype: 'int16', scale: 10 },
+  },
+];
+
+const cogEsque: AppState = {
+  dataModel: 'array',
+  shape: [1024, 1024],
+  chunkShape: [256, 256],
+  interleaving: 'row',
+  linearization: 'c',
+  byteOrder: 'little',
+  variables: cogVariables,
+  // Row mode: per-field pipelines inactive; the shared chunk pipeline runs the
+  // delta → entropy tail of the arc.
+  fieldPipelines: {
+    'copernicus-dem-elevation': [],
+  },
+  chunkPipeline: [{ codec: 'delta', params: {} }, { codec: 'deflate', params: {} }],
+  metadata: {
+    customEntries: [...COG_PROVENANCE],
+    serialization: 'binary',
+    include: DEFAULT_INCLUDE,
+    enabled: true,
+  },
+  write: {
+    magicNumber: '49492A00', // II*\0 (TIFF; COG is a GeoTIFF variant)
+    partitioning: 'single',
+    metadataPlacement: 'header',
+    chunkOrder: 'row-major',
+    footerLocator: 'trailer',
+  },
+  ui: {
+    leftPaneStage: 'values',
+    rightPaneStage: 'write',
+    leftPaneView: 'grid',
+    rightPaneView: 'hex',
   },
 };
 
@@ -330,7 +395,6 @@ const parquetAdjacent: AppState = {
     rightPaneStage: 'write',
     leftPaneView: 'table',
     rightPaneView: 'hex',
-    showDiff: false,
   },
 };
 
@@ -379,11 +443,11 @@ const avroesque: AppState = {
     rightPaneStage: 'write',
     leftPaneView: 'table',
     rightPaneView: 'hex',
-    showDiff: false,
   },
 };
 
 write('geotiffesque', geotiffesque);
+write('cog-esque', cogEsque);
 write('zarrish', zarrish);
 write('parquet-adjacent', parquetAdjacent);
 write('avroesque', avroesque);

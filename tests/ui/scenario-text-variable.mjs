@@ -53,7 +53,6 @@ const SEED_STATE = {
     rightPaneStage: 'write',
     leftPaneView: 'table',
     rightPaneView: 'hex',
-    showDiff: false,
   },
 };
 
@@ -167,8 +166,8 @@ async function main() {
   const typingTextChar4 = await typing.innerText();
   h.check('char4 storage shows a truncated badge', /\d+ truncated/.test(typingTextChar4), JSON.stringify(typingTextChar4.slice(0, 200)));
 
-  // Enable the diff toggle in the Read section (Yes/No radio buttons).
-  await page.locator('[data-testid="sidebar-section-read"] button', { hasText: 'Yes' }).click();
+  // The Read-stage table always shows diffs now (no toggle) — the truncated
+  // rows are flagged in the summary as soon as char4 truncation takes effect.
   await page.waitForTimeout(500);
   const diffSummary = page.locator('[data-testid="table-diff-summary-city"]');
   const diffSummaryText = ((await diffSummary.innerText().catch(() => '')) ?? '').trim();

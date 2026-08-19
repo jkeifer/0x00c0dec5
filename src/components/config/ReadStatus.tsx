@@ -1,11 +1,8 @@
 import type { ReadFileResult } from '../../types/pipeline.ts';
-import { Radio } from '../shared/Radio.tsx';
 import { colors, fontSizes, spacing } from '../../theme.ts';
 
 interface ReadStatusProps {
   readResult: ReadFileResult;
-  showDiff: boolean;
-  onShowDiffChange: (showDiff: boolean) => void;
 }
 
 /** Progress line above the status message: "N/8 steps" on success, or
@@ -20,7 +17,7 @@ function stepsProgressText(readResult: ReadFileResult): string {
   return `${okCount}/${total} steps · failed at: ${failedStep?.label}`;
 }
 
-export function ReadStatus({ readResult, showDiff, onShowDiffChange }: ReadStatusProps) {
+export function ReadStatus({ readResult }: ReadStatusProps) {
   if (!readResult.success) {
     return (
       <div data-testid="read-status" style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
@@ -73,22 +70,6 @@ export function ReadStatus({ readResult, showDiff, onShowDiffChange }: ReadStatu
             {[...readResult.lossyVariables].join(', ')}
           </div>
         )}
-      </div>
-
-      {/* Diff toggle */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
-        <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>
-          Show differences from original
-        </span>
-        <Radio
-          options={[
-            { value: 'yes', label: 'Yes' },
-            { value: 'no', label: 'No' },
-          ]}
-          value={showDiff ? 'yes' : 'no'}
-          onChange={(v) => onShowDiffChange(v === 'yes')}
-          size="sm"
-        />
       </div>
     </div>
   );

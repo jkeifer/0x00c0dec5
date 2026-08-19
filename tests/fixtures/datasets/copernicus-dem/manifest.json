@@ -1,0 +1,47 @@
+{
+  "id": "copernicus-dem",
+  "shape": [
+    16,
+    16
+  ],
+  "attribution": {
+    "source": "synthetic test fixture",
+    "source_url": "https://example.invalid",
+    "retrieved": "2026-07-12",
+    "license": "n/a (generated)"
+  },
+  "spatial": {
+    "crs": "EPSG:4326",
+    "bbox": [
+      8.2,
+      61.5,
+      8.5,
+      61.8
+    ],
+    "transform": [
+      8.2,
+      0.0002778,
+      0,
+      61.8,
+      0,
+      -0.0002778
+    ]
+  },
+  "variables": [
+    {
+      "name": "elevation",
+      "kind": "number",
+      "dtype": "float32",
+      "file": "elevation.bin",
+      "min": 100,
+      "max": 176.5,
+      "logicalType": {
+        "type": "decimal",
+        "min": 100,
+        "max": 176.5,
+        "decimalPlaces": 1,
+        "generation": "smooth"
+      }
+    }
+  ]
+}

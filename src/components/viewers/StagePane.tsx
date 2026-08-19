@@ -112,7 +112,6 @@ export function StagePane({
     stages,
     files,
     readResult,
-    showDiff,
     originalValues,
     logicalValues,
     typedValues,
@@ -159,8 +158,10 @@ export function StagePane({
     ? viewMode
     : viewModes[0].value;
 
-  // Compute diff values when viewing Read stage with diff enabled
-  const diffValues = (isReadStage && showDiff && readResult.success && originalValues)
+  // Read-stage reconstruction always carries the originals to diff against.
+  // TableView renders diffs unconditionally (they're additive); GridView gates
+  // them behind its own per-pane toggle (they replace its value coloring).
+  const diffValues = (isReadStage && readResult.success && originalValues)
     ? originalValues
     : undefined;
 
@@ -237,9 +238,9 @@ export function StagePane({
         return <FlatView stage={stage} sources={sources} paneId={paneId} chunkShape={chunkShape} interleaving={interleaving} />;
       }
       case 'table':
-        return <TableView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkShape={chunkShape} interleaving={interleaving} diffValues={diffValues} showDiff={!!diffValues} isLogicalValues={isValuesStage || isReadStage} />;
+        return <TableView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkShape={chunkShape} interleaving={interleaving} diffValues={diffValues} isLogicalValues={isValuesStage || isReadStage} />;
       case 'grid':
-        return <GridView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkShape={chunkShape} interleaving={interleaving} diffValues={diffValues} showDiff={!!diffValues} />;
+        return <GridView variables={variables} shape={shape} paneId={paneId} values={tableGridValues} chunkShape={chunkShape} interleaving={interleaving} diffValues={diffValues} />;
       default:
         return <HexView sections={hexSections} paneId={paneId} chunkShape={chunkShape} interleaving={interleaving} />;
     }

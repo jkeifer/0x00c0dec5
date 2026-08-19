@@ -69,12 +69,17 @@ interface HexWindowControlsProps {
   windowEnd: number;
   bytesPerRow: number;
   onJump: (byteOffset: number) => void;
+  /** Sticky offset from the scroll viewport top — sits just under the section
+   *  header when one is shown (multi-file), else pins to the very top. */
+  topOffset: number;
 }
 
-/** FileMapStrip + offset-jump input rendered above a windowed section's rows
- *  (WINDOW_CONTROLS_HEIGHT tall — kept in sync with useHexData.ts's constant
- *  so downstream sections' scrollMargin math lines up). */
-function HexWindowControls({ layout, windowStart, windowEnd, bytesPerRow, onJump }: HexWindowControlsProps) {
+/** FileMapStrip + offset-jump input pinned to the top of a windowed section's
+ *  viewport (sticky, so scrolling within the window doesn't lose them).
+ *  WINDOW_CONTROLS_HEIGHT tall — kept in sync with useHexData.ts's constant so
+ *  downstream sections' scrollMargin math lines up (sticky retains flow
+ *  space, so the accounting is unchanged). */
+function HexWindowControls({ layout, windowStart, windowEnd, bytesPerRow, onJump, topOffset }: HexWindowControlsProps) {
   const [offsetInput, setOffsetInput] = useState('');
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -85,7 +90,7 @@ function HexWindowControls({ layout, windowStart, windowEnd, bytesPerRow, onJump
   }
 
   return (
-    <div style={{ height: WINDOW_CONTROLS_HEIGHT, boxSizing: 'border-box', overflow: 'hidden', padding: `${spacing.xs}px ${spacing.sm}px` }}>
+    <div style={{ position: 'sticky', top: topOffset, zIndex: 1, background: colors.surface, height: WINDOW_CONTROLS_HEIGHT, boxSizing: 'border-box', overflow: 'hidden', padding: `${spacing.xs}px ${spacing.sm}px` }}>
       <FileMapStrip
         layout={layout}
         windowStart={windowStart * bytesPerRow}
@@ -170,16 +175,19 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
     // scroll to; the effect below fires after windowStart lands.
     const pendingScrollRow = useRef<number | null>(null);
 
-    useImperativeHandle(ref, () => ({
-      scrollToRow: (rowIndex: number) => {
-        if (windowed && (rowIndex < clampedWindowStart || rowIndex >= clampedWindowStart + visibleCount)) {
-          pendingScrollRow.current = rowIndex;
-          onWindowStartChange(clampWindowStart(windowStartForByte(rowIndex * bytesPerRow, bytesPerRow, rowCount), rowCount));
-          return;
-        }
-        scrollToIndexCentered(virtualizer, rowIndex - clampedWindowStart);
-      },
-    }));
+    // Window-shift-if-needed, then scroll a row to center. Shared by cross-pane
+    // hover (the imperative handle) and the offset-jump input below.
+    const goToRow = (rowIndex: number) => {
+      const row = Math.min(Math.max(0, rowCount - 1), Math.max(0, rowIndex));
+      if (windowed && (row < clampedWindowStart || row >= clampedWindowStart + visibleCount)) {
+        pendingScrollRow.current = row;
+        onWindowStartChange(clampWindowStart(windowStartForByte(row * bytesPerRow, bytesPerRow, rowCount), rowCount));
+        return;
+      }
+      scrollToIndexCentered(virtualizer, row - clampedWindowStart);
+    };
+
+    useImperativeHandle(ref, () => ({ scrollToRow: goToRow }));
 
     useEffect(() => {
       if (pendingScrollRow.current === null) return;
@@ -191,8 +199,10 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [clampedWindowStart]);
 
+    // Any byte offset jumps to (and centers) the row that contains it —
+    // arbitrary offsets snap to their row via floor, no line-alignment needed.
     function handleJump(byteOffset: number) {
-      onWindowStartChange(clampWindowStart(windowStartForByte(byteOffset, bytesPerRow, rowCount), rowCount));
+      goToRow(Math.floor(byteOffset / bytesPerRow));
     }
 
     return (
@@ -229,6 +239,7 @@ const HexSectionView = forwardRef<HexSectionHandle, HexSectionViewProps>(
             windowEnd={clampedWindowStart + visibleCount}
             bytesPerRow={bytesPerRow}
             onJump={handleJump}
+            topOffset={showHeader && sectionData.header ? HEADER_HEIGHT : 0}
           />
         )}
         <div

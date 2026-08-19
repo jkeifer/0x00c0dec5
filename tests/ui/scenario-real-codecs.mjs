@@ -37,7 +37,7 @@ function baseState() {
       include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true },
     },
     write: { magicNumber: '00C0DEC5', partitioning: 'single', metadataPlacement: 'header', chunkOrder: 'row-major', footerLocator: 'trailer' },
-    ui: { leftPaneStage: 'encoded', rightPaneStage: 'read', leftPaneView: 'hex', rightPaneView: 'table', showDiff: false },
+    ui: { leftPaneStage: 'encoded', rightPaneStage: 'read', leftPaneView: 'hex', rightPaneView: 'table' },
   };
 }
 

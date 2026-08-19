@@ -276,13 +276,8 @@ async function main() {
     decodeStep5.slice(0, 200).replace(/\n/g, ' '),
   );
 
-  // Diff view: enable "Show differences from original" and check the
-  // shuffled variable's table diff summary reports a nonzero differing count.
-  await page
-    .locator('[data-testid="read-status"] button', { hasText: /^Yes$/ })
-    .first()
-    .click();
-  await page.waitForTimeout(300);
+  // Diff view: the Read stage's table always shows diffs (no toggle) — check
+  // the shuffled variable's table diff summary reports a nonzero differing count.
   await setPaneViewMode(page, 'table');
   await page.waitForTimeout(400);
   await shot(page, 'read-process-garbled-diff');
@@ -297,12 +292,24 @@ async function main() {
     `"${diffSummary.replace(/\n/g, ' ')}"`,
   );
 
-  // Restore: diff off, byte-shuffle removed, back to process mode.
-  await page
-    .locator('[data-testid="read-status"] button', { hasText: /^No$/ })
-    .first()
-    .click();
+  // Grid diff is a per-pane toggle (unlike the always-on table): on the Read
+  // stage the grid shows `grid-diff-toggle`; clicking it flips diff coloring on.
+  await setPaneViewMode(page, 'grid');
   await page.waitForTimeout(300);
+  const gridDiffToggle = page.locator('[data-testid="pane-right"] [data-testid="grid-diff-toggle"]');
+  h.check('read-stage grid exposes the per-pane diff toggle', (await gridDiffToggle.count()) === 1);
+  const toggleBefore = (await gridDiffToggle.innerText().catch(() => '')).trim();
+  await gridDiffToggle.click();
+  await page.waitForTimeout(200);
+  const toggleAfter = (await gridDiffToggle.innerText().catch(() => '')).trim();
+  h.check(
+    'grid diff toggle flips off → on',
+    !/on/i.test(toggleBefore) && /on/i.test(toggleAfter),
+    `"${toggleBefore}" → "${toggleAfter}"`,
+  );
+
+  // Restore: diff off, byte-shuffle removed, back to process mode.
+  await gridDiffToggle.click();
   await removeCodec(page, 'Byte Shuffle');
   await setPaneViewMode(page, 'process');
 

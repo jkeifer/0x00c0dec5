@@ -64,12 +64,12 @@ const FAILURE_RESULT: ReadFileResult = {
 
 describe('ReadStatus progress line', () => {
   it('shows "8/8 steps" on success', () => {
-    render(<ReadStatus readResult={SUCCESS_RESULT} showDiff={false} onShowDiffChange={() => {}} />);
+    render(<ReadStatus readResult={SUCCESS_RESULT} />);
     expect(screen.getByTestId('read-status-progress').textContent).toBe('8/8 steps');
   });
 
   it('shows "N/8 steps · failed at: {label}" on failure', () => {
-    render(<ReadStatus readResult={FAILURE_RESULT} showDiff={false} onShowDiffChange={() => {}} />);
+    render(<ReadStatus readResult={FAILURE_RESULT} />);
     expect(screen.getByTestId('read-status-progress').textContent).toBe(
       '3/8 steps · failed at: Read schema',
     );

@@ -206,15 +206,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
           </>
         );
       case 'Read':
-        return (
-          <ReadStatus
-            readResult={readResult}
-            showDiff={state.ui.showDiff}
-            onShowDiffChange={(showDiff) =>
-              dispatch({ type: 'UPDATE_UI', changes: { showDiff } })
-            }
-          />
-        );
+        return <ReadStatus readResult={readResult} />;
       default:
         return null;
     }

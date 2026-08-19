@@ -6,19 +6,18 @@ import type { RuntimeState } from '../worker/client.ts';
 
 /**
  * PipelineContext (remediation-plan.md, Phase 3.9): carries the pipeline's
- * output plus the diff toggle — the values every viewer/StagePane needs but
- * that were previously drilled through ~10 props on each `<StagePane>` in
- * App.tsx (paneId/selectedStage/viewMode/onStageChange/onViewChange/
- * accentColor are genuinely per-pane and stay as props; everything else here
- * is identical for both panes).
+ * output — the values every viewer/StagePane needs but that were previously
+ * drilled through ~10 props on each `<StagePane>` in App.tsx (paneId/
+ * selectedStage/viewMode/onStageChange/onViewChange/accentColor are genuinely
+ * per-pane and stay as props; everything else here is identical for both
+ * panes).
  *
  * The value is split into two `useMemo`s in `PipelineProvider` — one for the
  * `PipelineResult` fields (already a single memoized object from
- * `usePipeline`) and one for `showDiff` + the derived `originalValues` alias
- * — so a `showDiff` toggle does not create a new object identity for the
+ * `usePipeline`) and one recombining them with `computing`/`runtimeStatus`
+ * — so those transient flags don't create a new object identity for the
  * pipeline fields, preserving task 3.2's memo split (viewers that only read
- * `stages`/`files`/etc. don't re-render just because `showDiff` flipped, and
- * vice versa for a component that only reads `showDiff`).
+ * `stages`/`files`/etc. don't re-render just because a flag flipped).
  */
 export interface PipelineContextValue {
   stages: PipelineStage[];
@@ -35,7 +34,6 @@ export interface PipelineContextValue {
   /** Task 9 (metadata redesign): the Metadata stage's Entries view rows —
    *  see PipelineResult.metadataEntries. */
   metadataEntries: MetadataDisplayEntry[];
-  showDiff: boolean;
   /**
    * Alias of `logicalValues` (see App.tsx's prior inline comment, D6 Phase
    * 3.3): the Values stage's source arrays double as "the original values to
@@ -49,8 +47,7 @@ export interface PipelineContextValue {
    * Task 13 (perf plan): true while the worker is computing a newer state
    * than the currently-rendered `pipeline` (stale-view UX — the previous
    * result stays rendered/interactive while this is true). Threaded through
-   * context rather than prop-drilled, matching `showDiff`'s existing split-
-   * memo pattern below.
+   * context rather than prop-drilled, via the split-memo pattern below.
    */
   computing: boolean;
   /**
@@ -67,22 +64,21 @@ const PipelineContext = createContext<PipelineContextValue | null>(null);
 
 export function PipelineProvider({
   pipeline,
-  showDiff,
   computing,
   runtimeStatus = 'ready',
   children,
 }: {
   pipeline: PipelineResult;
-  showDiff: boolean;
   computing: boolean;
   runtimeStatus?: RuntimeState['status'];
   children: ReactNode;
 }) {
   // Split memo: `pipelinePart` changes only when `usePipeline`'s return value
-  // changes; `value` recombines it with `showDiff` cheaply (object spread of
-  // an already-stable reference) so a showDiff-only toggle doesn't force
-  // downstream consumers to treat the whole pipeline as new, and a pipeline
-  // recompute doesn't spuriously invalidate showDiff-only consumers either.
+  // changes; `value` recombines it with the transient `computing`/
+  // `runtimeStatus` flags cheaply (object spread of an already-stable
+  // reference) so a flag-only change doesn't force downstream consumers to
+  // treat the whole pipeline as new, and a pipeline recompute doesn't
+  // spuriously invalidate flag-only consumers either.
   const pipelinePart = useMemo(
     () => ({
       stages: pipeline.stages,
@@ -99,8 +95,8 @@ export function PipelineProvider({
   );
 
   const value = useMemo<PipelineContextValue>(
-    () => ({ ...pipelinePart, showDiff, computing, runtimeStatus }),
-    [pipelinePart, showDiff, computing, runtimeStatus],
+    () => ({ ...pipelinePart, computing, runtimeStatus }),
+    [pipelinePart, computing, runtimeStatus],
   );
 
   return <PipelineContext.Provider value={value}>{children}</PipelineContext.Provider>;

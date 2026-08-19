@@ -5,6 +5,7 @@ import { DATASETS } from '../../../src/datasets/registry.ts';
 import { CURATED_VARIABLES, curatedVariable, DATASET_SEED_ENTRIES } from '../../../src/datasets/registry.ts';
 import type { DatasetManifest, ManifestVariable } from '../../../src/datasets/types.ts';
 import geotiffesque from '../../../src/presets/geotiffesque.json';
+import cogEsque from '../../../src/presets/cog-esque.json';
 import zarrish from '../../../src/presets/zarrish.json';
 import parquetAdjacent from '../../../src/presets/parquet-adjacent.json';
 
@@ -21,6 +22,7 @@ function readManifest(id: string): DatasetManifest {
 type CustomEntry = { key: string; value: string };
 const PRESET_ENTRIES: Record<string, CustomEntry[]> = {
   'etopo-dem': geotiffesque.metadata.customEntries as CustomEntry[],
+  'copernicus-dem': cogEsque.metadata.customEntries as CustomEntry[],
   'sst-field': zarrish.metadata.customEntries as CustomEntry[],
   'ghcn-daily': parquetAdjacent.metadata.customEntries as CustomEntry[],
 };
@@ -49,13 +51,13 @@ describe('CURATED_VARIABLES pinned against fixture manifests', () => {
     }
   }
 
-  it('has exactly the 7 curated variables named in the plan, no extras', () => {
+  it('has exactly the 8 curated variables named in the plan, no extras', () => {
     const totalManifestVars = DATASETS.reduce(
       (sum, d) => sum + readManifestVariables(d.id).length,
       0,
     );
-    expect(totalManifestVars).toBe(7);
-    expect(CURATED_VARIABLES.length).toBe(7);
+    expect(totalManifestVars).toBe(8);
+    expect(CURATED_VARIABLES.length).toBe(8);
   });
 
   it('every entry has a non-empty label and attribution', () => {
@@ -112,7 +114,7 @@ describe('DATASET_SEED_ENTRIES', () => {
   });
 
   it('grid datasets seed a spatial block that JSON.parses to the fixture manifest spatial block', () => {
-    for (const id of ['etopo-dem', 'sst-field'] as const) {
+    for (const id of ['etopo-dem', 'sst-field', 'copernicus-dem'] as const) {
       const manifest = readManifest(id);
       const seed = new Map(DATASET_SEED_ENTRIES[id].map((e) => [e.key, e.value]));
       expect(manifest.spatial).toBeDefined();

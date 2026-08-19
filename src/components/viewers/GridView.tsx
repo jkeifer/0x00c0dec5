@@ -27,13 +27,12 @@ interface GridViewProps {
   chunkShape: number[];
   interleaving: 'row' | 'column';
   diffValues?: Map<string, ValueArray>;
-  showDiff?: boolean;
 }
 
 const CELL_SIZE = 20;
 const MAX_CELLS = 10000;
 
-export function GridView({ variables, shape, paneId, values: valuesByName, chunkShape, interleaving, diffValues, showDiff }: GridViewProps) {
+export function GridView({ variables, shape, paneId, values: valuesByName, chunkShape, interleaving, diffValues }: GridViewProps) {
   const { hoveredTraceId, hoveredChunkId, hoverSource, setHover, clearHover } = useHover();
   const [selectedVarIdx, setSelectedVarIdx] = useState(0);
   // Per-session view knob (like selectedVarIdx) — not persisted AppState.
@@ -41,6 +40,13 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
   // (e.g. an ocean trench in a DEM) would otherwise wash out the rest of
   // the ramp under a plain min-max stretch.
   const [stretchMode, setStretchMode] = useState<'minmax' | 'percentile'>('percentile');
+  // Diff coloring replaces the value→color ramp with a diverging Δ scale, so
+  // unlike the table it's a genuine either/or — a per-pane toggle, mutually
+  // exclusive with the stretch picker below. Only meaningful on the Read stage
+  // (where `diffValues`, the originals, is present); ignored otherwise.
+  const [diffRequested, setDiffRequested] = useState(false);
+  const canDiff = !!diffValues;
+  const showDiff = canDiff && diffRequested;
   const gridRef = useRef<HTMLDivElement>(null);
 
   // Clamp to the valid range so the active tab and displayed data always agree,
@@ -226,13 +232,36 @@ export function GridView({ variables, shape, paneId, values: valuesByName, chunk
             diff mode uses its own diverging maxAbsDiff scale — the stretch
             picker only applies to the plain numeric ramp, so it's hidden
             (not just disabled) in either case rather than shown inert. */}
+        {/* Diff toggle — only on the Read stage (canDiff). Owns the right-edge
+            margin so the stretch select tucks in beside it; when diff is on the
+            stretch picker hides (diff commandeers the ramp). */}
+        {canDiff && (
+          <button
+            onClick={() => setDiffRequested((v) => !v)}
+            data-testid="grid-diff-toggle"
+            style={{
+              marginLeft: 'auto',
+              background: showDiff ? colors.accent : colors.surfaceInput,
+              color: showDiff ? colors.bg : colors.textPrimary,
+              border: `1px solid ${showDiff ? colors.accent : colors.border}`,
+              borderRadius: 3,
+              padding: `2px ${spacing.sm}px`,
+              fontSize: fontSizes.sm,
+              fontFamily: fonts.mono,
+              cursor: 'pointer',
+              outline: 'none',
+            }}
+          >
+            diff{showDiff ? ': on' : ''}
+          </button>
+        )}
         {!isText && !showDiff && (
           <select
             value={stretchMode}
             onChange={(e) => setStretchMode(e.target.value as 'minmax' | 'percentile')}
             data-testid="grid-stretch-select"
             style={{
-              marginLeft: 'auto',
+              marginLeft: canDiff ? spacing.xs : 'auto',
               background: colors.surfaceInput,
               color: colors.textPrimary,
               border: `1px solid ${colors.border}`,

@@ -113,17 +113,6 @@ export function MetadataEditor({
     ],
   );
 
-  // Override-wins (spec §2): a custom entry whose key matches an auto-collected
-  // key replaces that entry's value in place rather than being renamed away, so
-  // the row's note here is just "does this key match one collectMetadata already
-  // emitted".
-  const customKeyInfo = useMemo(() => {
-    return metadata.customEntries.map((entry) => {
-      if (!entry.key) return { overrides: false };
-      return { overrides: autoEntries.some((a) => a.key === entry.key) };
-    });
-  }, [autoEntries, metadata.customEntries]);
-
   // Task 2.11 (UI-7): the full entry set Write will actually embed — auto
   // entries plus `collectMetadata`'s own override-applied custom entries. Do
   // NOT append `metadata.customEntries` again here (that was the double-count
@@ -148,41 +137,6 @@ export function MetadataEditor({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
-      {/* Enable metadata — master switch, section owns it now (Task 8) */}
-      <div data-testid="metadata-enabled-toggle" style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
-        <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Enable Metadata</span>
-        <Radio
-          options={[
-            { value: 'yes', label: 'Yes' },
-            { value: 'no', label: 'No' },
-          ]}
-          value={metadata.enabled ? 'yes' : 'no'}
-          onChange={(v) => onEnabledChange(v === 'yes')}
-          size="sm"
-          testIdPrefix="metadata-enabled-toggle-opt"
-        />
-      </div>
-
-      {/* Metadata include-group toggles (Task 5, read plan) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
-        {INCLUDE_GROUPS.map(({ key, testid, label }) => (
-          <div key={key} data-testid={testid} style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
-            <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>{label}</span>
-            <Radio
-              options={[
-                { value: 'yes', label: 'Yes' },
-                { value: 'no', label: 'No' },
-              ]}
-              value={state.metadata.include[key] ? 'yes' : 'no'}
-              onChange={(v) => onIncludeChange(key, v === 'yes')}
-              size="sm"
-              disabled={metadataDisabled}
-              testIdPrefix={`${testid}-opt`}
-            />
-          </div>
-        ))}
-      </div>
-
       {/* Auto-collected entries */}
       <div style={{ opacity: metadataDisabled ? 0.5 : 1 }}>
         <button
@@ -230,23 +184,11 @@ export function MetadataEditor({
         )}
       </div>
 
-      {/* Custom entries — "+ Entry" precedes the rows it adds to (Task 8) */}
+      {/* Custom entries — "+ Entry" follows the rows it adds to. A custom key
+          matching an auto-collected one overrides it in place (spec §2); the
+          "Custom / Overrides" label names that, replacing the old per-row note. */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
-        <button
-          onClick={onAddEntry}
-          disabled={metadataDisabled}
-          style={{
-            ...inputStyle(),
-            cursor: metadataDisabled ? 'default' : 'pointer',
-            color: colors.accent,
-            background: 'transparent',
-            textAlign: 'center',
-            fontSize: fontSizes.xs,
-            opacity: metadataDisabled ? 0.5 : 1,
-          }}
-        >
-          + Entry
-        </button>
+        <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Custom / Overrides</span>
         {metadata.customEntries.map((entry, i) => (
           <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
@@ -291,26 +233,73 @@ export function MetadataEditor({
                 x
               </button>
             </div>
-            {customKeyInfo[i]?.overrides && (
-              <span data-testid={`metadata-key-override-note-${i}`} style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
-                overrides auto-collected {entry.key}
-              </span>
-            )}
+          </div>
+        ))}
+        <button
+          onClick={onAddEntry}
+          disabled={metadataDisabled}
+          style={{
+            ...inputStyle(),
+            cursor: metadataDisabled ? 'default' : 'pointer',
+            color: colors.accent,
+            background: 'transparent',
+            textAlign: 'center',
+            fontSize: fontSizes.xs,
+            opacity: metadataDisabled ? 0.5 : 1,
+          }}
+        >
+          + Entry
+        </button>
+      </div>
+
+      {/* Metadata toggles — master enable switch plus the include-group
+          toggles it gates, all one control cluster below the entries */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
+        <div data-testid="metadata-enabled-toggle" style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+          <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Enable Metadata</span>
+          <Radio
+            options={[
+              { value: 'yes', label: 'Yes' },
+              { value: 'no', label: 'No' },
+            ]}
+            value={metadata.enabled ? 'yes' : 'no'}
+            onChange={(v) => onEnabledChange(v === 'yes')}
+            size="sm"
+            testIdPrefix="metadata-enabled-toggle-opt"
+          />
+        </div>
+        {INCLUDE_GROUPS.map(({ key, testid, label }) => (
+          <div key={key} data-testid={testid} style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>{label}</span>
+            <Radio
+              options={[
+                { value: 'yes', label: 'Yes' },
+                { value: 'no', label: 'No' },
+              ]}
+              value={state.metadata.include[key] ? 'yes' : 'no'}
+              onChange={(v) => onIncludeChange(key, v === 'yes')}
+              size="sm"
+              disabled={metadataDisabled}
+              testIdPrefix={`${testid}-opt`}
+            />
           </div>
         ))}
       </div>
 
-      {/* Serialization toggle */}
-      <Radio
-        options={[
-          { value: 'json', label: 'JSON' },
-          { value: 'binary', label: 'Binary' },
-        ]}
-        value={metadata.serialization}
-        onChange={(v) => onSerializationChange(v as 'json' | 'binary')}
-        size="sm"
-        disabled={metadataDisabled}
-      />
+      {/* Serialization format — sits with the other selectors */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+        <span style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>Metadata Format</span>
+        <Radio
+          options={[
+            { value: 'json', label: 'JSON' },
+            { value: 'binary', label: 'Binary' },
+          ]}
+          value={metadata.serialization}
+          onChange={(v) => onSerializationChange(v as 'json' | 'binary')}
+          size="sm"
+          disabled={metadataDisabled}
+        />
+      </div>
 
       <div data-testid="metadata-serialized-size" style={{ fontSize: fontSizes.xs, color: colors.textSecondary }}>
         Serialized: {chunkIndexIsEstimate ? '≈ ' : ''}{serializedSize} bytes

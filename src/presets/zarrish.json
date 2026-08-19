@@ -100,7 +100,6 @@
     "leftPaneStage": "values",
     "rightPaneStage": "write",
     "leftPaneView": "grid",
-    "rightPaneView": "hex",
-    "showDiff": false
+    "rightPaneView": "hex"
   }
 }

@@ -165,7 +165,6 @@ export interface AppState {
     rightPaneStage: StageName;
     leftPaneView: string;
     rightPaneView: string;
-    showDiff: boolean;
   };
 }
 
@@ -235,7 +234,6 @@ export const DEFAULT_STATE: AppState = {
     rightPaneStage: 'write',
     leftPaneView: 'table',
     rightPaneView: 'hex',
-    showDiff: false,
   },
 };
 

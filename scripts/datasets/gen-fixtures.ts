@@ -20,6 +20,9 @@ const ATT = { source: 'synthetic test fixture', source_url: 'https://example.inv
 // STEP 0.01, SIZE 1024). Keep in sync with scripts/datasets/{etopo-dem,sst-field}.ts.
 const ETOPO_SPATIAL = { crs: 'EPSG:4326', bbox: [75, 20, 92.05, 37.05] as [number, number, number, number], transform: [75, 0.0166667, 0, 37.05, 0, -0.0166667] };
 const SST_SPATIAL = { crs: 'EPSG:4326', bbox: [-150, -5, -139.77, 5.23] as [number, number, number, number], transform: [-150, 0.01, 0, 5.23, 0, -0.01] };
+// copernicus-dem: Jotunheimen crop (LAT_N 61.79, LON_W 8.17, STEP 1/3600, SIZE
+// 1024). Keep in sync with scripts/datasets/copernicus-dem.ts.
+const COPERNICUS_SPATIAL = { crs: 'EPSG:4326', bbox: [8.2, 61.5, 8.5, 61.8] as [number, number, number, number], transform: [8.2, 0.0002778, 0, 61.8, 0, -0.0002778] };
 
 function dir(id: string): string {
   const d = path.join(FIXTURE_ROOT, id);
@@ -90,6 +93,22 @@ function dir(id: string): string {
       { name: 'station', kind: 'string', ...stationFiles,
         logicalType: { type: 'text', min: 0, max: 0, wordSet: 'stations', generation: 'stepped' } },
     ],
+  };
+  writeManifest(d, m);
+}
+// copernicus-dem: 16×16 smooth float ramp — decimal metres stored float32.
+// The unscaled decimal source behind the quantise→scale/offset lesson (COG-esque
+// preset); contrast etopo-dem's integer int16 bin.
+{
+  const S = 16;
+  const vals = new Float64Array(S * S);
+  for (let r = 0; r < S; r++) for (let c = 0; c < S; c++) vals[r * S + c] = 100 + r * 5 + c * 0.1;
+  const d = dir('copernicus-dem');
+  writeFloat32Bin(d, 'elevation.bin', vals);
+  const m: DatasetManifest = {
+    id: 'copernicus-dem', shape: [S, S], attribution: ATT, spatial: COPERNICUS_SPATIAL,
+    variables: [{ name: 'elevation', kind: 'number', dtype: 'float32', file: 'elevation.bin', min: 100, max: 176.5,
+      logicalType: { type: 'decimal', min: 100, max: 176.5, decimalPlaces: 1, generation: 'smooth' } }],
   };
   writeManifest(d, m);
 }

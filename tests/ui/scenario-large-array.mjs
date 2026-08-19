@@ -68,7 +68,6 @@ function arrayState(shape, chunkShape) {
       rightPaneStage: 'values',
       leftPaneView: 'grid',
       rightPaneView: 'hex',
-      showDiff: false,
     },
   };
 }
@@ -147,6 +146,36 @@ async function main() {
   );
   await shot(page, 'large-array-after-offset-jump');
 
+  // ── arbitrary (non-line-aligned) offset jumps to the row containing it ────
+  await input.fill('0x100005'); // 1,048,581 — mid-row (row 65,536, byte 5)
+  await input.press('Enter');
+  await page.waitForTimeout(400);
+  const byteAtArbitrary = await page
+    .locator('[data-testid="pane-right"] [data-testid="hex-byte-1048581"]')
+    .count();
+  h.check(
+    'a non-line-aligned offset (0x100005) lands on the row containing that byte',
+    byteAtArbitrary === 1,
+    `hex-byte-1048581 count=${byteAtArbitrary}`,
+  );
+
+  // ── overview + offset input stay pinned (sticky) when the window scrolls ──
+  const hexScroll = page.locator('[data-testid="pane-right"] [data-testid="hex-view"]');
+  const inputYBefore = (await input.boundingBox())?.y ?? null;
+  await hexScroll.evaluate((el) => { el.scrollTop += 3000; });
+  await page.waitForTimeout(300);
+  const overviewBox = await page.locator('[data-testid="pane-right"] [data-testid="hex-overview"]').boundingBox();
+  const inputBoxAfter = await input.boundingBox();
+  const containerBox = await hexScroll.boundingBox();
+  h.check(
+    'overview + offset input stay pinned to the hex viewport top after scrolling',
+    !!overviewBox && !!inputBoxAfter && !!containerBox &&
+      inputYBefore !== null && Math.abs(inputBoxAfter.y - inputYBefore) < 5 &&
+      overviewBox.y >= containerBox.y - 1,
+    `inputYBefore=${inputYBefore} inputYAfter=${inputBoxAfter?.y} overviewY=${overviewBox?.y} containerY=${containerBox?.y}`,
+  );
+  await shot(page, 'large-array-hex-controls-pinned');
+
   // ── hovering the grid canvas cross-highlights hex bytes in the other pane ─
   const canvas = page.locator('[data-testid="pane-left"] [data-testid="grid-canvas"]');
   const canvasBox = await canvas.boundingBox();
@@ -173,6 +202,38 @@ async function main() {
     );
     await shot(page, 'large-array-hover-cross-highlight');
   }
+
+  // ── TableView scroll compression: 1,048,576 rows × 24px = 25.2M px exceeds
+  //    the browser's ~2^24 px element-height cap, so a plain virtual list would
+  //    silently truncate at ~699K rows. Scroll compression caps the spacer and
+  //    maps scroll position → rows, so a single native scrollbar reaches the
+  //    end — scrolling to the bottom must render the final row 1,048,575. ─────
+  await setPaneViewMode(page, 'right', 'Table');
+  await waitForPipelineIdle(page, 90_000);
+  await page.waitForTimeout(300);
+  const tableView = page.locator('[data-testid="pane-right"] [data-testid="table-view"]');
+  const spacerHeight = await tableView.evaluate((el) => {
+    // The body spacer is the last child; its height drives the scrollbar.
+    const body = el.lastElementChild;
+    return body ? body.getBoundingClientRect().height : 0;
+  });
+  h.check(
+    'table spacer is capped under the browser element-height limit',
+    spacerHeight > 0 && spacerHeight <= 16_777_216,
+    `spacerHeight=${spacerHeight}`,
+  );
+  // Scroll to the very bottom via the single native scrollbar.
+  await tableView.evaluate((el) => { el.scrollTop = el.scrollHeight; });
+  await page.waitForTimeout(500);
+  const lastCell = await page
+    .locator('[data-testid="pane-right"] [data-testid="table-cell-temp-1048575"]')
+    .count();
+  h.check(
+    'scrolling to the bottom reaches the final row 1,048,575 (past the ~699K cap)',
+    lastCell === 1,
+    `count=${lastCell}`,
+  );
+  await shot(page, 'large-array-table-scroll-bottom');
 
   await browser.close();
 

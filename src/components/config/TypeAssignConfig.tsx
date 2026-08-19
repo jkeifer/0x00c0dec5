@@ -12,6 +12,12 @@ interface TypeAssignConfigProps {
   onUpdateVariable: (id: string, changes: Partial<Pick<Variable, 'typeAssignment'>>) => void;
 }
 
+/** Compact number for the observed-range note: integers verbatim, otherwise
+ * up to 3 decimals (trailing zeros trimmed). Keeps 2469 / 176.5 readable. */
+function fmtRange(n: number): string {
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 1000) / 1000);
+}
+
 export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }: TypeAssignConfigProps) {
   function updateAssignment(v: Variable, changes: Partial<TypeAssignment>) {
     onUpdateVariable(v.id, { typeAssignment: { ...v.typeAssignment, ...changes } });
@@ -31,6 +37,11 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
         // never see the char dtypes.
         const isText = v.logicalType.type === 'text';
         const dtypeOptions = DTYPE_KEYS.filter((dk) => Boolean(DTYPE_REGISTRY[dk].char) === isText);
+        // Observed logical range, so the dtype/scale choice has a number to aim
+        // at (e.g. "0 … 2469" → ×10 fits int16). NaN-only vars report NaN; skip.
+        const rangeNote = stats && Number.isFinite(stats.min) && Number.isFinite(stats.max)
+          ? `range ${fmtRange(stats.min)} … ${fmtRange(stats.max)}`
+          : '';
         const lossyParts = stats
           ? [
               stats.clipped > 0 ? `${stats.clipped} clipped` : null,
@@ -125,9 +136,14 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
               </div>
             )}
 
-            {/* Lossy indicator */}
+            {/* Observed range + lossy indicator */}
             {stats && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs, fontSize: fontSizes.xs }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs, fontSize: fontSizes.xs, flexWrap: 'wrap' }}>
+                {rangeNote && (
+                  <span data-testid={`type-assign-range-${v.id}`} style={{ color: colors.textTertiary }}>
+                    {rangeNote}
+                  </span>
+                )}
                 {stats.isLossy ? (
                   <span style={{ color: colors.warning }}>{lossyParts}</span>
                 ) : (

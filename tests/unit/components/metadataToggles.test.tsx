@@ -149,7 +149,7 @@ describe('MetadataEditor include-group toggles', () => {
 });
 
 describe('MetadataEditor custom entries', () => {
-  it('renders the + Entry button before the first custom row in DOM order', () => {
+  it('renders the + Entry button after the first custom row in DOM order', () => {
     renderEditor();
     fireEvent.click(screen.getByTestId('metadata-enabled-toggle-opt-yes'));
 
@@ -158,23 +158,21 @@ describe('MetadataEditor custom entries', () => {
     const addButton = screen.getByText('+ Entry');
     const firstKeyInput = screen.getByTestId('metadata-custom-key-0');
 
-    // DOM order: addButton must precede the custom row it triggered.
+    // DOM order: addButton must follow the custom rows it adds to.
     const position = addButton.compareDocumentPosition(firstKeyInput);
-    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(position & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
   });
 
-  it('shows an override note (not the old collision-warning testid) for a custom entry keyed "shape"', () => {
+  it('labels the custom-entries list "Custom / Overrides" (replaces the old per-row note)', () => {
     renderEditor();
     fireEvent.click(screen.getByTestId('metadata-enabled-toggle-opt-yes'));
-    // "shape" is auto-collected under the "layout" include group.
+
+    expect(screen.getByText('Custom / Overrides')).toBeTruthy();
+
+    // The old per-row override note is gone even for a key that shadows an auto entry.
     fireEvent.click(screen.getByTestId('include-layout-toggle-opt-yes'));
-
     fireEvent.click(screen.getByText('+ Entry'));
-    const keyInput = screen.getByTestId('metadata-custom-key-0');
-    fireEvent.change(keyInput, { target: { value: 'shape' } });
-
-    expect(screen.getByTestId('metadata-key-override-note-0')).toBeTruthy();
-    expect(screen.queryByTestId('metadata-key-collision-warning-0')).toBeNull();
-    expect(screen.getByTestId('metadata-key-override-note-0').textContent).toMatch(/overrides auto-collected shape/);
+    fireEvent.change(screen.getByTestId('metadata-custom-key-0'), { target: { value: 'shape' } });
+    expect(screen.queryByTestId('metadata-key-override-note-0')).toBeNull();
   });
 });
