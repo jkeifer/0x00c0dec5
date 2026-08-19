@@ -43,7 +43,7 @@ function computeRunningDtypes(steps: CodecStep[], inputDtype: DtypeKey): DtypeKe
     // dtype must not affect the next step's input (CLAUDE.md pitfall 3). We
     // still push an entry per step index so the display stays index-aligned.
     if (codec && step.enabled !== false) {
-      dtype = outputDtypeFor(codec, dtype);
+      dtype = outputDtypeFor(codec, dtype, step.params);
     }
     dtypes.push(dtype);
   }

@@ -26,7 +26,7 @@ export function reverseCodecPipeline(
   let currentDtype: DtypeKey = originalDtype;
   for (const step of steps) {
     const codec = CODEC_REGISTRY[step.codec];
-    if (codec) currentDtype = outputDtypeFor(codec, currentDtype);
+    if (codec) currentDtype = outputDtypeFor(codec, currentDtype, step.params);
     dtypeChain.push(currentDtype);
   }
 

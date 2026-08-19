@@ -506,7 +506,7 @@ export function isPipelineLossy(steps: CodecStep[], startDtype: DtypeKey): boole
     if (codec.isLossy(currentDtype)) {
       return true;
     }
-    currentDtype = outputDtypeFor(codec, currentDtype);
+    currentDtype = outputDtypeFor(codec, currentDtype, step.params);
   }
   return false;
 }

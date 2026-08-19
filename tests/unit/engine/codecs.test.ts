@@ -6,6 +6,8 @@ import {
   shannonEntropy,
   outputDtypeFor,
   stepWarnings,
+  pipelineOutputDtype,
+  encodedByteLength,
 } from '../../../src/engine/codecs.ts';
 import { reverseCodecPipeline } from '../../../src/engine/decode.ts';
 import { valuesToBytes, bytesToValues } from '../../../src/engine/elements.ts';
@@ -490,21 +492,21 @@ describe('rle codec — applicableTo', () => {
 
 describe('outputDtypeFor', () => {
   it('preserves dtype for codecs that leave elements where they were (delta, zigzag)', () => {
-    expect(outputDtypeFor(CODEC_REGISTRY['delta'], 'int16')).toBe('int16');
-    expect(outputDtypeFor(CODEC_REGISTRY['zigzag'], 'int16')).toBe('int16');
+    expect(outputDtypeFor(CODEC_REGISTRY['delta'], 'int16', {})).toBe('int16');
+    expect(outputDtypeFor(CODEC_REGISTRY['zigzag'], 'int16', {})).toBe('int16');
   });
 
   it('collapses to uint8 for codecs that destroy element structure (the shuffles)', () => {
     // Not entropy codecs, but their output has no elements in it either: byte
     // planes and bit planes. Reporting float32 here is what made the next
     // step's element size, the ⚠ warnings, and the step's dtype label all lie.
-    expect(outputDtypeFor(CODEC_REGISTRY['byte-shuffle'], 'float32')).toBe('uint8');
-    expect(outputDtypeFor(CODEC_REGISTRY['bit-shuffle'], 'float32')).toBe('uint8');
+    expect(outputDtypeFor(CODEC_REGISTRY['byte-shuffle'], 'float32', {})).toBe('uint8');
+    expect(outputDtypeFor(CODEC_REGISTRY['bit-shuffle'], 'float32', {})).toBe('uint8');
   });
 
   it('collapses to uint8 for entropy codecs (rle, gzip)', () => {
-    expect(outputDtypeFor(CODEC_REGISTRY['rle'], 'int32')).toBe('uint8');
-    expect(outputDtypeFor(CODEC_REGISTRY['gzip'], 'float64')).toBe('uint8');
+    expect(outputDtypeFor(CODEC_REGISTRY['rle'], 'int32', {})).toBe('uint8');
+    expect(outputDtypeFor(CODEC_REGISTRY['gzip'], 'float64', {})).toBe('uint8');
   });
 });
 
@@ -678,5 +680,41 @@ describe('codecs on charN input', () => {
       { codec: 'rle', params: {} },
     ];
     expect(stepWarnings(steps, 'char8')).toEqual([]);
+  });
+});
+
+describe('codec metadata & dtype flow', () => {
+  it('every codec declares a sizeEffect', () => {
+    for (const codec of Object.values(CODEC_REGISTRY)) {
+      expect(['preserving', 'fixed-ratio', 'variable']).toContain(codec.sizeEffect);
+    }
+  });
+  it('entropy codecs are variable-size; reordering codecs preserve size', () => {
+    expect(CODEC_REGISTRY['rle'].sizeEffect).toBe('variable');
+    expect(CODEC_REGISTRY['zstd'].sizeEffect).toBe('variable');
+    expect(CODEC_REGISTRY['dictionary'].sizeEffect).toBe('variable');
+    expect(CODEC_REGISTRY['delta'].sizeEffect).toBe('preserving');
+    expect(CODEC_REGISTRY['byte-shuffle'].sizeEffect).toBe('preserving');
+  });
+  it('outputDtypeFor takes params and defers to a codec-declared outputDtype', () => {
+    // no codec declares outputDtype yet: rule matches the old behavior
+    expect(outputDtypeFor(CODEC_REGISTRY['delta'], 'int16', {})).toBe('int16');
+    expect(outputDtypeFor(CODEC_REGISTRY['rle'], 'int16', {})).toBe('uint8');
+    expect(outputDtypeFor(CODEC_REGISTRY['byte-shuffle'], 'float32', {})).toBe('uint8');
+  });
+  it('pipelineOutputDtype walks active steps', () => {
+    const steps = [
+      { codec: 'delta', params: {} },
+      { codec: 'rle', params: {}, enabled: false },
+    ];
+    expect(pipelineOutputDtype(steps, 'int16')).toBe('int16');
+    expect(pipelineOutputDtype([{ codec: 'rle', params: {} }], 'int16')).toBe('uint8');
+  });
+  it('encodedByteLength: preserving keeps length, variable returns null', () => {
+    expect(encodedByteLength([{ codec: 'delta', params: {} }], 'int16', 64)).toBe(64);
+    expect(encodedByteLength([{ codec: 'rle', params: {} }], 'int16', 64)).toBeNull();
+    expect(encodedByteLength([], 'float64', 80)).toBe(80);
+    // disabled variable-size step is inert
+    expect(encodedByteLength([{ codec: 'rle', params: {}, enabled: false }], 'int16', 64)).toBe(64);
   });
 });

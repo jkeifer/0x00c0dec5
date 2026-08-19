@@ -214,7 +214,7 @@ export function encodedChunkMeta(steps: CodecStep[], inputDtype: DtypeKey): Enco
       // anything a reader could decode as a value.
       slotDtype ??= dtype;
     }
-    dtype = outputDtypeFor(codec, dtype);
+    dtype = outputDtypeFor(codec, dtype, step.params);
   }
   return { outputDtype: dtype, slotDtype: slotDtype ?? dtype, traceMode };
 }

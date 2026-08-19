@@ -13,7 +13,20 @@ export interface ParamDef {
 export interface CodecDefinition {
   key: string;
   label: string;
-  category: 'reordering' | 'entropy';
+  category: 'transform' | 'reordering' | 'entropy';
+  /** How this codec changes the encoded byte count:
+   *  - 'preserving': output length === input length (delta, zigzag, shuffles)
+   *  - 'fixed-ratio': length changes deterministically via element widths
+   *    (scale-offset float32→int16 = 1/2) — offsets stay computable from
+   *    geometry + codec metadata, so no chunk index is demanded
+   *  - 'variable': data-dependent (every entropy codec) */
+  sizeEffect: 'preserving' | 'fixed-ratio' | 'variable';
+  /** Human-readable input expectation, surfaced by stepWarnings when
+   *  applicableTo fails. Advisory only — never blocks. */
+  expects?: string;
+  /** Declared (possibly param-dependent) output dtype. Absent = the default
+   *  rule in outputDtypeFor (entropy/traceMode → uint8, else input). */
+  outputDtype?: (inputDtype: DtypeKey, params: Record<string, number | string>) => DtypeKey;
   /** Present on codecs backed by an external runtime. 'pyodide' entries are
    *  the real numcodecs codecs: the picker disables them until the runtime
    *  loads, and the worker awaits runtime init before computes that use one
@@ -58,14 +71,17 @@ export interface CodecDefinition {
     bytes: Uint8Array,
     inputDtype: string,
     params: Record<string, number | string>,
+    byteOrder?: 'little' | 'big',
   ) => {
     bytes: Uint8Array;
     outputDtype: string;
+    stats?: { clipped: number; rounded: number };
   };
   decode: (
     bytes: Uint8Array,
     encodedDtype: string,
     params: Record<string, number | string>,
+    byteOrder?: 'little' | 'big',
   ) => {
     bytes: Uint8Array;
     outputDtype: string;

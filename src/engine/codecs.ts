@@ -10,6 +10,7 @@ const delta: CodecDefinition = {
   key: 'delta',
   label: 'Delta',
   category: 'reordering',
+  sizeEffect: 'preserving',
   description: 'Store value-to-value differences',
   // No `order` param: a second-order delta is just delta twice, and the
   // pipeline can already say that — as two steps whose intermediate bytes and
@@ -100,6 +101,7 @@ const zigzagCodec: CodecDefinition = {
   key: 'zigzag',
   label: 'Zigzag',
   category: 'reordering',
+  sizeEffect: 'preserving',
   description:
     'Maps signed integers to unsigned so small magnitudes get small byte values '
     + '(0→0, −1→1, 1→2, −2→3 …) — Parquet applies this before RLE/bit-packing. '
@@ -151,6 +153,7 @@ const byteShuffle: CodecDefinition = {
   key: 'byte-shuffle',
   label: 'Byte Shuffle',
   category: 'reordering',
+  sizeEffect: 'preserving',
   // The transpose moves every byte but the first: after it, byte offset N
   // holds byte plane b of some *other* element, so per-element tracing can't
   // survive. See CodecDefinition.traceMode.
@@ -224,6 +227,7 @@ const bitShuffleCodec: CodecDefinition = {
   key: 'bit-shuffle',
   label: 'Bit Shuffle',
   category: 'reordering',
+  sizeEffect: 'preserving',
   // One output byte packs one bit from each of 8 consecutive elements, so no
   // byte belongs to a single element — not even positionally. Degrades all
   // the way, like an entropy codec.
@@ -288,6 +292,7 @@ const dictionary: CodecDefinition = {
   key: 'dictionary',
   label: 'Dictionary',
   category: 'entropy',
+  sizeEffect: 'variable',
   description:
     'Parquet\'s workhorse: distinct values go into a dictionary, the stream '
     + 'becomes indices into it. Self-contained format — '
@@ -374,6 +379,7 @@ const rle: CodecDefinition = {
   key: 'rle',
   label: 'RLE',
   category: 'entropy',
+  sizeEffect: 'variable',
   description: 'Run-length encoding: (count, value) byte pairs',
   params: {},
   // Task 4.3 (UI-4): RLE operates byte-wise with no notion of element
@@ -451,6 +457,7 @@ function pyodideCodec(opts: {
     key: opts.key,
     label: opts.label,
     category: 'entropy',
+    sizeEffect: 'variable',
     runtime: 'pyodide',
     description: opts.description,
     params: opts.params,
@@ -540,7 +547,11 @@ export function activeSteps(steps: CodecStep[]): CodecStep[] {
   return steps.filter((s) => s.enabled !== false);
 }
 
-export function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey): DtypeKey {
+export function outputDtypeFor(
+  codec: CodecDefinition,
+  inputDtype: DtypeKey,
+  params: Record<string, number | string>,
+): DtypeKey {
   // A codec that declares a traceMode has destroyed element structure: after a
   // Byte Shuffle the stream is byte planes, after a Bit Shuffle it is bit
   // planes. Reporting the pre-codec dtype there was a lie with three victims —
@@ -550,7 +561,41 @@ export function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey): Dt
   // give. This is only the *flow* dtype; what the Encoded pane draws as a slot
   // is `slotDtype` (encodedChunkMeta), which deliberately still answers "what
   // would a reader ignoring this codec decode here".
+  if (codec.outputDtype) return codec.outputDtype(inputDtype, params);
   return codec.category === 'entropy' || codec.traceMode ? 'uint8' : inputDtype;
+}
+
+/** Final output dtype of an entire pipeline (active steps only). */
+export function pipelineOutputDtype(steps: CodecStep[], inputDtype: DtypeKey): DtypeKey {
+  let dtype = inputDtype;
+  for (const step of activeSteps(steps)) {
+    const codec = CODEC_REGISTRY[step.codec];
+    if (!codec) continue;
+    dtype = outputDtypeFor(codec, dtype, step.params);
+  }
+  return dtype;
+}
+
+/** Encoded byte length of `rawLength` input bytes after `steps`, or null when
+ *  a variable-size step makes it underivable. Fixed-ratio scaling floors to
+ *  whole elements and copies the tail through, matching every codec's
+ *  trailing-partial-element convention. */
+export function encodedByteLength(steps: CodecStep[], inputDtype: DtypeKey, rawLength: number): number | null {
+  let dtype = inputDtype;
+  let length = rawLength;
+  for (const step of activeSteps(steps)) {
+    const codec = CODEC_REGISTRY[step.codec];
+    if (!codec) continue;
+    if (codec.sizeEffect === 'variable') return null;
+    const out = outputDtypeFor(codec, dtype, step.params);
+    if (codec.sizeEffect === 'fixed-ratio') {
+      const inW = getDtype(dtype).size;
+      const outW = getDtype(out).size;
+      length = Math.floor(length / inW) * outW + (length % inW);
+    }
+    dtype = out;
+  }
+  return length;
 }
 
 /** True when any configured pipeline step references a runtime-backed codec.
@@ -580,7 +625,7 @@ function computeDtypeFlow(steps: CodecStep[], inputDtype: DtypeKey): DtypeKey[] 
     runningDtypes.push(dtype);
     const codec = CODEC_REGISTRY[step.codec];
     if (!codec) continue;
-    dtype = outputDtypeFor(codec, dtype);
+    dtype = outputDtypeFor(codec, dtype, step.params);
   }
   return runningDtypes;
 }
@@ -621,9 +666,9 @@ export function stepWarnings(steps: CodecStep[], inputDtype: DtypeKey): string[]
     const dtypeInfo = getDtype(dtype);
 
     if (!codec.applicableTo(dtype)) {
-      warnings.push(
-        `${codec.label} is not applicable to ${dtypeInfo.label} input — results may be garbled or meaningless.`,
-      );
+      warnings.push(codec.expects
+        ? `${codec.label} expects ${codec.expects}; got ${dtypeInfo.label} — results may be garbled or meaningless.`
+        : `${codec.label} is not applicable to ${dtypeInfo.label} input — results may be garbled or meaningless.`);
     }
 
     if (step.codec === 'byte-shuffle') {

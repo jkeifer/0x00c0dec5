@@ -29,7 +29,7 @@ describe('real codec registry entries (no runtime needed)', () => {
       expect(codec.applicableTo('float64')).toBe(true);
       expect(codec.isLossy('float64')).toBe(false);
       // entropy => uint8 output, same as RLE (single source of truth)
-      expect(outputDtypeFor(codec, 'int16')).toBe('uint8');
+      expect(outputDtypeFor(codec, 'int16', {})).toBe('uint8');
     }
   });
 
