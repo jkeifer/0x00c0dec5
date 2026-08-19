@@ -10,6 +10,23 @@
     "retrieved": "2026-07-13",
     "license": "U.S. Government work — public domain"
   },
+  "spatial": {
+    "crs": "EPSG:4326",
+    "bbox": [
+      75,
+      20,
+      92.05,
+      37.05
+    ],
+    "transform": [
+      75,
+      0.0166667,
+      0,
+      37.05,
+      0,
+      -0.0166667
+    ]
+  },
   "variables": [
     {
       "name": "elevation",
