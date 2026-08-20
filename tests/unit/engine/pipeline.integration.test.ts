@@ -11,7 +11,7 @@ import { DEFAULT_STATE } from '../../../src/types/state.ts';
 import type { AppState } from '../../../src/types/state.ts';
 import type { EncodedChunk } from '../../../src/types/pipeline.ts';
 import type { DtypeKey } from '../../../src/types/dtypes.ts';
-import type { ValueArray } from '../../../src/engine/layout.ts';
+import type { ValueArray, ChunkBlockRegion } from '../../../src/engine/layout.ts';
 
 /**
  * Helper: run the full pipeline from state to virtual files.
@@ -253,6 +253,86 @@ describe('Integration: multi-variable row-oriented', () => {
     expect(encodedChunks.length).toBe(1);
     // 2 variables * 32 elements * 4 bytes = 256 bytes
     expect(encodedChunks[0].bytes.length).toBe(256);
+  });
+});
+
+describe('Integration: row-mode structured prefix (Task 8)', () => {
+  // Two vars, one chunk: float32 `t` with a scale-offset prefix (→ int16,
+  // size 2) and int32 `d` with none (size 4). Row mode runs each field
+  // pipeline's structured prefix per-variable BEFORE interleaving.
+  const shape = [8];
+  const baseVars = [
+    {
+      id: 't', name: 't', color: '#f00',
+      logicalType: { type: 'decimal' as const, min: -50, max: 50, decimalPlaces: 1, generation: 'random' as const },
+      typeAssignment: { storageDtype: 'float32' as const },
+    },
+    {
+      id: 'd', name: 'd', color: '#0f0',
+      logicalType: { type: 'integer' as const, min: -1000, max: 1000, generation: 'random' as const },
+      typeAssignment: { storageDtype: 'int32' as const },
+    },
+  ];
+  const elementCount = shape.reduce((a, b) => a * b, 1);
+
+  it("runs each field pipeline's structured prefix before interleaving", () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape, chunkShape: shape,
+      interleaving: 'row',
+      variables: baseVars,
+      fieldPipelines: { t: [{ codec: 'scale-offset', params: {} }], d: [] },
+      chunkPipeline: [{ codec: 'delta', params: {} }],
+    };
+    const { stages } = computePipelineStages(state);
+    const encoded = stages[3];
+    // per element 2 (int16 post-scale) + 4 (int32) = 6, not pre-prefix 4+4=8
+    expect(encoded.stats.byteCount).toBe(elementCount * 6);
+
+    const region = encoded.layout.regions[0] as ChunkBlockRegion;
+    expect(region.fields.map((f) => ({ dtype: f.dtype, size: f.size, offset: f.offset })))
+      .toEqual([
+        { dtype: 'int16', size: 2, offset: 0 },
+        { dtype: 'int32', size: 4, offset: 2 },
+      ]);
+  });
+
+  it("a field pipeline's non-structured remainder stays inactive in row mode", () => {
+    // t's pipeline = [scale-offset, rle]: the structured prefix (scale-offset)
+    // runs, but rle (the remainder) must NOT — byte count is still
+    // elementCount*6, and rle would change it.
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape, chunkShape: shape,
+      interleaving: 'row',
+      variables: baseVars,
+      fieldPipelines: {
+        t: [{ codec: 'scale-offset', params: {} }, { codec: 'rle', params: {} }],
+        d: [],
+      },
+      chunkPipeline: [],
+    };
+    const { stages } = computePipelineStages(state);
+    expect(stages[3].stats.byteCount).toBe(elementCount * 6);
+  });
+
+  it('a 1-variable row chunk with a fixed-ratio prefix narrows exactly like column mode', () => {
+    // Deferred review item 2: one variable, row-interleaved, scale-offset in
+    // its field pipeline prefix — the single field must narrow to int16/size 2
+    // just as the column single-field path does.
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape, chunkShape: shape,
+      interleaving: 'row',
+      variables: [baseVars[0]],
+      fieldPipelines: { t: [{ codec: 'scale-offset', params: {} }] },
+      chunkPipeline: [],
+    };
+    const { stages } = computePipelineStages(state);
+    expect(stages[3].stats.byteCount).toBe(elementCount * 2);
+    const region = stages[3].layout.regions[0] as ChunkBlockRegion;
+    expect(region.fields.map((f) => ({ dtype: f.dtype, size: f.size, offset: f.offset })))
+      .toEqual([{ dtype: 'int16', size: 2, offset: 0 }]);
   });
 });
 

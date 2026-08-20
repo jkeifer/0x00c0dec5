@@ -8,6 +8,7 @@ import {
   stepWarnings,
   pipelineOutputDtype,
   encodedByteLength,
+  splitStructuredPrefix,
 } from '../../../src/engine/codecs.ts';
 import { reverseCodecPipeline } from '../../../src/engine/decode.ts';
 import { valuesToBytes, bytesToValues } from '../../../src/engine/elements.ts';
@@ -327,6 +328,41 @@ describe('activeSteps (F31 disabled-step filter)', () => {
 
     // A disabled byte-shuffle whose elementSize mismatches must not warn.
     expect(stepWarnings(withDisabled, 'int32')).toEqual(stepWarnings(without, 'int32'));
+  });
+});
+
+// ─── Task 8: row-mode structured prefix split ─────────────────────────────
+describe('splitStructuredPrefix', () => {
+  it('splits at the first active structure-destroying step', () => {
+    const steps: CodecStep[] = [
+      { codec: 'scale-offset', params: {} },
+      { codec: 'delta', params: {} },
+      { codec: 'deflate', params: {} },
+      { codec: 'zigzag', params: {} },
+    ];
+    const { prefix, remainder } = splitStructuredPrefix(steps);
+    expect(prefix.map((s) => s.codec)).toEqual(['scale-offset', 'delta']);
+    expect(remainder.map((s) => s.codec)).toEqual(['deflate', 'zigzag']);
+  });
+  it('a disabled destroyer does not end the prefix', () => {
+    const steps: CodecStep[] = [
+      { codec: 'rle', params: {}, enabled: false },
+      { codec: 'delta', params: {} },
+    ];
+    expect(splitStructuredPrefix(steps).prefix).toHaveLength(2);
+  });
+  it('shuffles end the prefix (traceMode destroys slot identity)', () => {
+    const steps: CodecStep[] = [{ codec: 'byte-shuffle', params: { elementSize: 4 } }];
+    expect(splitStructuredPrefix(steps).prefix).toHaveLength(0);
+  });
+  it('a wholly structured pipeline is all prefix', () => {
+    const steps: CodecStep[] = [
+      { codec: 'scale-offset', params: {} },
+      { codec: 'delta', params: {} },
+    ];
+    const { prefix, remainder } = splitStructuredPrefix(steps);
+    expect(prefix).toHaveLength(2);
+    expect(remainder).toHaveLength(0);
   });
 });
 

@@ -754,6 +754,31 @@ export function activeSteps(steps: CodecStep[]): CodecStep[] {
   return steps.filter((s) => s.enabled !== false);
 }
 
+/** A codec whose output still has fixed-width per-element structure — the
+ *  derived form of Zarr's array-codec/bytes-codec split (spec: theorem, not
+ *  axiom). Structured codecs may run per-variable before row interleaving;
+ *  a traceMode codec destroyed slot↔element identity and a variable-size
+ *  codec has no elements at all, so neither can be interleaved element-wise. */
+export function isElementStructured(codec: CodecDefinition): boolean {
+  return !codec.traceMode && codec.sizeEffect !== 'variable';
+}
+
+/** Maximal leading run of steps that may run per-variable under row
+ *  interleaving. Disabled steps are inert everywhere (activeSteps) so they
+ *  never end the prefix; they stay in whichever segment they sit in. */
+export function splitStructuredPrefix(
+  steps: CodecStep[],
+): { prefix: CodecStep[]; remainder: CodecStep[] } {
+  for (let i = 0; i < steps.length; i++) {
+    if (steps[i].enabled === false) continue;
+    const codec = CODEC_REGISTRY[steps[i].codec];
+    if (codec && !isElementStructured(codec)) {
+      return { prefix: steps.slice(0, i), remainder: steps.slice(i) };
+    }
+  }
+  return { prefix: steps, remainder: [] };
+}
+
 export function outputDtypeFor(
   codec: CodecDefinition,
   inputDtype: DtypeKey,

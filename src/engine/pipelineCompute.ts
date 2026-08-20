@@ -19,7 +19,7 @@ import { generateValues } from './generate.ts';
 import { assignType } from './typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid } from './chunk.ts';
 import { linearizeChunk } from './linearize.ts';
-import { runCodecPipeline, shannonEntropy, stepWarnings } from './codecs.ts';
+import { runCodecPipeline, shannonEntropy, stepWarnings, splitStructuredPrefix, pipelineOutputDtype } from './codecs.ts';
 import { collectMetadata, serializeMetadata } from './metadata.ts';
 import { decodeMetadataBinary } from './metadataBinary.ts';
 import { assembleFiles } from './write.ts';
@@ -311,40 +311,105 @@ function collectEncodedWarnings(
     );
   }
 
-  const dtypes = variables.map((v) => v.typeAssignment.storageDtype);
-  const mixedDtypes = new Set(dtypes).size > 1;
-  const inputDtype: DtypeKey = mixedDtypes
-    ? 'uint8'
-    : variables.length > 0
-      ? variables[0].typeAssignment.storageDtype
-      : 'uint8';
-  return stepWarnings(chunkPipeline, inputDtype);
+  // Row mode: each variable's structured prefix runs per-variable (warn at its
+  // storage dtype), then the chunk pipeline runs at the interleaved post-prefix
+  // input dtype (uniform → that dtype, mixed/empty → uint8).
+  const prefixWarnings = variables.flatMap((v) =>
+    stepWarnings(splitStructuredPrefix(fieldPipelines[v.id] ?? []).prefix, v.typeAssignment.storageDtype));
+  const outs = variables.map((v) =>
+    pipelineOutputDtype(splitStructuredPrefix(fieldPipelines[v.id] ?? []).prefix, v.typeAssignment.storageDtype));
+  const inputDtype: DtypeKey = outs.length === 0 ? 'uint8' : new Set(outs).size > 1 ? 'uint8' : outs[0];
+  return [...prefixWarnings, ...stepWarnings(chunkPipeline, inputDtype)];
 }
 
-/** Per-chunk codec steps + input dtype — single source of truth for "which
- * pipeline applies to this chunk", used by computeEncodedStage to both run
- * the codecs and derive encodedChunkMeta for the chunk's layout region.
- * Mirrors the equivalence tests' inline derivation. */
-function chunkCodecInput(
+/** Column-mode per-chunk encode: each chunk is one variable's block, run
+ * through that variable's field pipeline. Slot fields take the pipeline's
+ * dtype AND width — a fixed-ratio transform narrows every slot (4 float32
+ * bytes -> 2 int16 bytes). Mirrors the equivalence tests' inline derivation. */
+function encodeColumnChunk(
   chunk: Chunk,
-  interleaving: 'row' | 'column',
+  linearized: LinearizedChunk,
+  nameToId: Map<string, string>,
+  fieldPipelines: Record<string, CodecStep[]>,
+  region: ChunkBlockRegion,
+  byteOrder: 'little' | 'big',
+): { encoded: EncodedChunk; fields: ChunkFieldLayout[]; traceMode: ChunkTraceMode } {
+  const cv = chunk.variables[0];
+  const variableId = nameToId.get(cv?.variableName ?? '');
+  const steps = (variableId !== undefined ? fieldPipelines[variableId] : undefined) ?? [];
+  const inputDtype = cv.dtype as DtypeKey;
+  const meta = encodedChunkMeta(steps, inputDtype);
+  const slotSize = getDtype(meta.slotDtype as DtypeKey).size;
+  // One field (this variable's block); a fixed-ratio prefix narrows it.
+  const fields: ChunkFieldLayout[] = [{ ...region.fields[0], dtype: meta.slotDtype, size: slotSize }];
+  const result = runCodecPipeline(linearized.bytes, steps, inputDtype, byteOrder);
+  return {
+    encoded: { chunkId: linearized.chunkId, coords: linearized.coords, bytes: result.bytes, variableName: linearized.variableName },
+    fields,
+    traceMode: meta.traceMode,
+  };
+}
+
+/** Row-mode per-chunk encode: run each variable's maximal element-structured
+ * prefix on its own contiguous chunk values, re-interleave records at the
+ * post-prefix widths, then run the shared chunk pipeline on the result.
+ * Equivalent to strided in-place execution — linearizeChunk's per-variable
+ * value order IS the interleave element order — so hoisting the prefixes out
+ * ahead of interleaving keeps the code linear without changing the bytes.
+ * Task 9's reader mirrors this exactly. */
+function encodeRowChunk(
+  chunk: Chunk,
+  linearized: LinearizedChunk,
   nameToId: Map<string, string>,
   fieldPipelines: Record<string, CodecStep[]>,
   chunkPipeline: CodecStep[],
-): { steps: CodecStep[]; inputDtype: DtypeKey } {
-  if (interleaving === 'column') {
-    const cv = chunk.variables[0];
-    const variableId = nameToId.get(cv?.variableName ?? '');
-    const steps = (variableId !== undefined ? fieldPipelines[variableId] : undefined) ?? [];
-    return { steps, inputDtype: cv.dtype as DtypeKey };
+  byteOrder: 'little' | 'big',
+): { encoded: EncodedChunk; fields: ChunkFieldLayout[]; traceMode: ChunkTraceMode } {
+  const prefixOut = chunk.variables.map((cv) => {
+    const varId = nameToId.get(cv.variableName);
+    const { prefix } = splitStructuredPrefix((varId !== undefined ? fieldPipelines[varId] : undefined) ?? []);
+    const raw = valuesToBytes(cv.values, cv.dtype as DtypeKey, byteOrder);
+    const res = runCodecPipeline(raw, prefix, cv.dtype as DtypeKey, byteOrder);
+    const dtype = res.outputDtype as DtypeKey;
+    return { bytes: res.bytes, dtype, size: getDtype(dtype).size, name: cv.variableName, color: cv.variableColor };
+  });
+
+  // Empty-variables chunk: 0 elements, 0-size record — an empty valid output.
+  const elementCount = chunk.variables[0]?.values.length ?? 0;
+  const recordSize = prefixOut.reduce((a, p) => a + p.size, 0);
+  const interleaved = new Uint8Array(elementCount * recordSize);
+  let w = 0;
+  for (let i = 0; i < elementCount; i++) {
+    for (const p of prefixOut) {
+      interleaved.set(p.bytes.subarray(i * p.size, (i + 1) * p.size), w);
+      w += p.size;
+    }
   }
-  const uniqueDtypes = new Set(chunk.variables.map((cv) => cv.dtype));
-  const inputDtype: DtypeKey = chunk.variables.length === 0
-    ? 'uint8'
-    : uniqueDtypes.size > 1
-      ? 'uint8'
-      : chunk.variables[0].dtype as DtypeKey;
-  return { steps: chunkPipeline, inputDtype };
+
+  const mixed = new Set(prefixOut.map((p) => p.dtype)).size > 1;
+  const inputDtype: DtypeKey = prefixOut.length === 0 ? 'uint8' : mixed ? 'uint8' : prefixOut[0].dtype;
+  const meta = encodedChunkMeta(chunkPipeline, inputDtype);
+  const result = runCodecPipeline(interleaved, chunkPipeline, inputDtype, byteOrder);
+
+  // Slot fields: post-prefix geometry (dtype + width per variable). If the
+  // chunk pipeline degraded the mode, relabel every field's dtype to the
+  // frozen slotDtype (today's rule); the widths stay post-prefix.
+  let off = 0;
+  const fields: ChunkFieldLayout[] = prefixOut.map((p) => {
+    const f: ChunkFieldLayout = {
+      variableName: p.name, variableColor: p.color,
+      dtype: meta.traceMode === 'value-preserving' ? p.dtype : meta.slotDtype,
+      size: p.size, offset: off,
+    };
+    off += p.size;
+    return f;
+  });
+
+  return {
+    encoded: { chunkId: linearized.chunkId, coords: linearized.coords, bytes: result.bytes },
+    fields,
+    traceMode: meta.traceMode,
+  };
 }
 
 export function computeEncodedStage(
@@ -364,33 +429,13 @@ export function computeEncodedStage(
   const traceModes: ChunkTraceMode[] = [];
   const encodedChunks: EncodedChunk[] = chunks.map((chunk, idx) => {
     const linearized = linearizedChunks[idx];
-    const { steps, inputDtype } = chunkCodecInput(chunk, interleaving, nameToId, fieldPipelines, chunkPipeline);
-    const meta = encodedChunkMeta(steps, inputDtype);
-    traceModes.push(meta.traceMode);
     const region = linearizedLayout.regions[idx] as ChunkBlockRegion;
-    const slotSize = getDtype(meta.slotDtype as DtypeKey).size;
-    slotFields.push(region.fields.length === 1
-      // single-field (column) chunk: the slot takes the pipeline's dtype AND
-      // width — a fixed-ratio transform narrows every slot (e.g. 4 float32
-      // bytes -> 2 int16 bytes).
-      ? [{ ...region.fields[0], dtype: meta.slotDtype, size: slotSize }]
-      // multi-field (row) chunk: dtype relabel only, widths untouched
-      // (pre-prefix behavior — Task 8 replaces this branch with per-variable
-      // prefix fields).
-      : region.fields.map((f) => ({ ...f, dtype: meta.slotDtype })));
-    const result = runCodecPipeline(linearized.bytes, steps, inputDtype, byteOrder);
-    return interleaving === 'column'
-      ? {
-        chunkId: linearized.chunkId,
-        coords: linearized.coords,
-        bytes: result.bytes,
-        variableName: linearized.variableName,
-      }
-      : {
-        chunkId: linearized.chunkId,
-        coords: linearized.coords,
-        bytes: result.bytes,
-      };
+    const { encoded, fields, traceMode } = interleaving === 'column'
+      ? encodeColumnChunk(chunk, linearized, nameToId, fieldPipelines, region, byteOrder)
+      : encodeRowChunk(chunk, linearized, nameToId, fieldPipelines, chunkPipeline, byteOrder);
+    slotFields.push(fields);
+    traceModes.push(traceMode);
+    return encoded;
   });
 
   const encodedBytes = concatBytes(encodedChunks.map((ec) => ec.bytes));
