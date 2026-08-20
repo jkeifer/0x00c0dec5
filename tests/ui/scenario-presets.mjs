@@ -132,9 +132,10 @@ async function main() {
   await switchModel(page, 'array');
   const arrayOptions = await presetOptionValues(page);
   h.check(
-    'array dropdown lists exactly GeoTIFFesque + Zarrish (no tabular presets, no Custom before any array load)',
-    arrayOptions.length === 2 &&
+    'array dropdown lists exactly GeoTIFFesque + COG-esque + Zarrish (no tabular presets, no Custom before any array load)',
+    arrayOptions.length === 3 &&
       arrayOptions.includes('geotiffesque') &&
+      arrayOptions.includes('cog-esque') &&
       arrayOptions.includes('zarrish'),
     `options = ${JSON.stringify(arrayOptions)}`,
   );

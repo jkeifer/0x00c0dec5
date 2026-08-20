@@ -142,7 +142,7 @@ export function CodecPipelineEditor({
         <div style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
           No codecs applied — data passes through unchanged
         </div>
-        <AddCodecSelect onAdd={addCodec} runtimeStatus={runtimeStatus} />
+        <AddCodecSelect onAdd={addCodec} runtimeStatus={runtimeStatus} variableSlot={variableSlot} />
       </div>
     );
   }
@@ -306,7 +306,7 @@ export function CodecPipelineEditor({
           </div>
         );
       })}
-      <AddCodecSelect onAdd={addCodec} runtimeStatus={runtimeStatus} />
+      <AddCodecSelect onAdd={addCodec} runtimeStatus={runtimeStatus} variableSlot={variableSlot} />
     </div>
   );
 }
@@ -314,9 +314,11 @@ export function CodecPipelineEditor({
 function AddCodecSelect({
   onAdd,
   runtimeStatus,
+  variableSlot,
 }: {
   onAdd: (key: string) => void;
   runtimeStatus: 'loading' | 'ready' | 'error';
+  variableSlot: string;
 }) {
   const pyodideDisabled = runtimeStatus !== 'ready';
   const pyodideSuffix =
@@ -324,6 +326,7 @@ function AddCodecSelect({
   return (
     <select
       value=""
+      data-testid={`codec-add-${variableSlot}`}
       onChange={(e) => {
         if (e.target.value) onAdd(e.target.value);
       }}

@@ -129,7 +129,7 @@ export const FAILURE_MESSAGES: Record<ReadFailureReason, (byteCount: number, det
     `data's layout.`,
   'no-chunk-index': (byteCount) =>
     `Cannot read file.\n\n` +
-    `The file contains ${byteCount} bytes of data using one or more size-changing codecs (e.g. RLE, LZ), ` +
+    `The file contains ${byteCount} bytes of data using one or more size-changing codecs (e.g. RLE, Deflate), ` +
     `so encoded chunk sizes can't be computed from chunk shape and dtype alone — and nothing in the file ` +
     `records where each chunk actually starts.\n\n` +
     `Re-enable the chunk index, or remove the size-changing codecs from the pipeline. This is exactly why ` +

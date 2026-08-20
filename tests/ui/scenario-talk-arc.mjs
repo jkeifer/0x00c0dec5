@@ -60,29 +60,11 @@ async function stageStats(page, index) {
 async function addCodecToVariable(page, varName, codecValue) {
   const codecsSection = page.locator('[data-testid="sidebar-section-codecs"]');
   await codecsSection.scrollIntoViewIfNeeded();
-  // Column mode: each variable gets its own row, an outer <div> whose first
-  // child holds a <span> with the variable's exact name text, followed by a
-  // CodecPipelineEditor <select>. A fixed nth() index into "all selects in
-  // the section" isn't safe once a preset is active — match the row by the
-  // variable name span's EXACT text (not hasText substring, which could
-  // false-positive on a name that's a substring of another), then narrow to
-  // the candidate div containing exactly one <select> (the tightest
-  // ancestor: the whole-section div and the bare name-row div both match
-  // "has the name span" too, but hold 3+ or 0 selects respectively).
-  const rowCandidates = codecsSection
-    .locator('div')
-    .filter({ has: page.locator('span', { hasText: new RegExp(`^${varName}$`) }) });
-  const candidateCount = await rowCandidates.count();
-  let varRow = null;
-  for (let i = 0; i < candidateCount; i++) {
-    const candidate = rowCandidates.nth(i);
-    if ((await candidate.locator('select').count()) === 1) {
-      varRow = candidate;
-      break;
-    }
-  }
-  if (!varRow) throw new Error(`addCodecToVariable: could not locate ${varName}'s codec row`);
-  await varRow.locator('select').first().selectOption(codecValue);
+  // The add-codec dropdown carries a per-variable testid (codec-add-{name}).
+  // The old heuristic here ("the row div containing exactly one <select>")
+  // broke once presets started shipping pre-configured steps whose params
+  // render their own <select>s (Scale/Offset's sourceDtype/targetDtype).
+  await page.locator(`[data-testid="codec-add-${varName}"]`).selectOption(codecValue);
   await page.waitForTimeout(400);
   // Project 4's eager Pyodide init keeps the worker busy for the first few
   // seconds after boot, so early recomputes can land well after a flat wait —

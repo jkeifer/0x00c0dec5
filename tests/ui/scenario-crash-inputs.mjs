@@ -101,9 +101,18 @@ async function main() {
     const rendered = await bodyRendered(page);
     const boundary = await boundaryShown(page);
     const varAVisible = (await page.locator('input[placeholder="name"][value="a"]').count()) > 0;
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    const hasDelta = /Delta/.test(bodyText);
-    const hasScaleOffset = /scale-offset|Scale.?Offset/i.test(bodyText);
+    // The v1 migration branch (persistence.ts migrateState, dtype-shaped
+    // variables) still strips v1-era scale-offset/bitround steps from v1
+    // pipelines — those keys meant something else back then. Post codec
+    // unification, scale-offset exists in the registry/picker again, so a
+    // body-text regex would false-positive on the add-codec dropdown; pin
+    // the pipeline itself via codec-step testids instead: exactly the delta
+    // step survives.
+    const step0Text = await page
+      .locator('[data-testid="codec-step-a-0"]')
+      .innerText()
+      .catch(() => '');
+    const step1Count = await page.locator('[data-testid="codec-step-a-1"]').count();
 
     h.check(
       'legacy v1 localStorage state migrates without crashing',
@@ -116,9 +125,9 @@ async function main() {
       `varAVisible=${varAVisible}`,
     );
     h.check(
-      'legacy scale-offset codec migrated away (no longer a codec, folded into Type Assignment)',
-      hasDelta && !hasScaleOffset,
-      `hasDelta=${hasDelta} hasScaleOffset=${hasScaleOffset}`,
+      "v1 migration strips the v1-era scale-offset step: only delta survives in a's pipeline",
+      /Delta/.test(step0Text) && !/Scale.?Offset/i.test(step0Text) && step1Count === 0,
+      `step0="${step0Text.replace(/\n/g, ' ').slice(0, 60)}" step1Count=${step1Count}`,
     );
     await page.context().close();
   }
