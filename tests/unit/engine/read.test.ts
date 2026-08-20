@@ -935,6 +935,25 @@ describe('parseStructure — partitioning and chunkOrder', () => {
     expect(structure.partitioning).toBe('single');
     expect(structure.chunkOrder).toBe('row-major');
   });
+
+  it('parses a column-mode object with keys "chunk"/"fields" holding array values as fieldPipelines, not the row envelope', () => {
+    // Pathological column dataset: variables literally named 'chunk' and
+    // 'fields'. Column-mode codec_pipelines is a plain by-name object mapping
+    // each variable name to its (array) pipeline — here `fields` maps to an
+    // array too, which must NOT satisfy the row-envelope's `fields` check
+    // (typeof === 'object' is true for arrays; the guard must exclude them).
+    const structure = parseStructure(
+      entriesWith({
+        schema: JSON.stringify([
+          { name: 'chunk', dtype: 'int32', logicalType: 'integer' },
+          { name: 'fields', dtype: 'int32', logicalType: 'integer' },
+        ]),
+        codec_pipelines: JSON.stringify({ chunk: [], fields: [] }),
+      }),
+    );
+    expect(structure.chunkPipeline).toBeNull();
+    expect(structure.fieldPipelines).toEqual({ chunk: [], fields: [] });
+  });
 });
 
 // Task 7 fix: scanBinaryBackward must stay a BOUNDED window from the end (the

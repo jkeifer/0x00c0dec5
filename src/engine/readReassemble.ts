@@ -6,7 +6,7 @@ import { bytesToValues } from './elements.ts';
 import type { ValueArray } from './layout.ts';
 import type { ChunkIndexEntry } from './metadata.ts';
 import { reverseCodecPipeline } from './decode.ts';
-import { encodedByteLength, pipelineOutputDtype } from './codecs.ts';
+import { encodedByteLength, pipelineOutputDtype, foldUniformDtype } from './codecs.ts';
 import { coordsToFlatIndex, computeChunkGrid, enumerateChunkCoords } from './chunk.ts';
 import { orderCoordsOf, type LinearizationOrder } from './order.ts';
 import { stripMagic } from './readLocate.ts';
@@ -355,8 +355,7 @@ export function checkAssumedIdentitySize(
 }
 
 export function rowModeInputDtype(schema: SchemaEntry[]): DtypeKey {
-  const uniqueDtypes = new Set(schema.map((v) => v.dtype));
-  return uniqueDtypes.size > 1 ? 'uint8' : schema[0]?.dtype ?? 'uint8';
+  return foldUniformDtype(schema.map((v) => v.dtype));
 }
 
 /** Post-prefix ("encoded") schema: each variable's dtype AFTER its structured

@@ -129,6 +129,17 @@ export function CodecPipelineEditor({
     // pitfall 3): seed it from the running dtype at add time rather than the
     // codec's static default, so it starts out matching what's actually
     // flowing into this step instead of immediately being wrong.
+    //
+    // Invariant: this is a one-time seed, not re-seeded on reorder — if a step
+    // moves earlier/later in the pipeline the running dtype at its new
+    // position can differ from what was seeded, and nothing here corrects it.
+    // That's safe for reversal: `reverseCodecPipeline` (decode.ts) walks the
+    // codec pipeline backward using the *forward-computed* dtype chain to
+    // determine reversal order, not the stored `sourceDtype` param, so a
+    // stale seed can't desync decode. And since Scale/Offset's
+    // `applicableTo` is float-only, the running dtype at any valid add site
+    // can only be a float width in practice — the seeded value is never
+    // anything else.
     if ('sourceDtype' in codec.params) {
       const running = computeRunningDtypes(steps, inputDtype)[steps.length];
       defaultParams.sourceDtype = running;

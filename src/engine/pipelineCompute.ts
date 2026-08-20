@@ -19,7 +19,7 @@ import { generateValues } from './generate.ts';
 import { assignType } from './typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid } from './chunk.ts';
 import { linearizeChunk } from './linearize.ts';
-import { runCodecPipeline, shannonEntropy, stepWarnings, splitStructuredPrefix, pipelineOutputDtype, type CodecStepStats } from './codecs.ts';
+import { runCodecPipeline, shannonEntropy, stepWarnings, splitStructuredPrefix, rowModeChunkInputDtype, foldUniformDtype, type CodecStepStats } from './codecs.ts';
 import { collectMetadata, serializeMetadata } from './metadata.ts';
 import { decodeMetadataBinary } from './metadataBinary.ts';
 import { assembleFiles } from './write.ts';
@@ -325,9 +325,7 @@ function collectEncodedWarnings(
   // input dtype (uniform → that dtype, mixed/empty → uint8).
   const prefixWarnings = variables.flatMap((v) =>
     stepWarnings(splitStructuredPrefix(fieldPipelines[v.id] ?? []).prefix, v.typeAssignment.storageDtype));
-  const outs = variables.map((v) =>
-    pipelineOutputDtype(splitStructuredPrefix(fieldPipelines[v.id] ?? []).prefix, v.typeAssignment.storageDtype));
-  const inputDtype: DtypeKey = outs.length === 0 ? 'uint8' : new Set(outs).size > 1 ? 'uint8' : outs[0];
+  const inputDtype = rowModeChunkInputDtype(variables, fieldPipelines);
   return [...prefixWarnings, ...stepWarnings(chunkPipeline, inputDtype)];
 }
 
@@ -407,8 +405,7 @@ function encodeRowChunk(
     }
   }
 
-  const mixed = new Set(prefixOut.map((p) => p.dtype)).size > 1;
-  const inputDtype: DtypeKey = prefixOut.length === 0 ? 'uint8' : mixed ? 'uint8' : prefixOut[0].dtype;
+  const inputDtype = foldUniformDtype(prefixOut.map((p) => p.dtype));
   const meta = encodedChunkMeta(chunkPipeline, inputDtype);
   const result = runCodecPipeline(interleaved, chunkPipeline, inputDtype, byteOrder);
 

@@ -2,7 +2,7 @@ import type { CodecDefinition, CodecStep, ParamDef } from '../types/codecs.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
 import { getDtype } from '../types/dtypes.ts';
 import { runPyodideCodec } from './pyodideRuntime.ts';
-import type { AppState } from '../types/state.ts';
+import type { AppState, Variable } from '../types/state.ts';
 import { valuesToBytes, bytesToValues } from './elements.ts';
 
 /** Apply mantissa bit truncation to float bytes. Reads/writes the mantissa
@@ -733,17 +733,6 @@ export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
 // ─── Dtype flow (UI-15) ───────────────────────────────────────────────────
 
 /**
- * Cheap dtype-flow rule for a single codec step, without running `encode`.
- *
- * UI-15: `CodecPipelineEditor` used to re-implement this rule locally
- * (`computeRunningDtype`: "entropy codecs collapse to uint8, everything else
- * preserves dtype"). That is a real invariant of the registry today — every
- * `encode` honors it — but it was duplicated rather than derived, so it would
- * go silently stale the day a dtype-changing codec (e.g. a future
- * scale/offset-as-codec) was added. This is the single source of truth both
- * the editor and any other dtype-flow consumer should call instead.
- */
-/**
  * F31: the enabled subset of a codec pipeline. Absent `enabled` = enabled.
  * Every pipeline consumption boundary (runCodecPipeline, reverseCodecPipeline,
  * encodedChunkMeta, stepWarnings, metadata serialization) filters through this
@@ -806,6 +795,38 @@ export function pipelineOutputDtype(steps: CodecStep[], inputDtype: DtypeKey): D
     dtype = outputDtypeFor(codec, dtype, step.params);
   }
   return dtype;
+}
+
+/** TN-2: the fold at the heart of row-mode's post-prefix input dtype —
+ *  uniform dtypes collapse to that dtype, an empty or mixed set collapses to
+ *  'uint8' (an interleaved record with mixed field widths has no single
+ *  element dtype, so codecs downstream treat it as an opaque byte stream).
+ *  This is the single shared primitive; both `rowModeChunkInputDtype` below
+ *  and `readReassemble.ts`'s `rowModeInputDtype` (already post-prefix) fold
+ *  through it rather than re-deriving the uniform-or-uint8 rule locally. */
+export function foldUniformDtype(dtypes: DtypeKey[]): DtypeKey {
+  if (dtypes.length === 0) return 'uint8';
+  return new Set(dtypes).size > 1 ? 'uint8' : dtypes[0];
+}
+
+/** TN-2: row mode's chunk-pipeline input dtype — each variable's structured
+ *  codec prefix (`splitStructuredPrefix`) runs per-variable first, then the
+ *  interleaved record is fed to the shared chunk pipeline at whatever dtype
+ *  that leaves it in (uniform across variables, or 'uint8' if mixed/empty).
+ *  Consolidates what was previously re-derived inline at four call sites
+ *  (pipelineCompute's warning collection and row-chunk encode, and
+ *  CodecSection's row-mode dtype label). */
+export function rowModeChunkInputDtype(
+  variables: Variable[],
+  fieldPipelines: Record<string, CodecStep[]>,
+): DtypeKey {
+  const outs = variables.map((v) =>
+    pipelineOutputDtype(
+      splitStructuredPrefix(fieldPipelines[v.id] ?? []).prefix,
+      v.typeAssignment.storageDtype,
+    ),
+  );
+  return foldUniformDtype(outs);
 }
 
 /** Encoded byte length of `rawLength` input bytes after `steps`, or null when

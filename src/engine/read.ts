@@ -287,11 +287,17 @@ export function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructur
     if (Array.isArray(parsed)) {
       // Bare array (old row-mode files): chunk pipeline only, no prefixes.
       chunkPipeline = parsed;
-    } else if (Array.isArray(parsed.chunk) && parsed.fields && typeof parsed.fields === 'object') {
+    } else if (
+      Array.isArray(parsed.chunk) &&
+      parsed.fields &&
+      typeof parsed.fields === 'object' &&
+      !Array.isArray(parsed.fields)
+    ) {
       // Row-mode {chunk, fields} envelope: structured prefixes + shared
       // chunk pipeline. A column dataset could in theory have variables named
       // 'chunk'/'fields', so this both-keys-and-right-shapes guard (an array
-      // `chunk` AND an object `fields`) is the disambiguator — a column
+      // `chunk` AND an object `fields` that is itself NOT an array — arrays
+      // satisfy `typeof === 'object'` too) is the disambiguator — a column
       // by-name object maps names to arrays, never `chunk` to an array beside
       // a `fields` object.
       chunkPipeline = parsed.chunk;
