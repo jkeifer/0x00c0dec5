@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CODEC_REGISTRY, runCodecPipeline } from '../../../src/engine/codecs.ts';
+import { CODEC_REGISTRY, runCodecPipeline, encodedByteLength } from '../../../src/engine/codecs.ts';
 import { reverseCodecPipeline } from '../../../src/engine/decode.ts';
 import { valuesToBytes, bytesToValues } from '../../../src/engine/elements.ts';
 
@@ -76,5 +76,56 @@ describe('bitround', () => {
     const twice = runCodecPipeline(once.bytes, step, 'float64');
     expect(twice.bytes).toEqual(once.bytes);
     expect(reverseCodecPipeline(once.bytes, step, 'float64').bytes).toEqual(once.bytes);
+  });
+});
+
+describe('scale-offset', () => {
+  const so = CODEC_REGISTRY['scale-offset'];
+  const params = { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' };
+  it('packs floats into the target int dtype at 1/scale precision', () => {
+    const bytes = valuesToBytes(Float64Array.from([1.5, 2.34, -0.5]), 'float32');
+    const { bytes: out, outputDtype, stats } = so.encode(bytes, 'float32', params);
+    expect(outputDtype).toBe('int16');
+    expect(out.length).toBe(6); // 3 elements × 2 bytes — the fixed ratio
+    expect(Array.from(bytesToValues(out, 'int16') as Float64Array)).toEqual([15, 23, -5]);
+    expect(stats!.rounded).toBe(1); // 2.34×10 = 23.4 rounds; 1.5×10 and -0.5×10 are exact
+    expect(stats!.clipped).toBe(0);
+  });
+  it('clamps and counts values outside the target range', () => {
+    const bytes = valuesToBytes(Float64Array.from([40000, -1]), 'float32');
+    const { bytes: out, stats } = so.encode(bytes, 'float32', { ...params, scale: 1 });
+    expect(Array.from(bytesToValues(out, 'int16') as Float64Array)).toEqual([32767, -1]);
+    expect(stats!.clipped).toBe(1);
+  });
+  it('decode divides out and re-emits at sourceDtype', () => {
+    const enc = valuesToBytes(Float64Array.from([15, 23]), 'int16');
+    const { bytes: out, outputDtype } = so.decode(enc, 'int16', params);
+    expect(outputDtype).toBe('float32');
+    expect(Array.from(bytesToValues(out, 'float32') as Float64Array)).toEqual([1.5, 2.299999952316284]);
+  });
+  it('reverseCodecPipeline roundtrips to the quantized values', () => {
+    const original = valuesToBytes(Float64Array.from([1.5, 2.3, -0.7]), 'float32');
+    const steps = [{ codec: 'scale-offset', params }];
+    const enc = runCodecPipeline(original, steps, 'float32');
+    expect(enc.outputDtype).toBe('int16');
+    const dec = reverseCodecPipeline(enc.bytes, steps, 'float32');
+    expect(dec.outputDtype).toBe('float32');
+    const vals = bytesToValues(dec.bytes, 'float32') as Float64Array;
+    expect(vals[0]).toBeCloseTo(1.5, 5);
+    expect(vals[1]).toBeCloseTo(2.3, 5);
+    expect(vals[2]).toBeCloseTo(-0.7, 5);
+  });
+  it('encodedByteLength accounts for the ratio', () => {
+    expect(encodedByteLength([{ codec: 'scale-offset', params }], 'float32', 12)).toBe(6);
+    expect(encodedByteLength(
+      [{ codec: 'scale-offset', params }, { codec: 'delta', params: { elementSize: 2 } }],
+      'float32', 12,
+    )).toBe(6);
+  });
+  it('NaN stores as 0 without clip/round counts (assignType NF-4 convention)', () => {
+    const bytes = valuesToBytes(Float64Array.from([NaN]), 'float32');
+    const { bytes: out, stats } = so.encode(bytes, 'float32', params);
+    expect(Array.from(bytesToValues(out, 'int16') as Float64Array)).toEqual([0]);
+    expect(stats).toEqual({ clipped: 0, rounded: 0 });
   });
 });

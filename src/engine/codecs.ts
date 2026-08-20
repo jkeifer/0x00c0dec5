@@ -147,6 +147,66 @@ const bitround: CodecDefinition = {
   decode: (bytes, encodedDtype) => ({ bytes: new Uint8Array(bytes), outputDtype: encodedDtype }),
 };
 
+// ─── Scale/Offset ───────────────────────────────────────────────────────
+
+const SCALE_TARGET_DTYPES: DtypeKey[] = ['int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32'];
+const SCALE_SOURCE_DTYPES: DtypeKey[] = [...SCALE_TARGET_DTYPES, 'float32', 'float64'];
+
+function scaleOffsetTarget(params: Record<string, number | string>): DtypeKey {
+  return (SCALE_TARGET_DTYPES as string[]).includes(String(params.targetDtype))
+    ? params.targetDtype as DtypeKey : 'int16';
+}
+
+const scaleOffset: CodecDefinition = {
+  key: 'scale-offset',
+  label: 'Scale/Offset',
+  category: 'transform',
+  sizeEffect: 'fixed-ratio',
+  description:
+    "v' = round((v − offset) × scale), stored in a smaller integer dtype — "
+    + "numcodecs' FixedScaleOffset. The decimals you keep are the scale you choose.",
+  params: {
+    scale: { label: 'Scale', type: 'number', default: 10, min: -1_000_000_000, max: 1_000_000_000, step: 1 },
+    offset: { label: 'Offset', type: 'number', default: 0, min: -1e12, max: 1e12, step: 1 },
+    // decode's return dtype: the reader can't know the pre-step dtype from the
+    // encoded bytes alone, so it rides in params (numcodecs FixedScaleOffset's
+    // dtype/astype pair). Seeded from the running dtype at add time (editor).
+    sourceDtype: { label: 'Source Dtype', type: 'select', default: 'float32', options: SCALE_SOURCE_DTYPES },
+    targetDtype: { label: 'Target Dtype', type: 'select', default: 'int16', options: SCALE_TARGET_DTYPES },
+  },
+  expects: 'float input (packing decimals into an integer dtype is the point)',
+  applicableTo: (dtype) => getDtype(dtype as DtypeKey).float,
+  isLossy: () => true,
+  outputDtype: (_inputDtype, params) => scaleOffsetTarget(params),
+  encode(bytes, inputDtype, params, byteOrder = 'little') {
+    const scale = Number(params.scale) || 1;
+    const offset = Number(params.offset) || 0;
+    const targetDtype = scaleOffsetTarget(params);
+    const outInfo = getDtype(targetDtype);
+    const mapped = mapValues(bytes, inputDtype as DtypeKey, targetDtype, byteOrder, (v, s) => {
+      if (Number.isNaN(v)) return 0; // NF-4: NaN→0 on int storage, not a clip/round event
+      const t = (v - offset) * scale;
+      const r = Math.round(t);
+      if (r !== t) s.rounded++;
+      const c = Math.max(outInfo.min, Math.min(outInfo.max, r));
+      if (c !== r) s.clipped++;
+      return c;
+    });
+    if (!mapped) return { bytes: new Uint8Array(bytes), outputDtype: inputDtype };
+    return { bytes: mapped.bytes, outputDtype: targetDtype, stats: mapped.stats };
+  },
+  decode(bytes, encodedDtype, params, byteOrder = 'little') {
+    const scale = Number(params.scale) || 1;
+    const offset = Number(params.offset) || 0;
+    const sourceDtype = (SCALE_SOURCE_DTYPES as string[]).includes(String(params.sourceDtype))
+      ? params.sourceDtype as DtypeKey : 'float32';
+    const mapped = mapValues(bytes, encodedDtype as DtypeKey, sourceDtype, byteOrder,
+      (v) => v / scale + offset);
+    if (!mapped) return { bytes: new Uint8Array(bytes), outputDtype: encodedDtype };
+    return { bytes: mapped.bytes, outputDtype: sourceDtype };
+  },
+};
+
 // ─── Delta ──────────────────────────────────────────────────────────────
 
 const delta: CodecDefinition = {
@@ -658,6 +718,7 @@ const deflateCodec = pyodideCodec({
 export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
   'quantize': quantize,
   'bitround': bitround,
+  'scale-offset': scaleOffset,
   'delta': delta,
   'zigzag': zigzagCodec,
   'byte-shuffle': byteShuffle,

@@ -14,13 +14,9 @@ import { valuesToBytes, bytesToValues } from '../../../src/engine/elements.ts';
 import type { CodecStep, CodecDefinition } from '../../../src/types/codecs.ts';
 
 describe('codec registry', () => {
-  it('contains quantize, bitround, delta, zigzag, byte-shuffle, bit-shuffle, dictionary, rle, and the pyodide-backed real codecs', () => {
+  it('contains quantize, bitround, scale-offset, delta, zigzag, byte-shuffle, bit-shuffle, dictionary, rle, and the pyodide-backed real codecs', () => {
     const keys = Object.keys(CODEC_REGISTRY).sort();
-    expect(keys).toEqual(['bit-shuffle', 'bitround', 'byte-shuffle', 'deflate', 'delta', 'dictionary', 'gzip', 'quantize', 'rle', 'zigzag', 'zstd']);
-  });
-
-  it('does not (yet) contain scale-offset (Task 4)', () => {
-    expect(CODEC_REGISTRY['scale-offset']).toBeUndefined();
+    expect(keys).toEqual(['bit-shuffle', 'bitround', 'byte-shuffle', 'deflate', 'delta', 'dictionary', 'gzip', 'quantize', 'rle', 'scale-offset', 'zigzag', 'zstd']);
   });
 });
 

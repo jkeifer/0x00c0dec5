@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { CodecPipelineEditor } from '../../../src/components/config/CodecPipelineEditor.tsx';
 
-const REGISTRY_ORDER = ['quantize', 'bitround', 'delta', 'zigzag', 'byte-shuffle', 'bit-shuffle', 'dictionary', 'rle', 'deflate', 'gzip', 'zstd'];
+const REGISTRY_ORDER = ['quantize', 'bitround', 'scale-offset', 'delta', 'zigzag', 'byte-shuffle', 'bit-shuffle', 'dictionary', 'rle', 'deflate', 'gzip', 'zstd'];
 const PYODIDE_KEYS = ['deflate', 'gzip', 'zstd'];
 
 function renderEditor(runtimeStatus?: 'loading' | 'ready' | 'error') {
