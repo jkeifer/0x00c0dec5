@@ -4,6 +4,7 @@ import type { VariableStats } from '../types/pipeline.ts';
 import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import { valuesToBytes, bytesToValues } from './elements.ts';
 import type { ValueArray } from './layout.ts';
+import { applyBitround } from './codecs.ts';
 
 export interface TypeAssignResult {
   bytes: Uint8Array;
@@ -210,48 +211,4 @@ export function reverseTypeAssignment(
   const offset = assignment.offset ?? 0;
 
   return (values as Float64Array).map((v) => v / scale + offset);
-}
-
-/** Apply mantissa bit truncation to float bytes. Reads/writes the mantissa
- * words with the same `byteOrder` the bytes were produced in, so the mask
- * lands on the real low mantissa bits regardless of endianness. */
-function applyBitround(
-  bytes: Uint8Array,
-  dtype: DtypeKey,
-  keepBits: number,
-  byteOrder: 'little' | 'big' = 'little',
-): Uint8Array {
-  const le = byteOrder === 'little';
-  const result = new Uint8Array(bytes.length);
-  result.set(bytes);
-
-  if (dtype === 'float32') {
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
-    const mask = 0xffffffff << (23 - keepBits);
-    for (let i = 0; i < result.length; i += 4) {
-      const bits = view.getUint32(i, le);
-      view.setUint32(i, bits & mask, le);
-    }
-  } else if (dtype === 'float64') {
-    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
-    const maskHigh = 0xffffffff << Math.max(0, 20 - keepBits);
-    // Boundary fixed (DC-6): at keepBits === 20, `52 - keepBits === 32`, and
-    // `0xffffffff << 32` wraps to `<< 0` in JS (32-bit shift amounts are taken mod 32),
-    // producing an all-ones mask that keeps every low mantissa bit instead of
-    // truncating them all. Using `> 20` (not `>= 20`) routes keepBits===20 through the
-    // `0` branch, which is correct: keepBits=20 keeps 0 bits of the low 32-bit word
-    // (all 20 kept bits live in the high word/exponent side).
-    const maskLow = keepBits > 20 ? 0xffffffff << (52 - keepBits) : 0;
-    // Byte offsets of the low/high 32-bit mantissa words swap with endianness.
-    const lowOff = le ? 0 : 4;
-    const highOff = le ? 4 : 0;
-    for (let i = 0; i < result.length; i += 8) {
-      const low = view.getUint32(i + lowOff, le);
-      const high = view.getUint32(i + highOff, le);
-      view.setUint32(i + lowOff, low & maskLow, le);
-      view.setUint32(i + highOff, high & maskHigh, le);
-    }
-  }
-
-  return result;
 }

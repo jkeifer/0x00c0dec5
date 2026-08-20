@@ -3,6 +3,146 @@ import type { DtypeKey } from '../types/dtypes.ts';
 import { getDtype } from '../types/dtypes.ts';
 import { runPyodideCodec } from './pyodideRuntime.ts';
 import type { AppState } from '../types/state.ts';
+import { valuesToBytes, bytesToValues } from './elements.ts';
+
+/** Apply mantissa bit truncation to float bytes. Reads/writes the mantissa
+ * words with the same `byteOrder` the bytes were produced in, so the mask
+ * lands on the real low mantissa bits regardless of endianness. */
+export function applyBitround(
+  bytes: Uint8Array,
+  dtype: DtypeKey,
+  keepBits: number,
+  byteOrder: 'little' | 'big' = 'little',
+): Uint8Array {
+  const le = byteOrder === 'little';
+  const result = new Uint8Array(bytes.length);
+  result.set(bytes);
+
+  if (dtype === 'float32') {
+    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const mask = 0xffffffff << (23 - keepBits);
+    for (let i = 0; i < result.length; i += 4) {
+      const bits = view.getUint32(i, le);
+      view.setUint32(i, bits & mask, le);
+    }
+  } else if (dtype === 'float64') {
+    const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
+    const maskHigh = 0xffffffff << Math.max(0, 20 - keepBits);
+    // Boundary fixed (DC-6): at keepBits === 20, `52 - keepBits === 32`, and
+    // `0xffffffff << 32` wraps to `<< 0` in JS (32-bit shift amounts are taken mod 32),
+    // producing an all-ones mask that keeps every low mantissa bit instead of
+    // truncating them all. Using `> 20` (not `>= 20`) routes keepBits===20 through the
+    // `0` branch, which is correct: keepBits=20 keeps 0 bits of the low 32-bit word
+    // (all 20 kept bits live in the high word/exponent side).
+    const maskLow = keepBits > 20 ? 0xffffffff << (52 - keepBits) : 0;
+    // Byte offsets of the low/high 32-bit mantissa words swap with endianness.
+    const lowOff = le ? 0 : 4;
+    const highOff = le ? 4 : 0;
+    for (let i = 0; i < result.length; i += 8) {
+      const low = view.getUint32(i + lowOff, le);
+      const high = view.getUint32(i + highOff, le);
+      view.setUint32(i + lowOff, low & maskLow, le);
+      view.setUint32(i + highOff, high & maskHigh, le);
+    }
+  }
+
+  return result;
+}
+
+// ─── Quantize ───────────────────────────────────────────────────────────
+
+/** Shared transform plumbing: decode whole elements at the input dtype,
+ * map them, re-encode at `outDtype`, copy any trailing partial element
+ * through (every codec's convention). Returns null when the input dtype
+ * carries no numeric values to transform (charN). */
+function mapValues(
+  bytes: Uint8Array,
+  inputDtype: DtypeKey,
+  outDtype: DtypeKey,
+  byteOrder: 'little' | 'big',
+  fn: (v: number, out: { clipped: number; rounded: number }) => number,
+): { bytes: Uint8Array; stats: { clipped: number; rounded: number } } | null {
+  const inInfo = getDtype(inputDtype);
+  if (inInfo.char) return null;
+  const usable = Math.floor(bytes.length / inInfo.size) * inInfo.size;
+  const values = bytesToValues(bytes.subarray(0, usable), inputDtype, byteOrder) as Float64Array;
+  const stats = { clipped: 0, rounded: 0 };
+  const out = new Float64Array(values.length);
+  for (let i = 0; i < values.length; i++) out[i] = fn(values[i], stats);
+  const encoded = valuesToBytes(out, outDtype, byteOrder);
+  const result = new Uint8Array(encoded.length + (bytes.length - usable));
+  result.set(encoded);
+  result.set(bytes.subarray(usable), encoded.length);
+  return { bytes: result, stats };
+}
+
+const quantize: CodecDefinition = {
+  key: 'quantize',
+  label: 'Quantize',
+  category: 'transform',
+  sizeEffect: 'preserving',
+  description:
+    'Round values to a fixed number of decimal digits — same dtype, same size, '
+    + 'less information. The precision thrown away here is what makes a later '
+    + 'entropy codec bite.',
+  params: {
+    digits: { label: 'Decimal Digits', type: 'number', default: 1, min: 0, max: 12, step: 1 },
+  },
+  expects: 'float input (integer input has no fractional part to quantize)',
+  applicableTo: (dtype) => getDtype(dtype as DtypeKey).float,
+  isLossy: () => true,
+  encode(bytes, inputDtype, params, byteOrder = 'little') {
+    const raw = Math.floor(Number(params.digits));
+    const digits = Number.isFinite(raw) ? Math.min(12, Math.max(0, raw)) : 1;
+    const factor = 10 ** digits;
+    const mapped = mapValues(bytes, inputDtype as DtypeKey, inputDtype as DtypeKey, byteOrder, (v, s) => {
+      if (Number.isNaN(v)) return v;
+      const q = Math.round(v * factor) / factor;
+      if (q !== v) s.rounded++;
+      return q;
+    });
+    if (!mapped) return { bytes: new Uint8Array(bytes), outputDtype: inputDtype };
+    return { bytes: mapped.bytes, outputDtype: inputDtype, stats: mapped.stats };
+  },
+  decode: (bytes, encodedDtype) => ({ bytes: new Uint8Array(bytes), outputDtype: encodedDtype }),
+};
+
+// ─── Bit Round ──────────────────────────────────────────────────────────
+
+const bitround: CodecDefinition = {
+  key: 'bitround',
+  label: 'Bit Round',
+  category: 'transform',
+  sizeEffect: 'preserving',
+  description:
+    'Zero the low mantissa bits, keeping N — the float stays a float, but '
+    + 'slowly varying data gains long zero runs for a shuffle or entropy codec '
+    + 'to exploit.',
+  params: {
+    keepBits: { label: 'Keep Bits', type: 'number', default: 10, min: 1, max: 52, step: 1 },
+  },
+  expects: 'float input (mantissa truncation is meaningless on integer bit patterns)',
+  applicableTo: (dtype) => getDtype(dtype as DtypeKey).float,
+  isLossy: () => true,
+  encode(bytes, inputDtype, params, byteOrder = 'little') {
+    if (inputDtype !== 'float32' && inputDtype !== 'float64') {
+      return { bytes: new Uint8Array(bytes), outputDtype: inputDtype };
+    }
+    const maxBits = inputDtype === 'float64' ? 52 : 23;
+    const raw = Math.floor(Number(params.keepBits));
+    const keepBits = Number.isFinite(raw) ? Math.min(maxBits, Math.max(1, raw)) : Math.min(maxBits, 10);
+    const out = applyBitround(bytes, inputDtype, keepBits, byteOrder);
+    const size = getDtype(inputDtype).size;
+    let rounded = 0;
+    for (let i = 0; i + size <= bytes.length; i += size) {
+      for (let b = 0; b < size; b++) {
+        if (out[i + b] !== bytes[i + b]) { rounded++; break; }
+      }
+    }
+    return { bytes: out, outputDtype: inputDtype, stats: { clipped: 0, rounded } };
+  },
+  decode: (bytes, encodedDtype) => ({ bytes: new Uint8Array(bytes), outputDtype: encodedDtype }),
+};
 
 // ─── Delta ──────────────────────────────────────────────────────────────
 
@@ -507,11 +647,14 @@ const deflateCodec = pyodideCodec({
 // ─── Registry ───────────────────────────────────────────────────────────
 //
 // Insertion order IS the picker order (binding constraint — see CodecPipelineEditor).
-// Curated, pedagogical order: reordering transforms first (delta, zigzag,
-// byte-shuffle, bit-shuffle), then dictionary, then entropy codecs (rle,
-// deflate, gzip, zstd).
+// Curated, pedagogical order: value-domain transforms first (quantize,
+// bitround), then reordering transforms (delta, zigzag, byte-shuffle,
+// bit-shuffle), then dictionary, then entropy codecs (rle, deflate, gzip,
+// zstd).
 
 export const CODEC_REGISTRY: Record<string, CodecDefinition> = {
+  'quantize': quantize,
+  'bitround': bitround,
   'delta': delta,
   'zigzag': zigzagCodec,
   'byte-shuffle': byteShuffle,
