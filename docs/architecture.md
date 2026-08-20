@@ -96,15 +96,15 @@ precomputed map out of `PipelineResult`.
 |------|-----------|
 | `generate.ts` | Seeded PRNG (`hashSeed`, `createPRNG`) and `generateValues` — deterministic per-variable data generation from a `LogicalTypeConfig`. |
 | `elements.ts` | Value ⟷ typed-array byte conversion (`valuesToBytes`/`bytesToValues`) and display formatting (`formatValue`/`formatLogicalValue`). Guards fractional element counts as a caught error rather than an uncaught `RangeError`. |
-| `typeAssign.ts` | `assignType` — logical values → storage bytes (scale/offset, clamping, bit-rounding, NaN-aware stats). `reverseTypeAssignment` — the inverse, called once per variable during Read, *after* codec-pipeline reversal, not as part of it. |
+| `typeAssign.ts` | `assignType` — logical values → storage bytes, a bare cast to `typeAssignment.storageDtype` (clamping, rounding, NaN-aware stats). No scale/offset/bit-rounding here since the codec-unification shrink — those are transform codecs now (`codecs.ts`) — and no separate reversal function: `reverseCodecPipeline` handles the whole pipeline, transform steps included. |
 | `chunk.ts` | Chunk grid geometry (`computeChunkGrid`, `enumerateChunkCoords`), flat-index ⟷ N-d coordinate conversion, and `chunkData`/`chunkDataPerVariable` (row-mode vs. column-mode chunk extraction). |
 | `linearize.ts` | `linearizeChunk` — turns a chunk's per-variable values into one interleaved (row) or concatenated (column) byte stream, with `buildTraces`. |
-| `codecs.ts` | The 4-codec registry (Delta, Byte Shuffle, RLE, LZ) — `CODEC_REGISTRY`, `runCodecPipeline`, `outputDtypeFor` (the dtype-flow rule), `stepWarnings` (applicability + param-mismatch warnings), `shannonEntropy`. |
-| `decode.ts` | `reverseCodecPipeline` — walks a codec pipeline's dtype chain forward once, then decodes each step in reverse order. |
-| `trace.ts` | `ByteTrace` construction/parsing (`makeTraceId`, `makeChunkTraceId`, `parseTraceId`, `isChunkLevelTrace`) and the two trace-propagation strategies: `propagateTracesValuePreserving` (reordering codecs, dtype changes) and `degradeTracesToChunkLevel` (entropy codecs). |
-| `metadata.ts` | `collectMetadata` (schema, shape, chunk_shape, codec_pipelines, chunk_index, logical_types, type_assignments, variable_statistics, byte_order, custom entries with override-wins collision semantics (a custom key matching an auto key replaces its value in place)) and JSON/binary (de)serialization. |
+| `codecs.ts` | The 12-codec registry across three categories — transform (Quantize, Bit Round, Scale/Offset), reordering (Delta, Zigzag, Byte Shuffle, Bit Shuffle), entropy (Dictionary, RLE, Deflate, GZip, Zstd) — `CODEC_REGISTRY`, `runCodecPipeline`, `outputDtypeFor` (the params-aware dtype-flow rule), `encodedByteLength` (size math via `sizeEffect`), `splitStructuredPrefix` (row-mode's per-variable prefix split), `stepWarnings` (applicability + param-mismatch warnings), `shannonEntropy`. |
+| `decode.ts` | `reverseCodecPipeline` — walks a codec pipeline's dtype chain forward once, then decodes each step in reverse order (transform steps included — there is no separate type-assignment reversal phase). |
+| `trace.ts` | `ByteTrace` construction/parsing (`makeTraceId`, `makeChunkTraceId`, `parseTraceId`, `isChunkLevelTrace`) and the two trace-propagation strategies: `propagateTracesValuePreserving` (value-preserving and fixed-ratio codecs, dtype changes) and `degradeTracesToChunkLevel` (entropy codecs, Bit Shuffle). |
+| `metadata.ts` | `collectMetadata` (schema, shape, chunk_shape, codec_pipelines — a by-name object in column mode, a `{chunk, fields}` envelope in row mode — chunk_index, logical_types, variable_statistics, byte_order, custom entries with override-wins collision semantics (a custom key matching an auto key replaces its value in place)) and JSON/binary (de)serialization. No `type_assignments` key — deleted with the typeAssignment shrink; `schema` already carries each variable's storage dtype. |
 | `write.ts` | `assembleFiles` — single-file and per-chunk file assembly: magic placement, header/footer/sidecar/none metadata placement, the D1 trailer, chunk ordering, and the header-metadata offset-convergence loop. |
-| `read.ts` | `readFile` — the reader: magic verification, metadata location (sidecar / trailer / header / footer scan), structure parsing, chunk-index resolution (real or computed), chunk reassembly by coordinates, codec + type-assignment reversal, and the 6-reason failure taxonomy. Deliberately the largest engine file — see "Failure Taxonomy" below and `docs/remediation-plan.md`'s Phase 2 acceptance note on why its size is load-bearing, not accidental complexity. |
+| `read.ts` | `readFile` — the reader: magic verification, metadata location (sidecar / trailer / header / footer scan), structure parsing, chunk-index resolution (real or computed), chunk reassembly by coordinates, full codec-pipeline reversal (transform steps included), and the failure taxonomy (`ReadFailureReason`, `src/types/pipeline.ts`). Deliberately the largest engine file — see "Failure Taxonomy" below and `docs/remediation-plan.md`'s Phase 2 acceptance note on why its size is load-bearing, not accidental complexity. |
 | `bytes.ts` | The one byte-utility module: `hexToBytes` (tolerant — strips non-hex, drops a trailing odd nibble), `bytesToHex`, `concatBytes`, `formatByteCount`. |
 
 ### Types (`src/types/`)
@@ -216,14 +216,16 @@ byteCount }`:
 | `metadata-not-found` | Metadata was written, footer placement, `footerLocator: 'none'`, and the best-effort scan couldn't pin down the boundary | Why real formats record an exact length (Parquet's trailer) instead of scanning. |
 | `bad-magic` | Leading (or, with a trailer, trailing) bytes don't match the configured magic | A reader only understands files it was built for (D2) — cheap, immediate rejection, exactly like a real format parser's first check. |
 | `corrupt-metadata` | Metadata was located but didn't parse into a usable structure | Finding *something* isn't the same as being able to trust it. |
-| `no-chunk-index` | `includeChunkIndex: false` and at least one codec pipeline in play is size-changing (RLE/LZ) | Why chunked/columnar formats always carry an index — variable-size chunks are unlocatable without one. |
+| `no-chunk-index` | `includeChunkIndex: false` and at least one codec pipeline in play has `sizeEffect: 'variable'` (an entropy codec) | Why chunked/columnar formats always carry an index — variable-size chunks are unlocatable without one. A `fixed-ratio` codec (Scale/Offset) does not trigger this; its size is derivable from geometry. |
 | `decode-error` | Metadata parsed fine, but codec reversal / deinterleaving / reassembly threw | Metadata can describe a dataset correctly while the bytes still don't match that description. |
 
 On success, `ReadFileResult` carries `reconstructedValues: Map<string, number[]>` and
 `lossyVariables: Set<string>` — the union of Type-Assignment lossiness (from each variable's
-`VariableStats.isLossy`, computed during the Typed stage) and codec lossiness (each codec's
-`isLossy(inputDtype)` predicate, evaluated by walking the *metadata's own* codec-pipeline dtype
-flow forward — the reader never consults live app config for this, only what's in the file).
+`VariableStats.isLossy`, computed during the Typed stage — a bare cast can still clip/round) and
+codec lossiness (each codec's `isLossy(inputDtype)` predicate — since the codec-unification
+shrink, this is where Quantize/Bit Round/Scale-Offset's lossiness actually lives, evaluated by
+walking the *metadata's own* codec-pipeline dtype flow forward — the reader never consults live
+app config for this, only what's in the file).
 
 ## Offline Caching
 

@@ -8,7 +8,7 @@ The core pipeline shows data transforming from readable values to opaque bytes o
 
 1. **Metadata justifies itself.** By default, metadata is not included in the file. The Read step cannot parse the file and shows a clear failure state. The user enables metadata and the Read step succeeds. The lesson: without self-describing metadata, bytes are meaningless.
 
-2. **Lossy transforms become visible.** If the pipeline included lossy operations — bit-rounding or a lossy scale/offset from Type Assignment (see `docs/design.md`; these are no longer codecs, but the lossy-visibility lesson is unchanged), or a codec that's lossy for its input dtype (Delta on a float) — the reconstructed values differ from the originals. The diff view shows exactly where and how much precision was lost.
+2. **Lossy transforms become visible.** If the pipeline included lossy operations — Quantize, Bit Round, or Scale/Offset (`category: 'transform'` codecs; see `docs/design.md`'s "Codec Registry" and "Logical Types and Type Assignment" sections for where these currently live, which has moved more than once), or a bare storage-dtype cast that clips/rounds a value into a narrower dtype — the reconstructed values differ from the originals. The diff view shows exactly where and how much precision was lost.
 
 ## Changes to the Write Step
 
@@ -114,7 +114,7 @@ Each reason teaches something different:
 - **`metadata-not-found`** — metadata was written, but a best-effort scanner (footer placement with no trailer) couldn't pin down its exact boundaries. The lesson is why real formats record an exact length rather than relying on scanning — the message points at Parquet's `[footer][4-byte length]['PAR1']` trailer and the Footer locator option that adds the equivalent to this tool.
 - **`bad-magic`** — the leading (or, with a trailer, trailing) bytes don't match the format's expected magic. The lesson: a reader only understands files it was built for; this is what "the format's magic number" actually buys a real parser (immediate, cheap rejection of the wrong kind of file, or corruption, before wasting effort on the rest of the parse).
 - **`corrupt-metadata`** — metadata was found at the expected location but didn't parse into a usable structure (missing required fields, malformed JSON/binary). The lesson: a reader that finds *something* but can't trust it has to fail rather than guess.
-- **`no-chunk-index`** — chunks are variable-size (a size-changing codec like RLE/LZ is in the pipeline) and no index was written to say where each one starts. The lesson: this is precisely why real chunked/columnar formats (Zarr, Parquet) always carry a chunk/row-group index.
+- **`no-chunk-index`** — chunks are variable-size (an entropy codec like RLE, Deflate, GZip, Zstd, or Dictionary — `sizeEffect: 'variable'` — is in the pipeline) and no index was written to say where each one starts. A `fixed-ratio` codec (Scale/Offset) does not trigger this. The lesson: this is precisely why real chunked/columnar formats (Zarr, Parquet) always carry a chunk/row-group index.
 - **`decode-error`** — metadata was found and parsed successfully, but reconstructing values failed anyway (codec reversal, deinterleaving, or reassembly threw). The lesson: metadata can describe a dataset correctly and the bytes can still not match that description — the failure surfaces the underlying exception message for debugging rather than silently producing wrong values.
 
 ### Read Section in Sidebar
@@ -132,11 +132,12 @@ Each codec needs a `decode` method in addition to `encode`. The decode function 
 ```typescript
 interface CodecDefinition {
   // ... existing fields ...
-  encode: (bytes: Uint8Array, inputDtype: string, params: Record<string, any>) => {
+  encode: (bytes: Uint8Array, inputDtype: string, params: Record<string, any>, byteOrder?: 'little' | 'big') => {
     bytes: Uint8Array;
     outputDtype: string;
+    stats?: { clipped: number; rounded: number };
   };
-  decode: (bytes: Uint8Array, encodedDtype: string, params: Record<string, any>) => {
+  decode: (bytes: Uint8Array, encodedDtype: string, params: Record<string, any>, byteOrder?: 'little' | 'big') => {
     bytes: Uint8Array;
     outputDtype: string;  // the original dtype before encoding
   };
@@ -146,33 +147,32 @@ interface CodecDefinition {
 
 **Deviation from the original spec**: this document originally specified a plain `lossy: boolean` field. The shipped implementation uses `isLossy: (inputDtype) => boolean` instead — a predicate over the codec step's actual input dtype. A single boolean can't express Delta's real behavior: after a fix to remove an early clamping bug, Delta's encode/decode is an *exact* modular round-trip for every integer dtype (typed-array writes wrap mod 2^N, so a negative diff on an unsigned dtype wraps and un-wraps exactly rather than clamping to 0 and losing information), but Delta is still lossy on float dtypes, since each difference gets re-rounded to the float's own precision on the way back to bytes. `isLossy(dtype)` is the minimum shape that can say "exact here, lossy there" for the same codec.
 
-Also note: **Scale/Offset and Bit Round are no longer codecs at all.** They were folded into the Type Assignment concept (`Variable.typeAssignment.scale`/`offset`/`keepBits`) — see `docs/design.md`'s "Logical Types and Type Assignment" section. Reversing them is `reverseTypeAssignment()` (`src/engine/typeAssign.ts`), applied once per variable after the codec pipeline (which now only ever contains Delta/Byte Shuffle/RLE/LZ) has been fully reversed — not part of `CODEC_REGISTRY`'s decode step at all. The table below covers only the four codecs that remain in the registry.
+**Historical note on Scale/Offset and Bit Round**: earlier drafts of this document treated them as codecs, then a later revision (superseded — see `docs/design.md`'s "Logical Types and Type Assignment" section) moved them onto `Variable.typeAssignment` as `scale`/`offset`/`keepBits` fields, reversed by a since-deleted `reverseTypeAssignment()`. The codec-unification refactor moved them **back** into the codec registry as ordinary `category: 'transform'` codecs (Quantize, Bit Round, Scale/Offset) — there is no `reverseTypeAssignment` anymore, and no separate reversal phase: `reverseCodecPipeline` handles the whole pipeline uniformly, transform steps included. The table below covers every codec currently in `CODEC_REGISTRY`.
 
 ### Per-Codec Decode Behavior
 
 | Codec | Reversible? | isLossy(dtype) | Decode behavior |
 |-------|-------------|-----------------|-----------------|
-| Delta | Yes | `true` for float dtypes only; `false` for every integer dtype | Cumulative sum (prefix sum), applied `order` times — the exact inverse of encode's differencing, including the same typed-array wraparound that makes integer round-trips exact. Float dtypes remain lossy: each cumulative sum re-rounds to float precision. |
+| Quantize | No | `true` always | `decode` is a byte-identical passthrough — the rounded-away decimal digits are simply gone. `assignType`-style stats (`clipped`/`rounded`) are tracked per-step instead, surfaced as `codec-lossy-{variable}-{index}`. |
+| Bit Round | No | `true` always | `decode` is a byte-identical passthrough — the zeroed low mantissa bits below `keepBits` are simply gone. |
+| Scale/Offset | Yes | `true` always | `value / scale + offset`, computed from the stored integer back into `params.sourceDtype` (a param, not derivable from the encoded bytes alone — the encoded bytes are just an integer dtype, with no record of what float dtype produced them). The forward clamping/rounding is not recoverable — reported via the step's own `clipped`/`rounded` stats. |
+| Delta | Yes | `true` for float dtypes only; `false` for every integer dtype | Cumulative sum (prefix sum) — the exact inverse of encode's differencing, including the same typed-array wraparound that makes integer round-trips exact. Float dtypes remain lossy: each cumulative sum re-rounds to float precision. |
+| Zigzag | Yes | `false` always | Inverse of the zigzag mapping — unsigned back to signed. Bijective. |
 | Byte Shuffle | Yes | `false` always | Inverse transpose. Same `elementSize` parameter, reverse the byte grouping. |
+| Bit Shuffle | Yes | `false` always | Inverse bit-plane transpose. Same `elementSize` parameter. |
+| Dictionary | Yes | `false` always | Look up each index in the embedded dictionary, reconstitute the original byte stream. |
 | RLE | Yes | `false` always | Expand (count, value) pairs back to byte runs. |
-| LZ (simple) | Yes | `false` always | Expand back-references (`[length, offsetHi, offsetLo]`) and literals (`[0x00, byte]`) to the original byte stream. |
-
-Type Assignment reversal (not a codec, but still part of what makes a lossy pipeline visible in the diff view):
-
-| Transform | Reversible? | Lossy? | Reversal behavior |
-|-----------|-------------|--------|--------------------|
-| Scale/offset (integer storage of decimal/continuous values) | Yes | Yes when the value was clamped or rounded going in | `value / scale + offset`, computed from the stored integer. The forward clamping/rounding that happened during Typed-stage conversion is not recoverable — `VariableStats.isLossy` (from `assignType`) records whether this happened. |
-| Bit-round (`keepBits` on a float storage dtype) | No | Yes, whenever `keepBits` is less than the dtype's full mantissa width | No decode step exists — the zeroed low mantissa bits are simply gone. The value read back is whatever the truncated bit pattern represents; `assignType`'s readback-comparison marks it `rounded` in `VariableStats`. |
+| Deflate / GZip / Zstd | Yes | `false` always | Real decompression via numcodecs (Pyodide). |
 
 ### Pipeline Reversal
 
-The codec pipeline (just Delta/Byte Shuffle/RLE/LZ, per variable in column mode or per chunk in row mode) is reversed in order: if the encode pipeline was `[delta, shuffle, rle]`, the decode pipeline applies `[rle_decode, shuffle_decode, delta_decode]` (`reverseCodecPipeline` in `src/engine/decode.ts`). After the codec pipeline is fully reversed, `reverseTypeAssignment` is applied once, separately, per variable — it is not itself a pipeline step to be interleaved with codec reversal.
+The entire codec pipeline — transform, reordering, and entropy steps alike — is reversed in one uniform pass, per variable in column mode or per chunk in row mode: if the encode pipeline was `[scale-offset, delta, rle]`, the decode pipeline applies `[rle_decode, delta_decode, scale-offset_decode]` (`reverseCodecPipeline` in `src/engine/decode.ts`). There is no separate type-assignment reversal phase to sequence afterward — reversing the codec pipeline fully reconstructs the variable's `typeAssignment.storageDtype` bytes directly (the handoff invariant: the fully-reversed pipeline's output dtype equals `typeAssignment.storageDtype`), and only then does the bare storage-dtype cast get undone to recover logical values.
 
 For per-variable pipelines (column mode), each variable's pipeline is reversed independently, then the variables are deinterleaved and reassembled.
 
-For per-chunk pipelines (row mode), each chunk's pipeline is reversed, then the chunk is deinterleaved.
+For per-chunk pipelines (row mode), the shared chunk pipeline is reversed first, the chunk is deinterleaved, and then each variable's own element-structured **prefix** (recorded separately in the metadata's `codec_pipelines.fields` — see below) is reversed per-variable. This mirrors the forward direction, where that same prefix ran per-variable *before* interleaving (`docs/design.md`'s "Structural Steps" section).
 
-The dtype flows backward through the pipeline using the same rule as the forward direction (`outputDtypeFor` in `src/engine/codecs.ts`, applied in reverse): if encoding went `int16 → int16 → int16 → uint8` (Delta, then Byte Shuffle, then RLE — entropy codecs collapse to `uint8`, reordering codecs preserve dtype), decoding goes `uint8 → int16 → int16 → int16`, and only then does `reverseTypeAssignment` convert those int16 values back to the original decimal/continuous logical values. This information is stored in the metadata's `codec_pipelines` and `type_assignments` entries.
+The dtype flows backward through the pipeline using the same rule as the forward direction (`outputDtypeFor` in `src/engine/codecs.ts`, applied in reverse, and params-aware — Scale/Offset's output dtype comes from `params.targetDtype`, not from the input dtype): if encoding went `float32 → int16 → int16 → uint8` (Scale/Offset, then Delta, then RLE — entropy codecs collapse to `uint8`, Scale/Offset picks its own target width, reordering codecs preserve dtype), decoding goes `uint8 → int16 → int16 → float32`, landing exactly on the variable's pre-codec dtype with no further reversal step needed. This information is stored entirely in the metadata's `codec_pipelines` entry (there is no separate `type_assignments` entry — it was deleted, since a per-variable dtype would only have duplicated what `schema` already records).
 
 ## Diff View
 
@@ -278,10 +278,10 @@ Metadata inclusion (`state.metadata.include: MetadataIncludeConfig`,
 
 | Group | Testid | Keys it gates | Reader step it starves when off |
 |-------|--------|----------------|----------------------------------|
-| `schema` | `include-schema-toggle` | `schema`, `type_assignments`, `logical_types` | `read-schema` — fails `missing-schema` |
+| `schema` | `include-schema-toggle` | `schema`, `logical_types` | `read-schema` — fails `missing-schema` |
 | `layout` | `include-layout-toggle` | `shape`, `chunk_shape`, `chunk_order`, `partitioning`, `interleaving`, `linearization` | `read-layout` — fails `missing-layout` |
 | `codecs` | `include-codecs-toggle` | `codec_pipelines` | `decode-chunks` — see assume-identity below (not a hard failure) |
-| `chunkIndex` | `include-chunk-index-toggle` | `chunk_index` | `locate-chunks` — fails `no-chunk-index` only in single-file mode with a size-changing codec in play (D3); otherwise offsets are computed from geometry, and per-chunk partitioning never needs an index at all |
+| `chunkIndex` | `include-chunk-index-toggle` | `chunk_index` | `locate-chunks` — fails `no-chunk-index` only in single-file mode with a `sizeEffect: 'variable'` codec (an entropy codec) in play (D3); otherwise offsets are computed from geometry (including through a `fixed-ratio` codec like Scale/Offset), and per-chunk partitioning never needs an index at all |
 | `descriptive` | `include-descriptive-toggle` | `variable_statistics` only (custom entries are written whenever metadata is enabled, ungated) | none — the reader never needs this group to reconstruct values |
 | `endianness` | `include-endianness-toggle` | `byte_order` | none — the reader silently assumes host byte order; a big-endian file reads "successfully" with wrong values (the silent-corruption lesson) |
 
@@ -301,21 +301,29 @@ one of three outcomes, only one of which the reader can actually distinguish:
 1. **Honest success** — no codecs were applied at write time, so "assume identity" is
    correct and values reconstruct exactly. Indistinguishable, from parsed metadata
    alone, from outcome 2.
-2. **Garbled-but-same-size** — a non-size-changing codec (Delta, Byte Shuffle) *was*
-   applied, so the assumed-raw bytes are wrong, but the byte count still matches what
-   chunk geometry × dtype size predicts. The read reports `decode-chunks` as `ok`
-   with a `detail` noting the ambiguity (`describeDecodeDetail` in `src/engine/read.ts`):
-   *"no codec info — assumed raw bytes (honest if none were applied at write time;
-   garbled if they were)"* — and the resulting values are silently wrong. This is the
-   one case the reader cannot detect at all.
-3. **Detectably wrong** — a size-changing codec (RLE, LZ) was applied. The assumed-raw
-   byte count no longer matches the geometry-predicted count, `reconstructValues`
-   throws, and `readFile` maps it to failure reason `decode-error` at `decode-chunks`,
-   naming both counts in the message.
+2. **Garbled-but-same-size** — a `sizeEffect: 'preserving'` codec (Delta, Zigzag,
+   Byte Shuffle, Quantize, Bit Round) *was* applied, so the assumed-raw bytes are
+   wrong, but the byte count still matches what chunk geometry × dtype size predicts
+   (`expectedBytes` — computed against the variable's *declared* `schema` dtype, the
+   only dtype the assume-identity path has to go on). The read reports `decode-chunks`
+   as `ok` with a `detail` noting the ambiguity (`describeDecodeDetail` in
+   `src/engine/read.ts`): *"no codec info — assumed raw bytes (honest if none were
+   applied at write time; garbled if they were)"* — and the resulting values are
+   silently wrong. This is the one case the reader cannot detect at all.
+3. **Detectably wrong** — a codec whose byte count no longer matches the
+   geometry-predicted count was applied: any `sizeEffect: 'variable'` entropy codec
+   (RLE, Deflate, GZip, Zstd, Dictionary), **or** a `sizeEffect: 'fixed-ratio'` codec
+   (Scale/Offset) — its deterministic width change is still a mismatch against the
+   assume-identity check's *declared*-dtype expectation, since that check has no
+   way to know a narrower dtype was ever chosen. Either way `checkAssumedIdentitySize`
+   (`src/engine/readReassemble.ts`) throws `AssumedIdentitySizeMismatchError`, and
+   `readFile` maps it to failure reason `decode-error` at `decode-chunks`, naming both
+   byte counts in the message.
 
 In other words: omitting the `codecs` group is safe if and only if no codec pipeline
-was ever attached; otherwise it's a silent correctness bug for reordering-only
-pipelines and a loud, named failure for entropy-codec pipelines.
+was ever attached; otherwise it's a silent correctness bug only for the size-preserving
+codecs, and a loud, named failure for anything that changes the byte count — entropy
+codecs and Scale/Offset alike.
 
 ### Two new failure reasons
 

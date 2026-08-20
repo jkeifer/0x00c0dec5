@@ -80,19 +80,20 @@ These change the topology of the data — how it's organized, not its byte conte
 - **Byte order (endianness)**: little-endian (default) or big-endian, applying to every multi-byte dtype regardless of data model or shape (`data-testid="byte-order-toggle"`, same Chunk section, not gated on array/ndim like linearization is — any scalar with a multi-byte dtype still has an endianness). This is Zarr v3's `bytes` codec `endian` parameter made an explicit, first-class setting rather than a silent little-endian assumption baked into `valuesToBytes`/`bytesToValues`. See "Metadata UI" below for the read-side lesson this setting is paired with.
 - **Interleave**: within each chunk, determines how variables are arranged.
   - *Column-oriented / BSQ (band-sequential)*: each variable's bytes are stored contiguously within the chunk. Enables per-variable codec pipelines.
-  - *Row-oriented / BIP (band-interleaved-by-pixel)*: variable bytes are interleaved per element. Forces a single codec pipeline on the mixed byte stream.
+  - *Row-oriented / BIP (band-interleaved-by-pixel)*: variable bytes are interleaved per element. Each variable's codec pipeline still runs, but only its **maximal element-structured prefix** — the leading run of steps that leave one identifiable slot per element (`splitStructuredPrefix`, `src/engine/codecs.ts`); a step ends the prefix once it declares a `traceMode` (Byte/Bit Shuffle) or a `variable` `sizeEffect` (every entropy codec), since neither leaves per-element structure for interleaving to key off of. The prefix runs per-variable, exactly as it would in column mode; the remainder of each field pipeline, plus the shared chunk pipeline, applies once to the interleaved stream.
 
-These structural steps constrain downstream operations. Interleaving determines whether codecs can be per-variable or must be per-chunk. This constraint is a key pedagogical insight the tool surfaces.
+These structural steps constrain downstream operations. Interleaving determines how far codecs can run per-variable before they must become per-chunk. This constraint is a key pedagogical insight the tool surfaces.
 
 #### 2. Byte-Level Steps (Codecs)
 Transform the bytes within the containers defined by structural steps. Codecs are:
 
-- **Dtype-aware**: each codec knows its input dtype and declares its output dtype. Scale/offset converts float32 → int16. Entropy codecs output raw bytes (uint8).
+- **Dtype-aware**: each codec knows its input dtype and declares its output dtype via `outputDtypeFor(codec, inputDtype, params)` — params-aware, since a codec like Scale/Offset picks its output width from a param (`targetDtype`), not from the input dtype alone. Entropy codecs and byte/bit-shuffle codecs output raw bytes (`uint8`).
 - **Parameterized**: each codec has typed parameters (scale factor, element size, keep bits, etc.) with defaults, ranges, and UI controls.
 - **Composable**: codecs form an ordered pipeline. The output dtype of one feeds the input dtype of the next.
+- **Size-effect aware**: each codec declares `sizeEffect: 'preserving' | 'fixed-ratio' | 'variable'`, driving byte-count math (`encodedByteLength`) without running the codec — `preserving` (same width in/out), `fixed-ratio` (a deterministic per-element width change, e.g. Scale/Offset's float32→int16), `variable` (data-dependent, entropy codecs only).
 - **Granularity follows interleaving**:
-  - Column-oriented: each variable has its own independent codec pipeline
-  - Row-oriented: one codec pipeline per chunk, operating on interleaved bytes
+  - Column-oriented: each variable has its own independent codec pipeline, full stop.
+  - Row-oriented: each variable's element-structured prefix still runs per-variable; the remainder and the shared chunk pipeline run once, on the interleaved bytes.
 
 Users should be able to apply codecs that are "nonsensical" for the current configuration (e.g., byte shuffle on heterogeneous interleaved data). The tool shows a warning but does not block the operation. The garbled output *is the lesson* — it teaches why column orientation exists.
 
@@ -181,10 +182,11 @@ interface ByteTrace {
 **Tracing fidelity degrades through the pipeline**, and this is intentional:
 
 - **Values stage**: perfect per-value tracing.
-- **Typed stage**: perfect per-value tracing — the dtype conversion (and any scale/offset/keepBits from Type Assignment) is a byte-count change per value at most (e.g. float64 display bytes → int16 storage bytes), still a clean one-to-one mapping from source value to its typed bytes.
+- **Typed stage**: perfect per-value tracing — the dtype cast (`Variable.typeAssignment.storageDtype`) is a byte-count change per value at most (e.g. float64 display bytes → int16 storage bytes), still a clean one-to-one mapping from source value to its typed bytes.
 - **Linearized stage**: perfect per-value tracing, bytes are just chunked and reordered.
-- **After reordering codecs (Delta, Byte Shuffle)**: per-value tracing preserved (`propagateTracesValuePreserving` in `src/engine/trace.ts`) — these codecs never change the byte count, so the mapping stays one-to-one.
-- **After entropy codecs (RLE, LZ)**: tracing drops to chunk-level (`degradeTracesToChunkLevel`). These are the only size-changing steps left in the codec registry (scale/offset, the other historical size-changer, is no longer a codec — see Logical Types and Type Assignment above). Individual bytes can no longer be mapped to specific source values; hovering highlights all values from the source chunk instead.
+- **After `sizeEffect: 'preserving'` codecs (Delta, Zigzag, Quantize, Bit Round, Byte Shuffle)**: per-value tracing preserved at the codec's declared `traceMode` — value-preserving codecs (Delta, Zigzag, Quantize, Bit Round) keep the trace fully strong; Byte Shuffle degrades to `positional` (slot geometry survives, but a slot is no longer its element's bytes — see CLAUDE.md pitfall 1). None of these change the byte count.
+- **After `sizeEffect: 'fixed-ratio'` codecs (Scale/Offset)**: still value-preserving tracing, just at the new element width — element *i*'s bytes sit at `i × postWidth` rather than the pre-codec width, so the mapping stays one-to-one, just recomputed per codec-declared geometry rather than assumed identity.
+- **After `sizeEffect: 'variable'` codecs (every entropy codec) or Bit Shuffle**: tracing drops to chunk-level (`degradeTracesToChunkLevel`) — entropy codecs because the byte count is data-dependent and no longer maps 1:1 to elements, Bit Shuffle because a single output byte packs bits from up to 8 different elements. Individual bytes can no longer be mapped to specific source values; hovering highlights all values from the source chunk instead.
 
 This degradation is pedagogically valuable: it shows that entropy coding makes data opaque and that you need metadata to reverse the process.
 
@@ -205,11 +207,11 @@ The type registry includes:
 
 All multi-byte types use little-endian encoding (matching most modern hardware and formats like Zarr, Parquet, GeoTIFF).
 
-This is the **storage** type registry — the dtype bytes are actually written as. It is a separate concept from the **logical type** a variable is defined with (see "Logical Types and Type Assignment" below): a user picks a logical type ("a decimal between -50 and 50 with 1 decimal place") and separately chooses which of these eight storage dtypes to encode it into. That choice — not a codec — is where precision/size tradeoffs like float→int quantization and mantissa bit-rounding now live.
+This is the **storage** type registry — the dtype bytes are actually written as. It is a separate concept from the **logical type** a variable is defined with (see "Logical Types and Type Assignment" below): a user picks a logical type ("a decimal between -50 and 50 with 1 decimal place") and separately chooses which of these eight storage dtypes to encode it into. That choice is a bare cast, nothing more — precision/size tradeoffs like float→int quantization and mantissa bit-rounding live on the codec pipeline (Quantize, Bit Round, Scale/Offset — see "Codec Registry" below), not on the type-assignment cast itself.
 
 ## Logical Types and Type Assignment
 
-Earlier drafts of this tool modeled float→int quantization and mantissa-bit-rounding as codecs ("Scale/Offset" and "Bit Round"). The shipped design instead splits data generation and storage into two explicit concepts, with a dedicated pipeline stage between them:
+Earlier drafts of this tool modeled float→int quantization and mantissa-bit-rounding first as codecs ("Scale/Offset" and "Bit Round"), then — briefly — moved them onto `Variable.typeAssignment` as a dedicated pipeline stage's own scale/offset/keepBits fields. The codec-unification refactor reversed that second move: **`TypeAssignment` shrank back to a bare storage-dtype cast**, and quantization/bit-rounding/scale-offset all now live in the codec pipeline as ordinary `category: 'transform'` codecs (see "Codec Registry" below). What survives from the intermediate design is the *separation* of concepts, not the mechanism:
 
 - **Logical type** (`Variable.logicalType`): describes what a human-meaningful value looks like, independent of how it's stored. There are three kinds:
 
@@ -227,46 +229,48 @@ Earlier drafts of this tool modeled float→int quantization and mantissa-bit-ro
 
   `integer` generates whole numbers in `[min, max]`. `decimal` generates values with a fixed number of decimal places (a stand-in for "realistic sensor precision," e.g. temperature to 1 decimal place). `continuous` generates full-precision floating point values within the range. This is the Values stage's data source — the numbers a spreadsheet-literate user would recognize.
 
-- **Type assignment** (`Variable.typeAssignment`): the pedagogical "choose a dtype" step — how those logical values get converted into storage bytes.
+- **Type assignment** (`Variable.typeAssignment`): the pedagogical "choose a dtype" step — a bare cast from logical values into storage bytes, nothing else.
 
   ```typescript
   interface TypeAssignment {
     storageDtype: DtypeKey;
-    scale?: number;    // for integer storage of decimal/continuous values
-    offset?: number;   // for integer storage of decimal/continuous values
-    keepBits?: number; // for float precision reduction (mantissa bits kept)
   }
   ```
 
-  If `scale`/`offset` are set, the Typed stage computes `(value - offset) × scale` before casting into `storageDtype` — the same transform the old "Scale/Offset" codec performed, now framed as "you're storing a decimal value in an integer dtype, so you need a scale factor to preserve precision" rather than as a pipeline step. If `keepBits` is set on a float `storageDtype`, mantissa bits beyond `keepBits` are zeroed after conversion — the same transform the old "Bit Round" codec performed. Both are still genuinely lossy in exactly the ways the old codecs were (integer clamping/rounding, irrecoverable mantissa truncation); only where they live in the pipeline changed.
+  Casting alone can still be lossy — a decimal value gets rounded to fit an integer `storageDtype`, and any value gets clamped if it falls outside the dtype's representable range — but there's no scale factor or bit-keep count to configure here anymore. If a variable's logical values need scaling to fit a narrower integer dtype without clamping (the "you're storing a decimal in an integer, so you need a scale factor" lesson), or need mantissa precision deliberately thrown away, that's now a **Scale/Offset** or **Bit Round** codec step added to the variable's field pipeline (or the shared chunk pipeline in row mode) — a pipeline step the user adds and configures explicitly, not an implicit property of the type assignment.
 
-This distinction is pedagogically sharper than the old model: it separates "what does this value mean" (logical type) from "how many bytes do I spend representing it, and what do I give up by doing so" (type assignment) — the same question every real format's schema answers (Parquet's logical vs. physical types, GeoTIFF's sample format, Zarr's dtype + filters).
+This distinction is still pedagogically sharper than modeling everything as one opaque "dtype" choice: it separates "what does this value mean" (logical type) from "how many bytes do I spend representing it" (type assignment) from "what precision am I willing to throw away to get there, and when" (an explicit, orderable, toggleable codec step) — the same three questions every real format's schema-plus-filters stack answers (Parquet's logical/physical types plus encoding, GeoTIFF's sample format plus predictor, Zarr's dtype plus filter pipeline).
 
 ### The Typed Pipeline Stage
 
 Converting logical values to storage bytes is its own pipeline stage, **Typed**, sitting immediately after **Values** and before **Linearized** (see Pipeline Stages below). The Typed stage's byte content is exactly what `assignType()` produces per variable, concatenated; its traces carry the storage dtype and the human-readable (pre-conversion) display value, so hovering a Typed-stage byte still shows the original logical value even though the bytes are now, say, int16.
 
-`assignType()` also tracks per-variable statistics (`VariableStats`): count, min/max/mean (NaN-aware — NaN inputs are counted separately in `nanCount` and excluded from min/max/mean rather than poisoning them), `clipped` (values clamped to the storage dtype's range), `rounded` (values that lost precision), and `isLossy` (`clipped > 0 || rounded > 0`). These stats feed both the Metadata stage (as `variable_statistics`) and the diff view's lossy-variable flagging.
+`assignType()` also tracks per-variable statistics (`VariableStats`): count, min/max/mean (NaN-aware — NaN inputs are counted separately in `nanCount` and excluded from min/max/mean rather than poisoning them), `clipped` (values clamped to the storage dtype's range), `rounded` (values that lost precision on the bare cast — e.g. a decimal value truncated into an integer dtype), and `isLossy` (`clipped > 0 || rounded > 0`). These stats feed both the Metadata stage (as `variable_statistics`) and the diff view's lossy-variable flagging. They are distinct from — and computed independently of — the per-codec-step lossy stats (`CodecStepStats`, `codec-lossy-{variable}-{index}`) a transform codec like Scale/Offset reports further down the pipeline.
 
 ## Codec Registry
 
-Codecs are zarr-inspired but use friendlier naming. With scale/offset and bit-round moved into Type Assignment (above), there are two remaining codec categories — **reordering** and **entropy**; the **mapping** category from earlier drafts no longer exists. Each codec declares:
+Codecs are zarr-inspired but use friendlier naming. There are three codec categories — **transform** (Quantize, Bit Round, Scale/Offset — the lossy precision/size tradeoffs that briefly lived on Type Assignment, now ordinary pipeline steps; see "Logical Types and Type Assignment" above), **reordering**, and **entropy**; the **mapping** category from earlier drafts no longer exists. Each codec declares:
 
 ```typescript
 interface CodecDefinition {
   key: string;                    // Unique identifier
   label: string;                  // Display name
-  category: "reordering" | "entropy";
+  category: "transform" | "reordering" | "entropy";
+  sizeEffect: "preserving" | "fixed-ratio" | "variable"; // drives encodedByteLength
   runtime?: "pyodide";             // present only for numcodecs-via-WebAssembly codecs
+  outputDtype?: (inputDtype: DtypeKey, params: Record<string, number | string>) => DtypeKey;
+                                   // absent = default rule in outputDtypeFor
+  traceMode?: "positional" | "chunk-level"; // absent = value-preserving; see CLAUDE.md pitfall 1
   description: string;            // Tooltip/help text
   params: Record<string, ParamDef>;
   applicableTo: (dtype: string) => boolean;  // Which input dtypes are meaningful
   isLossy: (inputDtype: DtypeKey) => boolean; // Whether encode->decode loses information for this input dtype
-  encode: (bytes: Uint8Array, inputDtype: string, params: Record<string, any>) => {
+  encode: (bytes: Uint8Array, inputDtype: string, params: Record<string, any>, byteOrder?: "little" | "big") => {
     bytes: Uint8Array;
     outputDtype: string;
+    stats?: { clipped: number; rounded: number };
   };
-  decode: (bytes: Uint8Array, encodedDtype: string, params: Record<string, any>) => {
+  decode: (bytes: Uint8Array, encodedDtype: string, params: Record<string, any>, byteOrder?: "little" | "big") => {
     bytes: Uint8Array;
     outputDtype: string;
   };
@@ -283,15 +287,23 @@ interface ParamDef {
 }
 ```
 
-`isLossy` is a **predicate over the input dtype**, not a plain boolean — this deviates from `docs/extension-read-step.md`'s original `lossy: boolean` field (see that doc's own note on the deviation). It is currently `() => false` on every codec: the one dtype-dependent case was Delta on floats, and Delta is now plain modular integer arithmetic (it differences raw bit patterns — exact, if meaningless, on every dtype). Lossiness lives entirely on `Variable.typeAssignment` (scale/offset, bit-rounding) instead, with its own stats. The predicate shape survives only because `isPipelineLossy` (`src/engine/read.ts`) still asks; a genuinely lossy codec would need it.
+`isLossy` is a **predicate over the input dtype**, not a plain boolean — this deviates from `docs/extension-read-step.md`'s original `lossy: boolean` field (see that doc's own note on the deviation). It is `() => false` on every reordering/entropy codec: the one dtype-dependent case was Delta on floats, and Delta is now plain modular integer arithmetic (it differences raw bit patterns — exact, if meaningless, on every dtype). Since the codec-unification shrink, lossiness lives entirely on the three `transform`-category codecs (Quantize, Bit Round, Scale/Offset — `() => true`, dtype-independent), each reporting its own per-step `{ clipped, rounded }` stats (`codec-lossy-{variable}-{index}`) via `encode()`'s optional `stats` field. `Variable.typeAssignment` is a plain storage-dtype cast now, with its own separate (and independently-tracked) clip/round stats from the bare cast itself. The predicate shape survives on every other codec because `isPipelineLossy` (`src/engine/read.ts`) still asks; a genuinely lossy reordering/entropy codec would need it.
 
 ### The Curated Codec Set
 
-Earlier drafts split codecs into an "educational" tier (hand-rolled, always available) and a "real" tier (actual numcodecs running in Python via Pyodide/WebAssembly), presented as two visually separated groups in the picker. That split was a false taxonomy: every codec here is the same shape — stride-aware `encode(bytes, inputDtype, params) → { bytes, outputDtype }` — and composes freely with every other one, "real" or not. The picker is now **one flat list, no group labels, no "(real)" suffixes**, in `CODEC_REGISTRY` insertion order (`src/engine/codecs.ts`), which the picker iterates directly — that order runs transforms → structural/symbol compression → entropy coders, so the list itself hints at sensible pipeline order without enforcing it:
+Earlier drafts split codecs into an "educational" tier (hand-rolled, always available) and a "real" tier (actual numcodecs running in Python via Pyodide/WebAssembly), presented as two visually separated groups in the picker. That split was a false taxonomy: every codec here is the same shape — stride-aware `encode(bytes, inputDtype, params) → { bytes, outputDtype }` — and composes freely with every other one, "real" or not. The picker is now **one flat list, no group labels, no "(real)" suffixes**, in `CODEC_REGISTRY` insertion order (`src/engine/codecs.ts`), which the picker iterates directly — that order runs lossy transforms → reordering → entropy coders, so the list itself hints at sensible pipeline order without enforcing it:
 
-**Delta → Zigzag → Byte Shuffle → Bit Shuffle → Dictionary → RLE → Deflate → GZip → Zstd**
+**Quantize → Bit Round → Scale/Offset → Delta → Zigzag → Byte Shuffle → Bit Shuffle → Dictionary → RLE → Deflate → GZip → Zstd**
 
 Whether a codec's `encode`/`decode` is hand-rolled locally or delegates to numcodecs-via-Pyodide is an implementation detail carried on `CodecDefinition.runtime` (`'pyodide'` when true, `undefined` for local). Pyodide-backed entries render disabled (with a `(loading…)`/`(unavailable)` suffix) until the runtime reports ready — see "Codec Runtime" below — but nothing else about them differs from local codecs: same registry, same params/warnings/dtype-flow machinery, same picker position.
+
+**Transform codecs** (lossy precision/size tradeoffs — what earlier drafts modeled as Type Assignment fields; `sizeEffect: 'preserving'` for the two float-in-float-out transforms, `'fixed-ratio'` for Scale/Offset's dtype-narrowing):
+
+| Codec | Params | Input → Output | isLossy | Description |
+|-------|--------|---------------|---------|-------------|
+| Quantize | digits: number (0-12) | float → same | always | Round values to a fixed number of decimal digits — same dtype, same size, less information. `applicableTo` is float-only. The precision thrown away here is what makes a later entropy codec bite harder. |
+| Bit Round | keepBits: number (1-52, clamped to the dtype's mantissa width — 23 for float32, 52 for float64) | float → same | always | Zero the low mantissa bits below `keepBits`, keeping the float dtype but gaining long zero runs a shuffle or entropy codec can exploit. `applicableTo` is float-only. Not reversible (`decode` is a byte-identical passthrough) — the zeroed bits are simply gone. |
+| Scale/Offset | scale, offset: number; sourceDtype, targetDtype: select | float → **`targetDtype`** (any signed/unsigned integer dtype) | always | `v' = round((v − offset) × scale)`, stored in a smaller integer dtype — numcodecs' FixedScaleOffset. `outputDtype` reads `params.targetDtype` directly (this is the one codec whose output width isn't derivable from the input dtype alone — see "Dtype Flow" below). `sourceDtype` rides along in params purely so `decode()` knows what float dtype to reconstruct, since the encoded bytes alone don't carry that. `sizeEffect: 'fixed-ratio'`: the byte-count change (e.g. float32→int16 halves it) is deterministic from dtype widths, so offsets stay computable from geometry alone — no chunk index is demanded for a pipeline that's otherwise size-preserving. Clamps to the target dtype's range (`clipped`) and rounds to the nearest integer (`rounded`), both tracked in the step's `CodecStepStats`. |
 
 **Reordering codecs** (rearrange bytes for better compressibility; never lossy). *Dtype-preserving only when they leave elements where they were* — Delta and Zigzag rewrite values in place, but the shuffles move bytes out of their elements and so report `uint8`, same as an entropy codec (see "Dtype Flow" below):
 
@@ -302,7 +314,7 @@ Whether a codec's `encode`/`decode` is hand-rolled locally or delegates to numco
 | Byte Shuffle | elementSize: number (1-16, bytes) | any → **uint8** | never | Transpose bytes by position within each element (Parquet calls this BYTE_STREAM_SPLIT). `applicableTo` returns false for 1-byte dtypes (nothing to transpose). A **separate** param-aware warning (not expressible via `applicableTo`, which only sees the dtype) fires when `elementSize` doesn't match the actual input dtype's size — this is the "shuffle needs to know the element boundary" lesson; garbled output is intentional, not blocked. |
 | Bit Shuffle | elementSize: number (1-16, bytes) | any multi-byte → **uint8** | never | Byte Shuffle one level finer: transposes the *bits* of a block of elements into bit planes (all elements' bit 0, then bit 1, …) rather than whole bytes. Slowly varying data yields long constant bit runs — this is the transform inside blosc/bitshuffle, pulled out as its own standalone, bijective step. Takes the same `elementSize` param as Delta and Byte Shuffle; it used to read the width off the input dtype, which stopped being possible once its own output reported `uint8`. |
 
-**Entropy/compression codecs** (compress redundancy; always applicable, byte-wise; output dtype collapses to `uint8`):
+**Entropy/compression codecs** (compress redundancy; always applicable, byte-wise; output dtype collapses to `uint8`; `sizeEffect: 'variable'` — data-dependent, so `encodedByteLength` returns `null` and a size-changing pipeline needs a chunk index to stay readable):
 
 | Codec | Params | isLossy | Backing | Description |
 |-------|--------|---------|---------|-------------|
@@ -327,23 +339,27 @@ Codecs declare which dtypes they're applicable to via `applicableTo()`. When a c
 
 Hovering or clicking the icon shows the warning text (e.g., "Zigzag is not applicable to Uint16 input..." or "Element size 2 doesn't match dtype size 4 — bytes will be grouped incorrectly...").
 
-Additionally, when the interleaving is set to row-oriented and the variables have heterogeneous dtypes, the codec section's explanatory callout should note: "Mixed dtypes are interleaved — codecs like Byte Shuffle and Delta that assume uniform element size will produce garbled output. This is a key reason column-oriented formats exist."
+Additionally, when the interleaving is row-oriented and the variables' **post-prefix** dtypes are heterogeneous, the codec section shows a `codec-mixed-dtype-warning` callout: "The interleaved stream mixes dtypes (after each variable's structured steps) — codecs like Byte Shuffle and Delta that assume uniform element size will produce garbled output." Post-prefix, not raw `storageDtype` — since each variable's element-structured prefix runs before interleaving (see "Structural Steps" above), two variables with different starting dtypes can still converge to the same post-prefix width (e.g. both narrowed to int16 by their own Scale/Offset step), in which case no warning fires; conversely two same-dtype variables can diverge if only one has a Scale/Offset step in its prefix.
 
 When a codec produces output **larger** than its input (e.g., RLE on random data), the byte count in the pipeline strip node and the codec step annotation should display in the `warning` color to draw attention to the size increase.
 
 ### Codec Pipeline Display and the Dtype-Flow Rule
 
-Each step in the pipeline editor shows the output dtype as an annotation (e.g., "Byte Shuffle →int16"). The dtype flows through the pipeline via one rule, `outputDtypeFor(codec, inputDtype)` (`src/engine/codecs.ts`) — the single source of truth, called by both the codec pipeline executor and the UI's warning/annotation logic (never re-implemented locally):
+Each step in the pipeline editor shows the output dtype as an annotation (e.g., "Byte Shuffle →int16"). The dtype flows through the pipeline via one rule, `outputDtypeFor(codec, inputDtype, params)` (`src/engine/codecs.ts`) — the single source of truth, called by both the codec pipeline executor and the UI's warning/annotation logic (never re-implemented locally):
 
 ```typescript
-function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey): DtypeKey {
-  // Entropy output is a compressed stream; a codec with a traceMode (the
-  // shuffles) has moved bytes out of their elements. Neither has elements.
+function outputDtypeFor(codec: CodecDefinition, inputDtype: DtypeKey, params: Record<string, number | string>): DtypeKey {
+  // A codec can declare its own output dtype as a function of params — Scale/
+  // Offset does, since its output width comes from params.targetDtype, not
+  // from the input dtype. Absent that, entropy output is a compressed stream;
+  // a codec with a traceMode (the shuffles) has moved bytes out of their
+  // elements. Neither of those has elements, so both default to uint8.
+  if (codec.outputDtype) return codec.outputDtype(inputDtype, params);
   return codec.category === 'entropy' || codec.traceMode ? 'uint8' : inputDtype;
 }
 ```
 
-A codec's output dtype answers one question: *what are these bytes now?* Two kinds of codec answer `uint8`. Entropy/compression codecs (Dictionary, RLE, Deflate, GZip, Zstd) do, because their output is a compressed stream. **The shuffles do too** (Byte Shuffle, Bit Shuffle), because byte planes and bit planes have no elements in them — reporting the pre-shuffle dtype there was a lie that propagated into the next codec's element size, the ⚠ warnings, and the dtype label on the step, all of which then described elements that no longer existed. Only codecs that rewrite values in place (Delta, Zigzag) preserve the dtype. The rule lives in `outputDtypeFor` and nowhere else — `reverseCodecPipeline` and `isPipelineLossy` used to re-derive it locally and both went stale the day the shuffles changed.
+A codec's output dtype answers one question: *what are these bytes now?* Two kinds of codec answer `uint8` by the default rule. Entropy/compression codecs (Dictionary, RLE, Deflate, GZip, Zstd) do, because their output is a compressed stream. **The shuffles do too** (Byte Shuffle, Bit Shuffle), because byte planes and bit planes have no elements in them — reporting the pre-shuffle dtype there was a lie that propagated into the next codec's element size, the ⚠ warnings, and the dtype label on the step, all of which then described elements that no longer existed. Codecs that rewrite values in place without changing width (Delta, Zigzag, Quantize, Bit Round) preserve the input dtype. **Scale/Offset is the one codec with an explicit `outputDtype` override**: it reports `params.targetDtype`, since its output width is a user choice, not derivable from the input dtype the way every other codec's is. The rule lives in `outputDtypeFor` and nowhere else — `reverseCodecPipeline` and `isPipelineLossy` used to re-derive it locally and both went stale the day the shuffles changed.
 
 Separately, `encodedChunkMeta` also reports a **`slotDtype`**: what the Encoded pane should draw one slot as. For a positional chunk these differ on purpose — the bytes *are* uint8 planes (`outputDtype`), but the slot the pane draws is the pre-shuffle element a reader ignoring the codec would still try to decode there (`slotDtype`), which is the whole point of the positional mode. They are equal for every pipeline that never degrades. Each step's `encode()` input dtype is the previous step's `outputDtype` (or the variable's `typeAssignment.storageDtype` for the first step) — this makes it visible when a codec is receiving unexpected input, and keeps the pipeline's dtype bookkeeping in exactly one place.
 
@@ -352,7 +368,7 @@ Separately, `encodedChunkMeta` also reports a **`slotDtype`**: what the Encoded 
 Three codecs (Deflate, GZip, Zstd) delegate `encode`/`decode` to actual `numcodecs` — the same Python library Zarr uses — running in-browser via Pyodide (Python compiled to WebAssembly). This is invisible to the pipeline machinery (same `CodecDefinition` shape, same registry, same picker), but the runtime has to load before those three codecs can run:
 
 - The worker initializes Pyodide **eagerly at startup**, independent of whether the current configuration uses a Pyodide-backed codec. A compute is only gated on that init promise when the posted state actually references a `runtime: 'pyodide'` codec (`stateUsesPyodideCodec()` in `src/engine/codecs.ts`, checked against both `fieldPipelines` and `chunkPipeline`); states that don't use one compute immediately, so boot is never delayed by the download.
-- While loading, a slim banner under the Header narrates progress: **"Loading compression runtime: …"**. On success it disappears silently. On failure (offline, CDN unreachable) it becomes a dismissible error banner: **"Compression codecs unavailable: {error}. Everything else works — the other codecs are unaffected."** — the six local codecs (Delta, Zigzag, Byte Shuffle, Bit Shuffle, Dictionary, RLE) are never affected by a Pyodide failure.
+- While loading, a slim banner under the Header narrates progress: **"Loading compression runtime: …"**. On success it disappears silently. On failure (offline, CDN unreachable) it becomes a dismissible error banner: **"Compression codecs unavailable: {error}. Everything else works — the other codecs are unaffected."** — the nine local codecs (Quantize, Bit Round, Scale/Offset, Delta, Zigzag, Byte Shuffle, Bit Shuffle, Dictionary, RLE) are never affected by a Pyodide failure.
 - In the picker, Pyodide-backed entries render disabled (with a `(loading…)`/`(unavailable)` suffix) until the runtime reports ready. A saved pipeline that already references one of them is never blocked by the UI — only the compute itself waits on/fails against the runtime.
 
 ## UI Architecture
@@ -545,10 +561,7 @@ interface LogicalTypeConfig {
 }
 
 interface TypeAssignment {
-  storageDtype: DtypeKey;
-  scale?: number;    // for integer storage of decimal/continuous
-  offset?: number;   // for integer storage of decimal/continuous
-  keepBits?: number; // for float precision reduction
+  storageDtype: DtypeKey;  // bare cast — no scale/offset/keepBits; those are codec pipeline steps now
 }
 
 interface Variable {
@@ -615,7 +628,7 @@ The reducer (`src/state/useAppState.ts`) groups actions into three shapes rather
 
 `loadState(model)` runs three passes before state reaches the app, each with a defined fallback:
 
-1. **`migrateState`**: handles the one known historical shape migration (variables that carried a flat `dtype` field instead of `logicalType`/`typeAssignment` get synthesized logical types and their pipelines get stripped of the now-nonexistent `scale-offset`/`bitround` codec steps). Returns `null` (→ treated as absent, falls through to defaults) if migration itself throws.
+1. **`migrateState`**: handles two historical shape migrations, plus a standing drop-not-migrate policy for a third. The oldest — variables that carried a flat `dtype` field instead of `logicalType`/`typeAssignment` — synthesizes logical types and strips `scale-offset`/`bitround` steps from that era's pipelines (those keys didn't exist as codecs at that point in the tool's history, so any such step was already dead weight; today they're valid codec keys again, but this migration path only ever fires for saves old enough to predate that meaning entirely). Separately, the codec-unification shrink **drops rather than migrates** any save whose `typeAssignment` still carries `scale`/`offset`/`keepBits` — those fields moved to the codec pipeline (as Scale/Offset and Bit Round steps) rather than being auto-converted into equivalent steps, per the project's standing no-migration policy (see `docs/architecture.md` / project conventions: compositional fields over migrated modes). Returns `null` (→ treated as absent, falls through to defaults) if migration itself throws or hits that drop condition.
 2. **`deepMergeDefaults`**: recursively merges the migrated state over `DEFAULT_STATE`, field by field — anything missing at any level (a newer field like `write.footerLocator` that didn't exist when the save was written) is filled in from the default. `fieldPipelines` is treated as an open-ended dictionary (all of the source's own keys are kept, not just keys present in the default) rather than a fixed shape.
 3. **`validateState`**: structural validation on the merged result — invalid `variables` entries are dropped; a non-array or empty/non-positive `shape` resets the *entire* state to defaults (there's no sane partial recovery from a corrupt shape); `chunkShape` is clamped/padded to match `shape` exactly as `SET_SHAPE` does; `leftPaneStage`/`rightPaneStage` migrate old numeric indices (including the old `-1` sentinel, mapped to `'write'`) to `StageName`s via `STAGE_ORDER`, falling back to the default stage name if unrecognized; `fieldPipelines` keys are re-matched — a legacy key equal to some variable's *name* (not id) is re-keyed to that variable's id, and any key matching neither an id nor a name is dropped.
 
@@ -658,9 +671,9 @@ The metadata view is a dedicated section in the sidebar (and a selectable stage 
 
 ### Auto-Collected Metadata
 Generated automatically from the pipeline configuration, each key gated by one of the six include groups below (`METADATA_KEY_GROUPS`, `src/engine/metadata.ts`):
-- **Schema** (`schema` group): `schema` (variable names + storage dtypes), `type_assignments`, `logical_types`
+- **Schema** (`schema` group): `schema` (variable names + storage dtypes), `logical_types`. There is no `type_assignments` entry — it was **deleted**, not shrunk, when `TypeAssignment` shrank to a bare storage-dtype cast: a per-variable `type_assignments` entry would have duplicated the dtype `schema` already carries (the same "every entry must be one the reader actually uses" principle that killed the earlier `chunk_grid` entry — see below).
 - **Layout** (`layout` group): `shape`, `chunk_shape`, `chunk_order`, `partitioning`, `interleaving`, `linearization` (array model, ndim > 1 only)
-- **Codecs** (`codecs` group): `codec_pipelines`, per-variable or per-chunk, with all active (non-disabled) parameters
+- **Codecs** (`codecs` group): `codec_pipelines`. **Column mode**: a `{ variableName: CodecStep[] }` object, one entry per variable, active (non-disabled) steps only. **Row mode**: a `{ chunk: CodecStep[], fields: { variableName: CodecStep[] } }` envelope — `fields` holds each variable's element-structured **prefix only** (`splitStructuredPrefix(...).prefix` — the steps that actually ran per-variable before interleaving), and `chunk` holds the shared chunk pipeline that ran on the interleaved remainder. This is what the reader needs to reverse row mode correctly: replaying only the shared chunk steps and then blindly deinterleaving would silently skip every variable's own prefix.
 - **Chunk index** (`chunkIndex` group): `chunk_index` — byte offsets mapping chunk coordinates to file positions (generated at write time)
 - **Descriptive** (`descriptive` group): `variable_statistics` only — see the include-toggle note below for why custom entries are no longer part of this group
 - **Endianness** (`endianness` group): `byte_order`
@@ -692,18 +705,20 @@ per entry: [u16 tag] [u8 type] [u32 payloadLength] [payload]
 |-----|-----|-----|-----|
 | 0 | (custom key — see below) | 8 | codec_pipelines |
 | 1 | schema | 9 | chunk_index |
-| 2 | shape | 10 | type_assignments |
+| 2 | shape | 10 | *(reserved, unused — see below)* |
 | 3 | chunk_shape | 11 | logical_types |
 | 4 | chunk_order | 12 | variable_statistics |
 | 5 | partitioning | 13 | metadata_format |
 | 6 | interleaving | 14 | byte_order |
 | 7 | linearization | | |
 
+Tag `10` was `type_assignments`, deleted along with the `type_assignments` metadata entry (see "Auto-Collected Metadata" above) — the tag number stays reserved and unassigned rather than being reused, so an old binary-serialized file's tag table (if any code still emitted tag 10) can't be misread as a different key by a newer build.
+
 Tag `0` is reserved for any key with no registered tag (i.e. every custom entry, plus any future auto-collected key that hasn't been assigned one yet). Its payload carries the key inline: `[u16 keyLen][key utf8][value bytes]`. Every registered tag's payload is the value bytes directly — no key, no length-prefixed name, just the tag number and the reader's own copy of this table.
 
 **Type byte** (`u8`) — the type is authoritative on decode; each registered key has one native type it prefers, with type `0` (string) as the universal fallback:
 
-- `0` — UTF-8 string. Used for entries that stay JSON-in-a-string (`codec_pipelines`, `type_assignments`, `logical_types`, `variable_statistics` — genuinely nested config not worth a bespoke binary shape), for every custom entry's value, and as the fallback for any registered key whose current value doesn't fit its native type.
+- `0` — UTF-8 string. Used for entries that stay JSON-in-a-string (`codec_pipelines`, `logical_types`, `variable_statistics` — genuinely nested config not worth a bespoke binary shape), for every custom entry's value, and as the fallback for any registered key whose current value doesn't fit its native type.
 - `1` — u32 array: `shape`, `chunk_shape`. Payload is `[u32 × n]`, little-endian, `n` derived from `payloadLength / 4`.
 - `2` — enum code (one byte): `chunk_order`, `partitioning`, `interleaving`, `linearization`, `byte_order`, `metadata_format`. Each enum key has its own fixed string→code table (`ENUM_TABLES`, `src/engine/metadataBinary.ts`) — order is part of the spec and never changes.
 - `3` — packed chunk index: `[u8 ndim][u32 entryCount]` then per entry `[u32 × ndim coords][u32 offset][u32 size][u8 varNameLen][varName utf8]` (`varNameLen` 0 = no `variableName`, i.e. row-mode chunks). Because every offset/size field is a fixed-width `u32`, a binary-serialized chunk index needs no header/footer convergence dance — the metadata's own length doesn't affect where chunk data starts, the way it can for JSON (see "Header Metadata and Offset Convergence" below).
@@ -776,7 +791,7 @@ The `include-chunk-index-toggle` Metadata option (`state.metadata.include.chunkI
 
 **Single-file mode** is where the toggle actually matters:
 - **On**: the reader locates each chunk directly from the recorded index.
-- **Off**: `chunk_index` is omitted entirely. The Read step then attempts to **compute** chunk offsets itself, from `chunkShape × dtype size` in the recorded `chunk_order` (row-major or column-major — see below), but this is only possible when *every* codec pipeline in play is size-preserving (Delta, Byte Shuffle — not RLE or LZ, whose encoded size isn't derivable from the input shape alone). When a size-changing codec is present with no index, the Read step fails with reason `no-chunk-index`, explaining that variable-size chunks are unlocatable without an index — arguably the tool's clearest lesson in why real chunked/columnar formats (Zarr, Parquet) always carry one.
+- **Off**: `chunk_index` is omitted entirely. The Read step then attempts to **compute** chunk offsets itself via `encodedByteLength` (`src/engine/codecs.ts`), from `chunkShape × dtype size` in the recorded `chunk_order` (row-major or column-major — see below). This is possible whenever every codec pipeline in play has a *derivable* size — `sizeEffect: 'preserving'` (Delta, Byte Shuffle, Quantize, Bit Round, …) or `'fixed-ratio'` (Scale/Offset — its deterministic per-element width change is exactly as computable from geometry as a preserving codec is). Only `sizeEffect: 'variable'` codecs (every entropy codec — RLE, Deflate, GZip, Zstd, Dictionary) make offsets underivable, since their output size is data-dependent. When such a codec is present with no index, the Read step fails with reason `no-chunk-index`, explaining that variable-size chunks are unlocatable without an index — arguably the tool's clearest lesson in why real chunked/columnar formats (Zarr, Parquet) always carry one.
 
 **`chunk_order` is now actually read**, closing a real bug: `parseStructure` parses the `chunk_order` metadata key (`'row-major' | 'column-major'`, default `'row-major'` when the key is absent — matching pre-existing files) into `ParsedStructure`, and single-file synthetic-offset computation enumerates chunk coordinates in that recorded order rather than always assuming row-major. Previously, `chunk_order` was written but never parsed, so a file with column-major chunk order plus a missing chunk index plus size-preserving codecs would read *successfully with silently scrambled chunk placement* — wrong data, no error. `partitioning` is parsed the same way (`'single' | 'per-chunk'`, default `'single'` when absent), and reader selection now keys off this parsed value rather than `dataFiles.length === 1` (which mis-selected the single-file reader for the legitimate one-chunk-per-chunk-file edge case); when the `partitioning` key itself is absent, reader selection falls back to the old file-count heuristic.
 
@@ -865,7 +880,7 @@ src/
 - **Memoize aggressively**: pipeline stage computation is potentially expensive. Each stage should be memoized and only recompute when its inputs change. Intermediate stages should not recompute when only downstream configuration changes.
 - **Virtual scrolling**: all list/table/hex views must virtualize. Only render visible rows + a buffer.
 - **Debounce saves**: state persistence should debounce at ~500ms to avoid thrashing storage on rapid parameter changes.
-- **Codec computation**: for v1, all codecs run in the main thread. If performance is an issue with large datasets, consider moving codec execution to a Web Worker. The LZ codec's O(n×w) complexity may be slow for large inputs.
+- **Codec computation**: all codec execution runs in the pipeline Web Worker (`src/worker/pipeline.worker.ts`), not the main thread. Entropy codecs (Dictionary, RLE) are the ones most likely to be slow on large inputs; the three Pyodide-backed codecs (Deflate, GZip, Zstd) pay a one-time runtime-load cost (see "Codec Runtime" above) but then run compiled, not interpreted.
 - **Maximum data size**: the tool is for learning, not production, and enforces two tiers. `SOFT_ELEMENT_CAP` (`src/components/config/SchemaEditor.tsx`, 8,000,000 total values across all variables) is advisory — an `element-cap-warning` banner appears above it, but the app does not stop you. Further out, `HARD_ELEMENT_CAP` (32,000,000 total values) and `HARD_CHUNK_CAP` (1,048,576 chunks — `pipelineCapError`, `src/engine/pipelineCompute.ts`) are hard refusals: past either, the compute entries (`computePipelineStages`, `createPipelineComputer`) and `persistence.validateState` refuse the configuration outright with a clear error rather than risk an OOM crash. Below the soft cap, viewer components switch strategy at their own thresholds rather than degrading: `GridView`'s `MAX_CELLS` (10,000 cells) switches from DOM cells to a canvas render; `HexView`'s `WINDOWED_SECTION_ROWS` (262,144 rows) switches to a windowed view with an overview strip.
 
 ## Accessibility
@@ -889,17 +904,17 @@ The tool should handle degenerate configurations gracefully rather than crashing
 | Chunk shape of 1 on any dimension | Valid (maximally chunked); may produce many chunks. `ChunkConfig` shows the resulting chunk count in the warning color with "— consider larger chunks" once it exceeds 1000. |
 | Variable name collision (two variables with same name) | `SchemaEditor` shows a warning border on every variable sharing a duplicated (or empty) name. Unlike earlier drafts, this is now purely a display/file-format concern, not a data-loss risk: `fieldPipelines` is keyed by each variable's stable `id`, so duplicate or renamed display names no longer clobber another variable's codec pipeline or values. The warning still matters because the *written file format* keys `codec_pipelines`/`schema` by variable name, so a file with duplicate names is genuinely ambiguous to a reader. |
 | Variable name empty | Same warning-border treatment as a name collision (`hasWarning = !v.name || duplicateNames.has(v.name)`); there is no internal fallback name synthesized — the empty string is what gets used as the (ambiguous) key at metadata-serialization time. |
-| Codec pipeline produces 0 bytes | Valid (e.g., RLE or LZ on empty input return `new Uint8Array(0)`). Pipeline strip and hex view handle the empty stage without special-casing. |
+| Codec pipeline produces 0 bytes | Valid (e.g., RLE or Deflate on empty input return `new Uint8Array(0)`). Pipeline strip and hex view handle the empty stage without special-casing. |
 | Codec pipeline produces bytes larger than input | Valid (not an error); the pipeline strip is expected to call this out in the warning color per the Codec Applicability section. |
 | All variables deleted | Same as zero variables case. |
-| Interleaving switched from column to row with existing per-field pipelines | The per-field pipelines are preserved in state (`fieldPipelines` is untouched by `SET_INTERLEAVING`) but become inactive — the Encoded stage in row mode reads `chunkPipeline` instead. Switching back to column reactivates the same `fieldPipelines`, unchanged. `CodecSection` swaps between the per-field and per-chunk editors based on `state.interleaving`, with the mixed-dtype explanatory callout. |
+| Interleaving switched from column to row with existing per-field pipelines | The per-field pipelines are preserved in state (`fieldPipelines` is untouched by `SET_INTERLEAVING`) — each pipeline's maximal element-structured prefix (`splitStructuredPrefix`) still runs per-variable in row mode; only the remainder becomes inactive, with the shared `chunkPipeline` running on the interleaved bytes past that point. Switching back to column reactivates the full `fieldPipelines`, unchanged. `CodecSection` swaps between the per-field and per-chunk editors based on `state.interleaving`, with the post-prefix mixed-dtype explanatory callout (`codec-mixed-dtype-warning`). |
 | Shape dimensions changed (e.g., from 1-d to 2-d) while chunk shape is still 1-d | `SET_SHAPE` pads `chunkShape` with the new dimensions' full extent (new dims default to no splitting) and clamps existing dims that shrank; `validateState`'s merge-time fallback does the equivalent clamp/pad for a stale persisted `chunkShape`. |
 | Odd-length or non-hex magic-number input | `hexToBytes` (`src/engine/bytes.ts`) is the single tolerant implementation used by both write and read: it strips non-hex characters and drops a trailing unpaired nibble rather than throwing. `WriteConfig`'s magic input (`data-testid="magic-input"`) shows a warning border for non-hex characters, but no input can crash the pipeline. |
 | Stale/corrupt/outdated `localStorage` | `loadState()` runs migrate → deep-merge-over-defaults → structural validation (see State Management → Migration Behavior) before the app ever sees the result; anything unrecoverable (e.g. a corrupt shape) resets to a full default state rather than reaching the engine with missing fields. |
 | `metadata.enabled = false` (default) | `collectMetadata` is never called; the Metadata stage's bytes are a true zero-length `Uint8Array`. The Write stage places nothing — only magic + chunk data. The Read stage fails with reason `no-metadata`, prompting the user to enable it. This is the read extension's central lesson and is the default. |
 | `write.metadataPlacement = 'omit'` with `metadata.enabled = true` | Metadata *is* assembled (real bytes, visible in the Metadata stage pane and its Entries view) but Write places it in no file, sidecar included. Read still fails with `no-metadata` — indistinguishable from the disabled case, which is itself the honest behavior: a reader can't tell "never built" from "built and discarded." |
 | Metadata present but its locator/scanner can't find it (`footerLocator: 'none'`) | Read fails with reason `metadata-not-found`, distinct from `no-metadata` — the message explains that metadata was written but a best-effort scan couldn't pin it down, and names the Footer locator "trailer" option as the fix. |
-| Chunk index omitted (`include.chunkIndex = false`, its default) with a size-changing codec (RLE/LZ) in play, single-file partitioning | Read fails with reason `no-chunk-index` rather than attempting (and silently getting wrong) a computed offset guess. |
+| Chunk index omitted (`include.chunkIndex = false`, its default) with a `sizeEffect: 'variable'` codec (an entropy codec — RLE, Deflate, GZip, Zstd, Dictionary) in play, single-file partitioning | Read fails with reason `no-chunk-index` rather than attempting (and silently getting wrong) a computed offset guess. A `fixed-ratio` codec (Scale/Offset) does **not** trigger this — its size change is derivable from geometry alone. |
 | Chunk index omitted with per-chunk partitioning | Read still succeeds regardless of codec — each chunk file is its own chunk, so there is nothing for an index to locate; `resolveChunkIndex` synthesizes coords-only entries unconditionally. |
 | Magic number mismatch on read | Read fails with reason `bad-magic` before any attempt to locate metadata or reconstruct values. |
 
@@ -921,8 +936,10 @@ These are decisions left to the implementer's judgment:
 
 Build in this order. Each phase should be functional and testable before moving to the next.
 (This is the original pre-implementation plan, kept for historical reference — see the Codec
-Registry and Logical Types sections above for what actually shipped: 4 codecs, not 6, with
-scale/offset and bit-round moved to a separate Type Assignment concept and its own Typed stage.)
+Registry and Logical Types sections above for what actually shipped, which has moved more than
+once since this plan was written: scale/offset and bit-round went from codecs to a separate Type
+Assignment concept and back to codecs again, via the codec-unification refactor. Current count:
+12 codecs across three categories — transform, reordering, entropy.)
 
 **Phase 1: Engine + Tests**
 1. `src/types/` — all type definitions (dtypes, codecs, pipeline, state)

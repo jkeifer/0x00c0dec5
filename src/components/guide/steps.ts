@@ -94,7 +94,7 @@ export const STEPS: GuideStep[] = [
       {
         label: 'random',
         pros: 'Worst-case input — the honest baseline for judging every codec you add later.',
-        cons: 'Near-maximum entropy: no runs, no trends, nothing for RLE, LZ, or Delta to exploit.',
+        cons: 'Near-maximum entropy: no runs, no trends, nothing for RLE, Deflate, or Delta to exploit.',
       },
       {
         label: 'smooth (random walk)',
@@ -134,11 +134,13 @@ export const STEPS: GuideStep[] = [
   },
   {
     id: 'typing',
-    title: 'Type assignment: precision for bytes',
+    title: 'Type assignment: how many bytes per value',
     section: 'typing',
     decision:
-      'Choose each variable’s storage dtype: how many bytes to spend per value, and what ' +
-      'precision to give up. This is where lossiness enters the pipeline — before any codec runs.',
+      'Choose each variable’s storage dtype — a bare cast, nothing more. This is just "how many ' +
+      'bytes do I spend per value"; the precision-versus-size tradeoffs (quantizing decimals, ' +
+      'scaling into a narrower integer, throwing away mantissa bits) live one step later, as ' +
+      'codecs you add explicitly and can see in the pipeline.',
     options: [
       {
         label: 'float64 (8 bytes)',
@@ -148,39 +150,40 @@ export const STEPS: GuideStep[] = [
       {
         label: 'float32 (4 bytes)',
         pros: 'Half the size; plenty of precision for values like "23.4".',
-        cons: 'Values with more precision than ~7 significant digits get rounded — genuinely lossy.',
+        cons: 'Values with more precision than ~7 significant digits get rounded — genuinely lossy, and it happens silently on the cast itself.',
       },
       {
-        label: 'int16 + scale/offset (2 bytes)',
-        pros: 'A quarter of float64’s size. (value − offset) × scale quantizes decimals onto an integer grid — scale 10 keeps one decimal place exactly.',
-        cons: 'Values outside the representable range clamp, and anything finer than the scale step rounds away. You must pick scale/offset to fit min/max.',
+        label: 'int16 (2 bytes)',
+        pros: 'A quarter of float64’s size — great for values that are naturally whole numbers, or that you plan to scale down with a codec first.',
+        cons: 'Casting a decimal value straight into int16 truncates it to a whole number; casting anything outside ±32767 clamps. Neither is recoverable from the bytes alone.',
       },
       {
         label: 'char[N] fixed-width text (4/8/16 bytes)',
         pros: 'Every value occupies exactly N bytes, so chunking, seeking, and tracing stay trivial — the same bet DBF and NetCDF-classic made — and the hex view’s ASCII column shows the words directly.',
         cons: 'Too narrow truncates — "Wellington" in char8 stores "Wellingt", counted in the truncated stat and flagged lossy at Read. Too wide pads — char16 cities are mostly trailing spaces.',
       },
-      {
-        label: 'keepBits (float bit-rounding)',
-        pros: 'Zeroing mantissa bits you don’t need creates trailing zero bytes that shuffle + compress beautifully, while keeping float semantics.',
-        cons: 'Irrecoverably truncates precision — the diff view will show it. Choosing keepBits requires knowing your data’s real precision.',
-      },
     ],
     body:
       'Every real format’s schema answers this same question: Parquet separates logical from ' +
       'physical types, GeoTIFF has a sample format tag, Zarr has dtype plus filters. The tool ' +
-      'deliberately makes it a pipeline stage (Typed) rather than a codec: "what does this ' +
-      'value mean" and "how many bytes do I spend representing it" are different decisions. ' +
-      'The stats beside each variable (clipped, rounded, lossy) come from this stage and feed ' +
-      'the Read stage’s diff view later. Text faces the same size-versus-fidelity trade as ' +
-      'numbers, just with truncation and padding instead of rounding; real formats eventually ' +
-      'reach for offset arrays or dictionaries to store variable-length strings — complexity ' +
-      'this tool leaves out on purpose.',
+      'makes it a pipeline stage (Typed) that is just the cast — "what does this value mean" ' +
+      '(logical type) and "how many bytes do I spend representing it" (storage dtype) are ' +
+      'different decisions from "what precision am I willing to throw away to get there", which ' +
+      'now lives on the Codecs step below as Quantize, Bit Round, and Scale/Offset: explicit, ' +
+      'orderable, toggleable pipeline steps rather than implicit properties of the cast. The ' +
+      'stats beside each variable (clipped, rounded, lossy) still come from this stage — a bare ' +
+      'cast can clip or round on its own — and feed the Read stage’s diff view later, alongside ' +
+      'whatever a lossy codec step further down the pipeline adds. Text faces the same ' +
+      'size-versus-fidelity trade as numbers, just with truncation and padding instead of ' +
+      'rounding; real formats eventually reach for offset arrays or dictionaries to store ' +
+      'variable-length strings — complexity this tool leaves out on purpose.',
     tryIt:
-      'Set temperature’s storage dtype to int16 with scale 1: the Typed stage halves, the ' +
-      'stats show rounded values, and the Read diff view shows errors up to half a degree. ' +
-      'Now set scale to 10 — one decimal place fits the integer grid exactly and the error ' +
-      'vanishes. Same dtype, same size; the scale factor did the work.',
+      'Set temperature’s storage dtype to int16 and watch the stats show rounded/clipped values ' +
+      '— a bare cast from decimal to integer already loses information. Then head to the Codecs ' +
+      'step below and add a Scale/Offset codec (scale 10, target int16) to a float32 variable ' +
+      'instead: one decimal place fits the integer grid exactly and the error vanishes on read ' +
+      'back. Same two bytes per value, very different fidelity — the codec step, not the cast, ' +
+      'did the work.',
   },
   {
     id: 'chunk',
@@ -237,7 +240,7 @@ export const STEPS: GuideStep[] = [
       {
         label: 'Row-oriented (interleaved)',
         pros: 'A whole record is one contiguous read — one seek gets you every field of element N. Natural for transactional, row-at-a-time access.',
-        cons: 'Codecs see a mixed byte stream of alternating dtypes, so one shared pipeline must serve all variables — Delta and Byte Shuffle produce garbage on heterogeneous elements.',
+        cons: 'Only each variable’s own leading run of element-preserving codec steps still runs per-variable before interleaving; anything past that — plus the shared chunk pipeline — sees a mixed byte stream of alternating dtypes, where Delta and Byte Shuffle produce garbage on heterogeneous elements.',
       },
       {
         label: 'Column-oriented (contiguous)',
@@ -249,14 +252,17 @@ export const STEPS: GuideStep[] = [
       'This is the Parquet-versus-CSV lesson in one toggle. A CSV (or any row store) is ' +
       'optimized for "give me record 17"; Parquet is optimized for "give me the temperature ' +
       'column, compressed well". The imaging world made the same split decades earlier as BIP ' +
-      'versus BSQ. Note what the tool does when you switch: per-variable pipelines become ' +
-      'inactive in row mode but are preserved, and the Codecs section swaps to a single ' +
-      'per-chunk pipeline with a warning about mixed dtypes.',
+      'versus BSQ. Note what the tool does when you switch: each variable’s pipeline is ' +
+      'preserved in full, and its maximal leading run of steps that still leave one slot per ' +
+      'element (anything before the first shuffle or entropy codec) keeps running per-variable, ' +
+      'even in row mode. Only the remainder becomes inactive, handed off to the shared ' +
+      'per-chunk pipeline the Codecs section shows below it, with a warning when the ' +
+      'interleaved dtypes end up mixed.',
     tryIt:
       'Switch Interleave to row-oriented and look at the Linearized hex view: the variable ' +
       'colors now alternate per element instead of forming solid bands. The Codecs section ' +
-      'collapses to one pipeline and explains why. Switch back — your per-variable pipelines ' +
-      'come back untouched.',
+      'shows each variable’s still-active prefix above a shared chunk pipeline and explains ' +
+      'why the rest is dimmed. Switch back — your per-variable pipelines come back untouched.',
   },
   {
     id: 'codecs',
@@ -264,10 +270,17 @@ export const STEPS: GuideStep[] = [
     section: 'codecs',
     decision:
       'Build an ordered codec pipeline per variable (column mode) or per chunk (row mode), ' +
-      'picked from one flat list: Delta, Zigzag, Byte Shuffle, Bit Shuffle, Dictionary, RLE, ' +
-      'Deflate, GZip, Zstd. Reordering codecs rearrange bytes to expose redundancy; entropy ' +
-      'codecs actually shrink it. Order matters: prepare first, compress last.',
+      'picked from one flat list: Quantize, Bit Round, Scale/Offset, Delta, Zigzag, Byte ' +
+      'Shuffle, Bit Shuffle, Dictionary, RLE, Deflate, GZip, Zstd. Transform codecs trade ' +
+      'precision or size for structure; reordering codecs rearrange bytes to expose ' +
+      'redundancy; entropy codecs actually shrink it. Order matters: transform and prepare ' +
+      'first, compress last.',
     options: [
+      {
+        label: 'Quantize / Bit Round / Scale-Offset (transform)',
+        pros: 'The precision-versus-size decisions that used to live on the storage dtype itself: round to N decimal digits, zero low mantissa bits, or pack decimals into a narrower integer dtype (`(value − offset) × scale`, e.g. scale 10 keeps one decimal place exactly).',
+        cons: 'All three are genuinely, irrecoverably lossy — clamped/rounded values are gone once encoded. Scale/Offset also changes the byte width (a fixed, geometry-computable ratio, not data-dependent), so it interacts with chunk-index and row-mode-prefix rules the size-preserving codecs don’t.',
+      },
       {
         label: 'Delta + Zigzag (reordering)',
         pros: 'Delta stores value-to-value differences — smooth or sorted data collapses to small numbers. Zigzag then maps those signed diffs to unsigned so small magnitudes stay small byte values (Parquet’s move ahead of RLE/bit-packing).',
