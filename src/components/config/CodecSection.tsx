@@ -29,9 +29,6 @@ export function CodecSection({
   onFieldPipelineChange,
   onChunkPipelineChange,
 }: CodecSectionProps) {
-  const dtypes = variables.map((v) => v.typeAssignment.storageDtype);
-  const mixedDtypes = new Set(dtypes).size > 1;
-
   if (interleaving === 'column') {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
@@ -114,8 +111,9 @@ export function CodecSection({
         Row mode: each variable's structured codec steps still run per-variable; anything after
         that (and the shared chunk pipeline below) applies to all interleaved data.
       </div>
-      {mixedDtypes && (
+      {mixedPostPrefixDtypes && (
         <div
+          data-testid="codec-mixed-dtype-warning"
           style={{
             background: colors.warningDim,
             borderLeft: `2px solid ${colors.warning}`,
@@ -125,8 +123,9 @@ export function CodecSection({
             color: colors.textSecondary,
           }}
         >
-          Mixed dtypes are interleaved — codecs like Byte Shuffle and Delta that assume uniform
-          element size will produce garbled output.
+          The interleaved stream mixes dtypes (after each variable's structured steps) — codecs
+          like Byte Shuffle and Delta that assume uniform element size will produce garbled
+          output.
         </div>
       )}
       {variables.map((v) => {
