@@ -6,11 +6,12 @@ import {
 } from '../../../src/hooks/usePipeline.ts';
 import {
   buildValueBlocksLayout, buildLinearizedLayout, buildEncodedLayout, encodedChunkMeta, traceAt, type ChunkTraceMode,
-  buildMetadataLayout,
+  buildMetadataLayout, type ChunkFieldLayout, type ChunkBlockRegion,
 } from '../../../src/engine/layout.ts';
 import { expectTraceEquivalence } from '../helpers/equivalence.ts';
 import { referenceStageTraces, referenceFileTraces } from '../helpers/referenceTraces.ts';
 import type { CodecStep } from '../../../src/types/codecs.ts';
+import { getDtype } from '../../../src/types/dtypes.ts';
 import type { DtypeKey } from '../../../src/types/dtypes.ts';
 import type { AppState } from '../../../src/types/state.ts';
 
@@ -149,9 +150,9 @@ describe('encoded-stage layout equivalence', () => {
       const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linLayout);
 
       const nameToId = new Map(state.variables.map((v) => [v.name, v.id]));
-      const slotDtypes: string[] = [];
+      const slotFields: ChunkFieldLayout[][] = [];
       const traceModes: ChunkTraceMode[] = [];
-      lin.chunks.forEach((chunk) => {
+      lin.chunks.forEach((chunk, idx) => {
         const steps = state.interleaving === 'column'
           ? (state.fieldPipelines[nameToId.get(chunk.variables[0].variableName)!] ?? [])
           : state.chunkPipeline;
@@ -162,11 +163,15 @@ describe('encoded-stage layout equivalence', () => {
             ? 'uint8'
             : chunk.variables[0].dtype) as DtypeKey;
         const meta = encodedChunkMeta(steps, inputDtype);
-        slotDtypes.push(meta.slotDtype);
         traceModes.push(meta.traceMode);
+        const region = linLayout.regions[idx] as ChunkBlockRegion;
+        const slotSize = getDtype(meta.slotDtype as DtypeKey).size;
+        slotFields.push(region.fields.length === 1
+          ? [{ ...region.fields[0], dtype: meta.slotDtype, size: slotSize }]
+          : region.fields.map((f) => ({ ...f, dtype: meta.slotDtype })));
       });
 
-      const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, slotDtypes, traceModes);
+      const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, slotFields, traceModes);
       const reference = referenceStageTraces(state).get('encoded')!;
       expectTraceEquivalence(encLayout, { values: typed.typedVariableValues, format: 'typed' }, reference);
     });

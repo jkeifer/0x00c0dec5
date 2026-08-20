@@ -13,6 +13,7 @@ import type {
 } from '../types/pipeline.ts';
 import { STAGE_ORDER } from '../types/pipeline.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
+import { getDtype } from '../types/dtypes.ts';
 import type { LinearizationOrder } from './order.ts';
 import { generateValues } from './generate.ts';
 import { assignType } from './typeAssign.ts';
@@ -32,6 +33,8 @@ import {
   buildMetadataLayout,
   encodedChunkMeta,
   type ChunkTraceMode,
+  type ChunkFieldLayout,
+  type ChunkBlockRegion,
   type StageLayout,
   type ValueArray,
   type ValueSources,
@@ -357,14 +360,24 @@ export function computeEncodedStage(
   // fieldPipelines is keyed by Variable.id (D5); ChunkVariable only carries the
   // variable's name (the file format's key), so resolve name -> id here.
   const nameToId = new Map(variables.map((v) => [v.name, v.id]));
-  const slotDtypes: string[] = [];
+  const slotFields: ChunkFieldLayout[][] = [];
   const traceModes: ChunkTraceMode[] = [];
   const encodedChunks: EncodedChunk[] = chunks.map((chunk, idx) => {
     const linearized = linearizedChunks[idx];
     const { steps, inputDtype } = chunkCodecInput(chunk, interleaving, nameToId, fieldPipelines, chunkPipeline);
     const meta = encodedChunkMeta(steps, inputDtype);
-    slotDtypes.push(meta.slotDtype);
     traceModes.push(meta.traceMode);
+    const region = linearizedLayout.regions[idx] as ChunkBlockRegion;
+    const slotSize = getDtype(meta.slotDtype as DtypeKey).size;
+    slotFields.push(region.fields.length === 1
+      // single-field (column) chunk: the slot takes the pipeline's dtype AND
+      // width — a fixed-ratio transform narrows every slot (e.g. 4 float32
+      // bytes -> 2 int16 bytes).
+      ? [{ ...region.fields[0], dtype: meta.slotDtype, size: slotSize }]
+      // multi-field (row) chunk: dtype relabel only, widths untouched
+      // (pre-prefix behavior — Task 8 replaces this branch with per-variable
+      // prefix fields).
+      : region.fields.map((f) => ({ ...f, dtype: meta.slotDtype })));
     const result = runCodecPipeline(linearized.bytes, steps, inputDtype, byteOrder);
     return interleaving === 'column'
       ? {
@@ -381,7 +394,7 @@ export function computeEncodedStage(
   });
 
   const encodedBytes = concatBytes(encodedChunks.map((ec) => ec.bytes));
-  const encodedLayout = buildEncodedLayout(linearizedLayout, encodedChunks, slotDtypes, traceModes);
+  const encodedLayout = buildEncodedLayout(linearizedLayout, encodedChunks, slotFields, traceModes);
   const codecWarnings = collectEncodedWarnings(variables, fieldPipelines, chunkPipeline, interleaving);
   return { stage: makeStage('Encoded', encodedBytes, encodedLayout), encodedChunks, codecWarnings };
 }

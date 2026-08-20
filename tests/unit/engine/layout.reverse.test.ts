@@ -7,11 +7,12 @@ import {
 import {
   buildLinearizedLayout, buildEncodedLayout, buildValueBlocksLayout, encodedChunkMeta, traceAt,
   byteRangesForTrace, chunkRegionsOf, elementInChunk, chunkIdForElement,
-  type StageLayout, type ValueSources, type ChunkTraceMode,
+  type StageLayout, type ValueSources, type ChunkTraceMode, type ChunkFieldLayout, type ChunkBlockRegion,
 } from '../../../src/engine/layout.ts';
 import { buildChunkRegions } from '../../../src/components/viewers/viewerUtils.ts';
 import { referenceStageTraces, referenceFileTraces } from '../helpers/referenceTraces.ts';
 import type { AppState } from '../../../src/types/state.ts';
+import { getDtype } from '../../../src/types/dtypes.ts';
 import type { DtypeKey, LogicalValue } from '../../../src/types/dtypes.ts';
 
 // A text variable exercises the variable-stride offsets path (same pattern as
@@ -71,9 +72,9 @@ function buildStages(c: MatrixCase) {
   const enc = computeEncodedStage(lin.chunks, lin.linearizedChunks, state.interleaving, state.variables, state.fieldPipelines, state.chunkPipeline, linLayout);
 
   const nameToId = new Map(state.variables.map((v) => [v.name, v.id]));
-  const slotDtypes: string[] = [];
+  const slotFields: ChunkFieldLayout[][] = [];
   const traceModes: ChunkTraceMode[] = [];
-  lin.chunks.forEach((chunk) => {
+  lin.chunks.forEach((chunk, idx) => {
     const steps = state.interleaving === 'column'
       ? (state.fieldPipelines[nameToId.get(chunk.variables[0].variableName)!] ?? [])
       : state.chunkPipeline;
@@ -84,10 +85,14 @@ function buildStages(c: MatrixCase) {
         ? 'uint8'
         : chunk.variables[0].dtype) as DtypeKey;
     const meta = encodedChunkMeta(steps, inputDtype);
-    slotDtypes.push(meta.slotDtype);
     traceModes.push(meta.traceMode);
+    const region = linLayout.regions[idx] as ChunkBlockRegion;
+    const slotSize = getDtype(meta.slotDtype as DtypeKey).size;
+    slotFields.push(region.fields.length === 1
+      ? [{ ...region.fields[0], dtype: meta.slotDtype, size: slotSize }]
+      : region.fields.map((f) => ({ ...f, dtype: meta.slotDtype })));
   });
-  const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, slotDtypes, traceModes);
+  const encLayout = buildEncodedLayout(linLayout, enc.encodedChunks, slotFields, traceModes);
 
   const files = computeFilesStage(state, enc.encodedChunks, typed.variableStats, encLayout);
 

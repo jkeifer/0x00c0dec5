@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computePipelineStages } from '../../../src/engine/pipelineCompute.ts';
-import { traceAt, byteRangesForTrace, encodedChunkMeta } from '../../../src/engine/layout.ts';
+import { traceAt, byteRangesForTrace, encodedChunkMeta, type ChunkBlockRegion } from '../../../src/engine/layout.ts';
 import { DEFAULT_STATE } from '../../../src/types/state.ts';
 import type { AppState } from '../../../src/types/state.ts';
 import type { CodecStep } from '../../../src/types/codecs.ts';
@@ -188,5 +188,78 @@ describe('Encoded stage shows the values its own bytes hold', () => {
   it('bit shuffle: degrades all the way to chunk-level', () => {
     const traces = tracePerByte([{ codec: 'bit-shuffle', params: {} }]);
     expect(new Set(traces.map((t) => t.traceId))).toEqual(new Set(['chunk:temp:0']));
+  });
+});
+
+// ─── Fixed-ratio slot geometry (Task 5) ────────────────────────────────────
+//
+// A fixed-ratio codec (scale-offset) narrows every slot's byte width, not
+// just its dtype label — 4 float32 elements (16 bytes) encode to 4 int16
+// slots (8 bytes). Unlike delta/byte-shuffle (size-preserving), the slot
+// geometry itself must shrink to match the pipeline's real output width.
+
+/** 4-element float32 variable, single column chunk — matches the brief's
+ *  fixture shape exactly (16 raw bytes -> 8 encoded bytes). */
+function stateWithScaleOffset(steps: CodecStep[]): AppState {
+  const v = { ...DEFAULT_STATE.variables[0], id: 'temp', name: 'temp' }; // storageDtype: float32
+  return {
+    ...DEFAULT_STATE,
+    shape: [4],
+    chunkShape: [4],
+    interleaving: 'column',
+    variables: [v],
+    fieldPipelines: { temp: steps },
+    chunkPipeline: [],
+  };
+}
+
+function encodedScaleOffset(steps: CodecStep[]) {
+  const result = computePipelineStages(stateWithScaleOffset(steps));
+  const stage = result.stages[3];
+  expect(stage.name).toBe('Encoded');
+  return { stage, sources: result.stageSources.get('encoded')! };
+}
+
+describe('fixed-ratio pipeline: slots take the post-pipeline dtype AND width', () => {
+  const steps: CodecStep[] = [
+    { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+  ];
+
+  it('encodedChunkMeta reports int16 for both outputDtype and slotDtype', () => {
+    const meta = encodedChunkMeta(steps, 'float32');
+    expect(meta).toEqual({ outputDtype: 'int16', slotDtype: 'int16', traceMode: 'value-preserving' });
+  });
+
+  it('the Encoded stage narrows to 8 bytes with int16 slot geometry', () => {
+    const { stage } = encodedScaleOffset(steps);
+    expect(stage.bytes.length).toBe(8); // 4 elements x 2 bytes, not 4 x 4
+    const region = stage.layout.regions[0] as ChunkBlockRegion;
+    expect(region.byteLength).toBe(8);
+    expect(region.fields).toEqual([{
+      variableName: 'temp', variableColor: DEFAULT_STATE.variables[0].color, dtype: 'int16', size: 2, offset: 0,
+    }]);
+  });
+
+  it('traceAt: element i sits at byte i*2, decodes int16 straight out of stage bytes', () => {
+    const { stage, sources } = encodedScaleOffset(steps);
+    const t0 = traceAt(stage.layout, 0, sources)!;
+    const t1 = traceAt(stage.layout, 2, sources)!;
+    expect(t0.traceId).toBe('temp:0');
+    expect(t1.traceId).toBe('temp:1');
+    expect(t0.byteCount).toBe(2);
+    expect(t1.byteCount).toBe(2);
+    expect(t0.dtype).toBe('int16');
+    // Stage bytes are the real encode output — decode int16 LE by hand and
+    // compare, rather than re-deriving the codec's own rounding.
+    const view = new DataView(stage.bytes.buffer, stage.bytes.byteOffset, stage.bytes.byteLength);
+    expect(Number(t0.displayValue)).toBe(view.getInt16(0, true));
+    expect(Number(t1.displayValue)).toBe(view.getInt16(2, true));
+  });
+
+  it('byteRangesForTrace inverts traceAt across the new (narrower) width', () => {
+    const { stage } = encodedScaleOffset(steps);
+    expect(byteRangesForTrace(stage.layout, 'temp:0')).toEqual([{ start: 0, end: 2 }]);
+    expect(byteRangesForTrace(stage.layout, 'temp:1')).toEqual([{ start: 2, end: 4 }]);
+    expect(byteRangesForTrace(stage.layout, 'temp:3')).toEqual([{ start: 6, end: 8 }]);
   });
 });

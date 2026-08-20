@@ -225,10 +225,13 @@ export function encodedChunkMeta(steps: CodecStep[], inputDtype: DtypeKey): Enco
  *  - 'chunk-level' (entropy, bit shuffle): the whole region degrades to one
  *    opaque span.
  *  - 'value-preserving' / 'positional': the linearized region is re-based to
- *    the encoded offset with field dtypes relabeled to the pipeline's slot
- *    dtype (NOT its output dtype — see EncodedChunkMeta; a positional chunk's
- *    bytes are uint8 planes, but the slot it draws is the pre-shuffle element
- *    a naive reader would still try to decode) — byte-size-preserving codecs keep the slot geometry either way.
+ *    the encoded offset with its fields replaced by the caller-supplied
+ *    `slotFields[i]` — the pipeline's slot dtype (NOT its output dtype — see
+ *    EncodedChunkMeta; a positional chunk's bytes are uint8 planes, but the
+ *    slot it draws is the pre-shuffle element a naive reader would still try
+ *    to decode) AND, for a fixed-ratio pipeline (e.g. scale-offset narrowing
+ *    float32 -> int16), the slot's narrowed byte width — a size-preserving
+ *    codec's slotFields carry the same size as the linearized region's.
  *    The mode carries the difference that matters: whether a slot still
  *    identifies its element ('value-preserving') or is merely the byte range
  *    a naive reader would decode as one ('positional'). traceAt reads both
@@ -236,7 +239,7 @@ export function encodedChunkMeta(steps: CodecStep[], inputDtype: DtypeKey): Enco
 export function buildEncodedLayout(
   linearizedLayout: StageLayout,
   encodedChunks: { chunkId: string; bytes: Uint8Array }[],
-  slotDtypes: string[],
+  slotFields: ChunkFieldLayout[][],
   traceModes: ChunkTraceMode[],
 ): StageLayout {
   const regions: LayoutRegion[] = [];
@@ -257,7 +260,7 @@ export function buildEncodedLayout(
       regions.push({
         ...r, start: cursor, byteLength: encBytes,
         mode: traceModes[i],
-        fields: r.fields.map((f) => ({ ...f, dtype: slotDtypes[i] })),
+        fields: slotFields[i],
       });
     }
     cursor += encBytes;
