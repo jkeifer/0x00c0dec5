@@ -1,7 +1,13 @@
 import type { CodecStep } from '../../types/codecs.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
-import { CODEC_REGISTRY, outputDtypeFor, stepWarnings, type CodecStepStats } from '../../engine/codecs.ts';
-import { DTYPE_REGISTRY, getDtype } from '../../types/dtypes.ts';
+import {
+  CODEC_REGISTRY,
+  outputDtypeFor,
+  resyncDtypeParams,
+  stepWarnings,
+  type CodecStepStats,
+} from '../../engine/codecs.ts';
+import { DTYPE_REGISTRY } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle, clampParamValue } from '../shared/controlStyles.ts';
 import { NumberInput } from '../shared/NumberInput.tsx';
@@ -71,15 +77,25 @@ export function CodecPipelineEditor({
   stepStats,
   inactiveFrom,
 }: CodecPipelineEditorProps) {
+  // Any structural change re-syncs the dtype-following params (elementSize,
+  // sourceDtype) from the dtype flowing into each step, so a reorder/toggle/
+  // remove never leaves them frozen at their add-time seed (the bug this
+  // component used to have — see `resyncDtypeParams`). Direct edits to those
+  // params deliberately bypass this (see `updateParam`) so the mismatch lesson
+  // still sticks.
+  function commit(newSteps: CodecStep[]) {
+    onChange(resyncDtypeParams(newSteps, inputDtype));
+  }
+
   function moveStep(index: number, direction: -1 | 1) {
     const newSteps = [...steps];
     const target = index + direction;
     [newSteps[index], newSteps[target]] = [newSteps[target], newSteps[index]];
-    onChange(newSteps);
+    commit(newSteps);
   }
 
   function removeStep(index: number) {
-    onChange(steps.filter((_, i) => i !== index));
+    commit(steps.filter((_, i) => i !== index));
   }
 
   function toggleStep(index: number) {
@@ -88,7 +104,7 @@ export function CodecPipelineEditor({
     const newSteps = steps.map((s, i) =>
       i === index ? { ...s, enabled: s.enabled === false } : s,
     );
-    onChange(newSteps);
+    commit(newSteps);
   }
 
   function updateParam(index: number, paramKey: string, value: number | string) {
@@ -96,7 +112,16 @@ export function CodecPipelineEditor({
       if (i !== index) return s;
       return { ...s, params: { ...s.params, [paramKey]: value } };
     });
-    onChange(newSteps);
+    // Editing a dtype-following param IS the user overriding it (e.g. a
+    // deliberately-wrong Byte Shuffle elementSize — the element-boundary
+    // lesson), so skip resync to let it stick. Every other param goes through
+    // commit: Scale/Offset's targetDtype changes the dtype flowing downstream,
+    // so downstream steps' dtype-following params must re-sync.
+    if (paramKey === 'elementSize' || paramKey === 'sourceDtype') {
+      onChange(newSteps);
+    } else {
+      commit(newSteps);
+    }
   }
 
   function addCodec(codecKey: string) {
@@ -106,45 +131,11 @@ export function CodecPipelineEditor({
     for (const [k, def] of Object.entries(codec.params)) {
       defaultParams[k] = def.default;
     }
-    // SW-7: seed any `elementSize` param from the dtype size at add time rather
-    // than the codec's static default (4) — a step added after, say, an int16
-    // variable should start out matching the element boundary instead of
-    // immediately showing a mismatch warning. Byte Shuffle and Delta both have
-    // one and it means the same thing in both: where elements begin.
-    //
-    // Seed from the running dtype at this point in the pipeline, not the
-    // variable's own: an earlier entropy codec or shuffle makes the stream
-    // uint8, and uint8 is one byte — which is the right element size for bytes
-    // that no longer have elements in them. That falls out of `outputDtypeFor`
-    // now that it degrades on `traceMode`; it needed a separate traceMode check
-    // back when a shuffle still claimed to emit its pre-shuffle dtype.
-    if ('elementSize' in codec.params) {
-      // Computed here rather than read off the component-level `runningDtypes`:
-      // that const lives past the empty-pipeline early return, so the first
-      // codec you ever add would hit its temporal dead zone.
-      const running = computeRunningDtypes(steps, inputDtype)[steps.length];
-      defaultParams.elementSize = getDtype(running).size;
-    }
-    // Same idea for `sourceDtype` (Scale/Offset's decode-side dtype, CLAUDE.md
-    // pitfall 3): seed it from the running dtype at add time rather than the
-    // codec's static default, so it starts out matching what's actually
-    // flowing into this step instead of immediately being wrong.
-    //
-    // Invariant: this is a one-time seed, not re-seeded on reorder — if a step
-    // moves earlier/later in the pipeline the running dtype at its new
-    // position can differ from what was seeded, and nothing here corrects it.
-    // That's safe for reversal: `reverseCodecPipeline` (decode.ts) walks the
-    // codec pipeline backward using the *forward-computed* dtype chain to
-    // determine reversal order, not the stored `sourceDtype` param, so a
-    // stale seed can't desync decode. And since Scale/Offset's
-    // `applicableTo` is float-only, the running dtype at any valid add site
-    // can only be a float width in practice — the seeded value is never
-    // anything else.
-    if ('sourceDtype' in codec.params) {
-      const running = computeRunningDtypes(steps, inputDtype)[steps.length];
-      defaultParams.sourceDtype = running;
-    }
-    onChange([...steps, { codec: codecKey, params: defaultParams }]);
+    // elementSize/sourceDtype defaults are placeholders — `commit`'s resync
+    // immediately re-derives them from the dtype flowing into the new step
+    // (uint8 → size 1 after an upstream entropy codec/shuffle; the variable's
+    // own dtype otherwise).
+    commit([...steps, { codec: codecKey, params: defaultParams }]);
   }
 
   if (steps.length === 0) {

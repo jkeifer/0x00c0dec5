@@ -786,6 +786,39 @@ export function outputDtypeFor(
   return codec.category === 'entropy' || codec.traceMode ? 'uint8' : inputDtype;
 }
 
+/**
+ * Re-derive the dtype-following params of every step from the dtype actually
+ * flowing into it, so a reorder, toggle, or upstream dtype change keeps them
+ * correct instead of frozen at add-time (the original bug: they were seeded
+ * once and never re-synced). `elementSize` (Delta/Byte Shuffle/Bit Shuffle) is
+ * the input element's byte width; `sourceDtype` (Scale/Offset) is the input
+ * dtype itself. Disabled steps are pass-throughs in the dtype flow (CLAUDE.md
+ * pitfall 3), matching `activeSteps`/`computeRunningDtypes`.
+ *
+ * ponytail: a deliberately-wrong `elementSize` (the Byte Shuffle "element
+ * boundary" lesson) survives only until the next structural change — direct
+ * edits to elementSize don't route through here, so setting a mismatch still
+ * sticks; restructuring around it re-syncs it.
+ */
+export function resyncDtypeParams(steps: CodecStep[], inputDtype: DtypeKey): CodecStep[] {
+  let dtype = inputDtype;
+  return steps.map((step) => {
+    const codec = CODEC_REGISTRY[step.codec];
+    if (!codec) return step;
+    const inDtype = dtype;
+    if (step.enabled !== false) dtype = outputDtypeFor(codec, dtype, step.params);
+    let params = step.params;
+    const size = getDtype(inDtype).size;
+    if ('elementSize' in codec.params && params.elementSize !== size) {
+      params = { ...params, elementSize: size };
+    }
+    if ('sourceDtype' in codec.params && params.sourceDtype !== inDtype) {
+      params = { ...params, sourceDtype: inDtype };
+    }
+    return params === step.params ? step : { ...step, params };
+  });
+}
+
 /** Final output dtype of an entire pipeline (active steps only). */
 export function pipelineOutputDtype(steps: CodecStep[], inputDtype: DtypeKey): DtypeKey {
   let dtype = inputDtype;
