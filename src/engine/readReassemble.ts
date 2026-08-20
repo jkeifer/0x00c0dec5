@@ -8,7 +8,7 @@ import type { ValueArray } from './layout.ts';
 import type { ChunkIndexEntry } from './metadata.ts';
 import { reverseCodecPipeline } from './decode.ts';
 import { reverseTypeAssignment } from './typeAssign.ts';
-import { CODEC_REGISTRY } from './codecs.ts';
+import { encodedByteLength } from './codecs.ts';
 import { coordsToFlatIndex, computeChunkGrid, enumerateChunkCoords } from './chunk.ts';
 import { orderCoordsOf, type LinearizationOrder } from './order.ts';
 import { stripMagic } from './readLocate.ts';
@@ -191,13 +191,6 @@ export function resolveChunkIndex(
   }
 
   if (interleaving === 'column') {
-    for (const varInfo of schema) {
-      const steps = fieldPipelines?.[varInfo.name] ?? [];
-      if (hasSizeChangingCodec(steps)) {
-        throw new NoChunkIndexError(`variable "${varInfo.name}" has a size-changing codec with no chunk index`);
-      }
-    }
-    const bytesPerElement = new Map(schema.map((v) => [v.name, getDtype(v.dtype).size]));
     const entries: ChunkIndexEntry[] = [];
     // Offset accumulates ACROSS variables: write.ts lays out a column-mode
     // single file variable-grouped (all of var A's chunks, then var B's), so
@@ -206,9 +199,14 @@ export function resolveChunkIndex(
     // and includeChunkIndex=false.)
     let offset = magicLength;
     for (const varInfo of schema) {
-      const elemSize = bytesPerElement.get(varInfo.name)!;
+      const steps = fieldPipelines?.[varInfo.name] ?? [];
+      const elemSize = getDtype(varInfo.dtype).size;
       for (const coords of coordsList) {
-        const size = chunkGeometry(coords, chunkShape, shape).elementCount * elemSize;
+        const raw = chunkGeometry(coords, chunkShape, shape).elementCount * elemSize;
+        const size = encodedByteLength(steps, varInfo.dtype, raw);
+        if (size === null) {
+          throw new NoChunkIndexError(`variable "${varInfo.name}" has a size-changing codec with no chunk index`);
+        }
         entries.push({ coords, offset, size, variableName: varInfo.name });
         offset += size;
       }
@@ -217,25 +215,19 @@ export function resolveChunkIndex(
   }
 
   const steps = chunkPipeline ?? [];
-  if (hasSizeChangingCodec(steps)) {
-    throw new NoChunkIndexError('row-mode chunk pipeline has a size-changing codec with no chunk index');
-  }
   const bytesPerElement = schema.reduce((sum, v) => sum + getDtype(v.dtype).size, 0);
   const entries: ChunkIndexEntry[] = [];
   let offset = magicLength;
   for (const coords of coordsList) {
-    const size = chunkGeometry(coords, chunkShape, shape).elementCount * bytesPerElement;
+    const raw = chunkGeometry(coords, chunkShape, shape).elementCount * bytesPerElement;
+    const size = encodedByteLength(steps, rowModeInputDtype(schema), raw);
+    if (size === null) {
+      throw new NoChunkIndexError('row-mode chunk pipeline has a size-changing codec with no chunk index');
+    }
     entries.push({ coords, offset, size });
     offset += size;
   }
   return entries;
-}
-
-/** Whether any step in a codec pipeline changes the encoded byte count
- * (category 'entropy' — rle/lz), determined from the metadata's own codec
- * specs, never from app config (the reader only ever sees the file). */
-export function hasSizeChangingCodec(steps: CodecStep[]): boolean {
-  return steps.some((step) => CODEC_REGISTRY[step.codec]?.category === 'entropy');
 }
 
 /** Reassemble all variables' values from their chunks, using `getChunkBytes`

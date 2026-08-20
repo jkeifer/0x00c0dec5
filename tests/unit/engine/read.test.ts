@@ -490,6 +490,176 @@ describe('readFile — Task 5: synthetic index, chunk order, reader selection', 
   });
 });
 
+describe('readFile — Task 6: fixed-ratio chunk-index synthesis & column round-trips', () => {
+  it('scale-offset column pipeline round-trips through write/read', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [4],
+      variables: [
+        {
+          id: 'temp', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+      ],
+      fieldPipelines: {
+        temp: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+      },
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const totalElements = state.shape.reduce((a, b) => a * b, 1);
+      const expected = generateValues('temperature', state.variables[0].logicalType, totalElements) as number[];
+      const actual = result.reconstructedValues.get('temperature')! as number[];
+      expect(actual.length).toBe(expected.length);
+      for (let i = 0; i < expected.length; i++) {
+        expect(actual[i]).toBeCloseTo(expected[i], 1);
+      }
+    }
+  });
+
+  it('chunk-index OFF + fixed-ratio (scale-offset) pipeline still reads: offsets derived from geometry x ratio', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [8],
+      chunkShape: [4],
+      variables: [
+        {
+          id: 'temp', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+      ],
+      fieldPipelines: {
+        temp: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+      },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: false, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, partitioning: 'single', metadataPlacement: 'footer' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const totalElements = state.shape.reduce((a, b) => a * b, 1);
+      const expected = generateValues('temperature', state.variables[0].logicalType, totalElements) as number[];
+      const actual = result.reconstructedValues.get('temperature')! as number[];
+      expect(actual.length).toBe(expected.length);
+      for (let i = 0; i < expected.length; i++) {
+        expect(actual[i]).toBeCloseTo(expected[i], 1);
+      }
+    }
+  });
+
+  it('chunk-index OFF + entropy codec (rle) still fails no-chunk-index', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [8],
+      chunkShape: [4],
+      variables: [
+        {
+          id: 'temp', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'integer', min: 0, max: 5, generation: 'random' },
+          typeAssignment: { storageDtype: 'uint8' },
+        },
+      ],
+      fieldPipelines: { temp: [{ codec: 'rle', params: {} }] },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: true, chunkIndex: false, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, partitioning: 'single', metadataPlacement: 'footer' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.reason).toBe('no-chunk-index');
+    }
+  });
+
+  it('codecs group OFF + scale-offset hard-fails on byte-count mismatch (decode-error)', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [4],
+      variables: [
+        {
+          id: 'temp', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+      ],
+      fieldPipelines: {
+        temp: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+      },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: false, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.reason).toBe('decode-error');
+    }
+  });
+
+  it('codecs group OFF + quantize reads successfully with the quantized values (identity decode)', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [4],
+      variables: [
+        {
+          id: 'temp', name: 'temperature', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 3, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+      ],
+      fieldPipelines: {
+        temp: [{ codec: 'quantize', params: { digits: 1 } }],
+      },
+      metadata: {
+        ...DEFAULT_STATE.metadata,
+        enabled: true,
+        include: { schema: true, layout: true, codecs: false, chunkIndex: true, descriptive: true, endianness: true },
+      },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const totalElements = state.shape.reduce((a, b) => a * b, 1);
+      const rawValues = generateValues('temperature', state.variables[0].logicalType, totalElements) as number[];
+      // quantize rounds to 1 digit but is size/dtype-preserving with identity
+      // decode: the stored (and thus reconstructed) values ARE the quantized
+      // originals, not the raw pre-quantize values.
+      const expectedQuantized = rawValues.map((v) => Math.round(v * 10) / 10);
+      const actual = result.reconstructedValues.get('temperature')! as number[];
+      expect(actual.length).toBe(expectedQuantized.length);
+      for (let i = 0; i < expectedQuantized.length; i++) {
+        expect(actual[i]).toBeCloseTo(expectedQuantized[i], 4);
+      }
+    }
+  });
+});
+
 describe('readFile — JSON and binary metadata formats', () => {
   it('reads JSON metadata successfully', () => {
     const state = deepMerge(DEFAULT_STATE, {
