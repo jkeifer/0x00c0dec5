@@ -19,6 +19,7 @@ import {
   makeSingleFileChunkReader,
   makePerChunkFileReader,
   rowModeInputDtype,
+  rowModeEncodedSchema,
   NoChunkIndexError,
 } from './readReassemble.ts';
 
@@ -284,8 +285,19 @@ export function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructur
   if (codecPipelinesStr) {
     const parsed = JSON.parse(codecPipelinesStr);
     if (Array.isArray(parsed)) {
+      // Bare array (old row-mode files): chunk pipeline only, no prefixes.
       chunkPipeline = parsed;
+    } else if (Array.isArray(parsed.chunk) && parsed.fields && typeof parsed.fields === 'object') {
+      // Row-mode {chunk, fields} envelope: structured prefixes + shared
+      // chunk pipeline. A column dataset could in theory have variables named
+      // 'chunk'/'fields', so this both-keys-and-right-shapes guard (an array
+      // `chunk` AND an object `fields`) is the disambiguator — a column
+      // by-name object maps names to arrays, never `chunk` to an array beside
+      // a `fields` object.
+      chunkPipeline = parsed.chunk;
+      fieldPipelines = parsed.fields;
     } else {
+      // Column mode: plain by-name object of field pipelines.
       fieldPipelines = parsed;
     }
   }
@@ -473,9 +485,20 @@ export function computeCodecLossyVariables(
       }
     }
   } else {
-    const steps = chunkPipeline ?? [];
-    const inputDtype = rowModeInputDtype(schema);
-    if (isPipelineLossy(steps, inputDtype)) {
+    // Row mode: each variable's structured prefix is applied per-variable
+    // before interleaving, so a lossy prefix marks only that variable. The
+    // shared chunk pipeline runs on the post-prefix interleaved bytes; if it
+    // is lossy there is no way to isolate one variable's contribution, so it
+    // marks all.
+    const encSchema = rowModeEncodedSchema(schema, fieldPipelines);
+    for (const varInfo of schema) {
+      const prefix = fieldPipelines?.[varInfo.name] ?? [];
+      if (isPipelineLossy(prefix, varInfo.dtype)) {
+        lossy.add(varInfo.name);
+      }
+    }
+    const chunkSteps = chunkPipeline ?? [];
+    if (isPipelineLossy(chunkSteps, rowModeInputDtype(encSchema))) {
       for (const varInfo of schema) {
         lossy.add(varInfo.name);
       }

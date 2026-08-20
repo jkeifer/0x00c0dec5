@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFile, parseStructure } from '../../../src/engine/read.ts';
 import { computePipelineStages } from '../../../src/hooks/usePipeline.ts';
-import { DEFAULT_STATE, type AppState } from '../../../src/types/state.ts';
+import { DEFAULT_STATE, type AppState, type Variable } from '../../../src/types/state.ts';
 import { generateValues } from '../../../src/engine/generate.ts';
 import { hexToBytes } from '../../../src/engine/bytes.ts';
 import type { MetadataEntry } from '../../../src/engine/metadata.ts';
@@ -153,6 +153,226 @@ describe('readFile — row mode roundtrip', () => {
           expect(actual![i]).toBeCloseTo(expected[i] as number, 4);
         }
       }
+    }
+  });
+});
+
+describe('readFile — row mode structured prefix (Task 9)', () => {
+  const ALL_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
+
+  it('row-mode prefix round-trips: scale-offset per variable + entropy on the chunk', () => {
+    // temp: float32 storage with a scale-offset prefix (→ int16); count: int32 bare.
+    // Chunk pipeline [rle] (size-changing entropy) → needs a real chunk index.
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      interleaving: 'row',
+      variables: [
+        {
+          id: 'temp', name: 'temp', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+        {
+          id: 'count', name: 'count', color: '#61afef',
+          logicalType: { type: 'integer', min: 0, max: 1000, generation: 'random' },
+          typeAssignment: { storageDtype: 'int32' },
+        },
+      ],
+      fieldPipelines: {
+        temp: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+        count: [],
+      },
+      chunkPipeline: [{ codec: 'rle', params: {} }],
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const total = state.shape.reduce((a, b) => a * b, 1);
+      const expTemp = generateValues('temp', state.variables[0].logicalType, total) as number[];
+      const expCount = generateValues('count', state.variables[1].logicalType, total) as number[];
+      const actTemp = result.reconstructedValues.get('temp')! as number[];
+      const actCount = result.reconstructedValues.get('count')! as number[];
+      for (let i = 0; i < total; i++) {
+        expect(actTemp[i]).toBeCloseTo(expTemp[i], 1);
+        expect(actCount[i]).toBe(expCount[i]);
+      }
+    }
+  });
+
+  it('avroesque shape: prefixes only, empty chunk pipeline', () => {
+    const mkVar = (id: string): Variable => ({
+      id, name: id, color: '#e06c75',
+      logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+      typeAssignment: { storageDtype: 'float32' },
+    });
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      interleaving: 'row',
+      variables: [mkVar('a'), mkVar('b'), mkVar('c')],
+      fieldPipelines: {
+        a: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+        b: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+        c: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+      },
+      chunkPipeline: [],
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const total = state.shape.reduce((a, b) => a * b, 1);
+      for (const v of state.variables) {
+        const exp = generateValues(v.name, v.logicalType, total) as number[];
+        const act = result.reconstructedValues.get(v.name)! as number[];
+        for (let i = 0; i < total; i++) expect(act[i]).toBeCloseTo(exp[i], 1);
+      }
+    }
+  });
+
+  it('row-mode chunk-index OFF with fixed-ratio prefixes derives offsets', () => {
+    // Two vars, scale-offset prefix on each, no entropy anywhere → record width
+    // is the post-prefix sum, offsets derivable from geometry.
+    const mkVar = (id: string): Variable => ({
+      id, name: id, color: '#e06c75',
+      logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+      typeAssignment: { storageDtype: 'float32' },
+    });
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [16],
+      chunkShape: [8],
+      interleaving: 'row',
+      variables: [mkVar('a'), mkVar('b')],
+      fieldPipelines: {
+        a: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+        b: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+      },
+      chunkPipeline: [],
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE, chunkIndex: false } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const total = state.shape.reduce((a, b) => a * b, 1);
+      for (const v of state.variables) {
+        const exp = generateValues(v.name, v.logicalType, total) as number[];
+        const act = result.reconstructedValues.get(v.name)! as number[];
+        for (let i = 0; i < total; i++) expect(act[i]).toBeCloseTo(exp[i], 1);
+      }
+    }
+  });
+
+  it('cog-esque shape: single float32 var, chunkPipeline [scale-offset, delta], chunkIndex OFF derives offsets', () => {
+    // Deferred review item: a fixed-ratio step lives in the CHUNK pipeline
+    // (not a prefix), no entropy, chunkIndex off → offsets derived through the
+    // ratio (record → int16 stream, delta preserving).
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [16],
+      chunkShape: [8],
+      interleaving: 'row',
+      variables: [
+        {
+          id: 'elev', name: 'elev', color: '#e06c75',
+          logicalType: { type: 'decimal', min: 0, max: 3000, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+      ],
+      fieldPipelines: { elev: [] },
+      chunkPipeline: [
+        { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+        { codec: 'delta', params: { elementSize: 2 } },
+      ],
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE, chunkIndex: false } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const total = state.shape.reduce((a, b) => a * b, 1);
+      const exp = generateValues('elev', state.variables[0].logicalType, total) as number[];
+      const act = result.reconstructedValues.get('elev')! as number[];
+      for (let i = 0; i < total; i++) expect(act[i]).toBeCloseTo(exp[i], 1);
+    }
+  });
+
+  it('row-mode codecs group OFF with a fixed-ratio prefix hard-fails on byte count', () => {
+    // temp: float32→int16 prefix (2 bytes), count: int32 bare (4 bytes) →
+    // records are 6 bytes; codecs off makes the reader assume schema widths
+    // (4 + 4 = 8), so the byte count check fails → decode-error.
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      interleaving: 'row',
+      variables: [
+        {
+          id: 'temp', name: 'temp', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+        {
+          id: 'count', name: 'count', color: '#61afef',
+          logicalType: { type: 'integer', min: 0, max: 1000, generation: 'random' },
+          typeAssignment: { storageDtype: 'int32' },
+        },
+      ],
+      fieldPipelines: {
+        temp: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+        count: [],
+      },
+      chunkPipeline: [],
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE, codecs: false } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.reason).toBe('decode-error');
+  });
+
+  it('row-mode prefix lossiness marks only the prefixed variable', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      interleaving: 'row',
+      variables: [
+        {
+          id: 'temp', name: 'temp', color: '#e06c75',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+        {
+          id: 'count', name: 'count', color: '#61afef',
+          logicalType: { type: 'integer', min: 0, max: 1000, generation: 'random' },
+          typeAssignment: { storageDtype: 'int32' },
+        },
+      ],
+      fieldPipelines: {
+        temp: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+        count: [],
+      },
+      chunkPipeline: [],
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.lossyVariables.has('temp')).toBe(true);
+      expect(result.lossyVariables.has('count')).toBe(false);
     }
   });
 });
