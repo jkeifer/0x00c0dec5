@@ -19,6 +19,12 @@ interface CodecPipelineEditorProps {
    *  by index — worker-computed, summed across chunks. Renders a lossy badge
    *  next to a step whose clipped+rounded > 0; absent/null entries render none. */
   stepStats?: (CodecStepStats | null)[];
+  /** Task 11: row-mode per-variable editors pass the index of the first step
+   *  that can't run per-variable (splitStructuredPrefix's remainder start).
+   *  Steps at/after this index render dimmed (opacity 0.45) and the first one
+   *  gets an explanatory note. Absent, or >= steps.length, renders nothing
+   *  special (column mode, or an all-structured row-mode pipeline). */
+  inactiveFrom?: number;
 }
 
 const btnStyle: React.CSSProperties = {
@@ -63,6 +69,7 @@ export function CodecPipelineEditor({
   variableSlot = 'chunk',
   runtimeStatus = 'ready',
   stepStats,
+  inactiveFrom,
 }: CodecPipelineEditorProps) {
   function moveStep(index: number, direction: -1 | 1) {
     const newSteps = [...steps];
@@ -118,6 +125,14 @@ export function CodecPipelineEditor({
       const running = computeRunningDtypes(steps, inputDtype)[steps.length];
       defaultParams.elementSize = getDtype(running).size;
     }
+    // Same idea for `sourceDtype` (Scale/Offset's decode-side dtype, CLAUDE.md
+    // pitfall 3): seed it from the running dtype at add time rather than the
+    // codec's static default, so it starts out matching what's actually
+    // flowing into this step instead of immediately being wrong.
+    if ('sourceDtype' in codec.params) {
+      const running = computeRunningDtypes(steps, inputDtype)[steps.length];
+      defaultParams.sourceDtype = running;
+    }
     onChange([...steps, { codec: codecKey, params: defaultParams }]);
   }
 
@@ -150,10 +165,11 @@ export function CodecPipelineEditor({
         // can't express (it never sees step params).
         const warnings = stepWarnings([step], prevDtype);
         const applicable = warnings.length === 0;
+        const inactive = inactiveFrom !== undefined && i >= inactiveFrom;
 
         return (
+          <div key={i}>
           <div
-            key={i}
             data-testid={`codec-step-${variableSlot}-${i}`}
             style={{
               background: colors.surfaceInput,
@@ -163,7 +179,7 @@ export function CodecPipelineEditor({
               display: 'flex',
               flexDirection: 'column',
               gap: spacing.xs,
-              opacity: enabled ? 1 : 0.45,
+              opacity: enabled && !inactive ? 1 : 0.45,
             }}
           >
             {/* Header row */}
@@ -272,6 +288,21 @@ export function CodecPipelineEditor({
                 )}
               </div>
             ))}
+          </div>
+          {inactive && i === inactiveFrom && (
+            <div
+              data-testid={`codec-row-inactive-note-${variableSlot}`}
+              style={{
+                fontSize: fontSizes.xs,
+                color: colors.textTertiary,
+                fontStyle: 'italic',
+                padding: `0 ${spacing.xs}px`,
+              }}
+            >
+              inactive in row mode — output past this step has no per-element structure to
+              interleave
+            </div>
+          )}
           </div>
         );
       })}

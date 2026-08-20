@@ -3,6 +3,7 @@ import type { CodecStep } from '../../types/codecs.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
 import { DTYPE_REGISTRY } from '../../types/dtypes.ts';
 import type { CodecStepStats } from '../../engine/codecs.ts';
+import { splitStructuredPrefix, pipelineOutputDtype } from '../../engine/codecs.ts';
 import { CodecPipelineEditor } from './CodecPipelineEditor.tsx';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 
@@ -79,15 +80,24 @@ export function CodecSection({
     );
   }
 
-  // Row mode
-  const inputDtype: DtypeKey = mixedDtypes
+  // Row mode. Each variable's own field pipeline still runs, but only its
+  // maximal leading run of element-structured steps (splitStructuredPrefix) —
+  // anything after that has no per-element structure left to interleave, so
+  // it can't run per-variable and sits inactive until interleaving switches
+  // back to column. The chunk editor picks up from there, on whatever dtype
+  // each variable's prefix leaves it in.
+  const postPrefixDtypes = variables.map((v) =>
+    pipelineOutputDtype(
+      splitStructuredPrefix(fieldPipelines[v.id] ?? []).prefix,
+      v.typeAssignment.storageDtype,
+    ),
+  );
+  const mixedPostPrefixDtypes = new Set(postPrefixDtypes).size > 1;
+  const inputDtype: DtypeKey = mixedPostPrefixDtypes
     ? 'uint8'
-    : variables.length > 0
-      ? variables[0].typeAssignment.storageDtype
+    : postPrefixDtypes.length > 0
+      ? postPrefixDtypes[0]
       : 'uint8';
-  const preservedFieldPipelineCount = Object.values(fieldPipelines).filter(
-    (steps) => steps.length > 0,
-  ).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
@@ -101,9 +111,8 @@ export function CodecSection({
           color: colors.textSecondary,
         }}
       >
-        Row mode: a single codec pipeline is applied to all interleaved data.
-        {preservedFieldPipelineCount > 0 &&
-          ` ${preservedFieldPipelineCount} per-field pipeline${preservedFieldPipelineCount === 1 ? '' : 's'} preserved, inactive in row mode.`}
+        Row mode: each variable's structured codec steps still run per-variable; anything after
+        that (and the shared chunk pipeline below) applies to all interleaved data.
       </div>
       {mixedDtypes && (
         <div
@@ -120,6 +129,40 @@ export function CodecSection({
           element size will produce garbled output.
         </div>
       )}
+      {variables.map((v) => {
+        const steps = fieldPipelines[v.id] ?? [];
+        const inactiveFrom = steps.length - splitStructuredPrefix(steps).remainder.length;
+        return (
+          <div key={v.id} style={{ display: 'flex', flexDirection: 'column', gap: spacing.xs }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
+              <div
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: v.color,
+                  flexShrink: 0,
+                }}
+              />
+              <span style={{ fontSize: fontSizes.sm, color: colors.textPrimary }}>
+                {v.name || '(unnamed)'}
+              </span>
+              <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
+                {DTYPE_REGISTRY[v.typeAssignment.storageDtype]?.label ?? v.typeAssignment.storageDtype}
+              </span>
+            </div>
+            <CodecPipelineEditor
+              steps={steps}
+              inputDtype={v.typeAssignment.storageDtype}
+              onChange={(newSteps) => onFieldPipelineChange(v.id, newSteps)}
+              variableSlot={v.name}
+              runtimeStatus={runtimeStatus}
+              stepStats={codecStats?.[v.id]}
+              inactiveFrom={inactiveFrom}
+            />
+          </div>
+        );
+      })}
       <CodecPipelineEditor
         steps={chunkPipeline}
         inputDtype={inputDtype}
