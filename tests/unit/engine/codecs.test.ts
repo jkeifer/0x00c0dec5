@@ -11,7 +11,7 @@ import {
 } from '../../../src/engine/codecs.ts';
 import { reverseCodecPipeline } from '../../../src/engine/decode.ts';
 import { valuesToBytes, bytesToValues } from '../../../src/engine/elements.ts';
-import type { CodecStep } from '../../../src/types/codecs.ts';
+import type { CodecStep, CodecDefinition } from '../../../src/types/codecs.ts';
 
 describe('codec registry', () => {
   it('contains delta, zigzag, byte-shuffle, bit-shuffle, dictionary, rle, and the pyodide-backed real codecs', () => {
@@ -716,5 +716,20 @@ describe('codec metadata & dtype flow', () => {
     expect(encodedByteLength([], 'float64', 80)).toBe(80);
     // disabled variable-size step is inert
     expect(encodedByteLength([{ codec: 'rle', params: {}, enabled: false }], 'int16', 64)).toBe(64);
+  });
+  it('runCodecPipeline and reverseCodecPipeline forward byteOrder to the codec', () => {
+    const seen: string[] = [];
+    const probe: CodecDefinition = {
+      key: 'probe', label: 'Probe', category: 'reordering', sizeEffect: 'preserving',
+      description: '', params: {}, applicableTo: () => true, isLossy: () => false,
+      encode: (bytes, dt, _p, bo) => { seen.push(`enc:${bo}`); return { bytes, outputDtype: dt }; },
+      decode: (bytes, dt, _p, bo) => { seen.push(`dec:${bo}`); return { bytes, outputDtype: dt }; },
+    };
+    CODEC_REGISTRY['probe'] = probe;
+    try {
+      runCodecPipeline(new Uint8Array(4), [{ codec: 'probe', params: {} }], 'int16', 'big');
+      reverseCodecPipeline(new Uint8Array(4), [{ codec: 'probe', params: {} }], 'int16', 'big');
+      expect(seen).toEqual(['enc:big', 'dec:big']);
+    } finally { delete CODEC_REGISTRY['probe']; }
   });
 });

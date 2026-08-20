@@ -277,7 +277,7 @@ export function reconstructValues(
           const expectedBytes = chunkGeometry(entry.coords, chunkShape, shape).elementCount * getDtype(varInfo.dtype).size;
           checkAssumedIdentitySize(chunkBytes.length, expectedBytes, varInfo.name, entry.coords);
         }
-        const decoded = reverseCodecPipeline(chunkBytes, steps, varInfo.dtype);
+        const decoded = reverseCodecPipeline(chunkBytes, steps, varInfo.dtype, byteOrder);
         const chunkValues = bytesToValues(decoded.bytes, decoded.outputDtype as DtypeKey, byteOrder);
         scatterChunkValues(values, chunkValues, entry.coords, chunkShape, shape, linearization);
       }
@@ -303,7 +303,7 @@ export function reconstructValues(
         const expectedBytes = chunkGeometry(entry.coords, chunkShape, shape).elementCount * bytesPerElement;
         checkAssumedIdentitySize(chunkBytes.length, expectedBytes, undefined, entry.coords);
       }
-      const decoded = reverseCodecPipeline(chunkBytes, steps, inputDtype);
+      const decoded = reverseCodecPipeline(chunkBytes, steps, inputDtype, byteOrder);
       const chunkElementN = chunkGeometry(entry.coords, chunkShape, shape).elementCount;
       const perVarChunkValues = deinterleaveRowChunk(decoded.bytes, schema, chunkElementN, byteOrder);
       for (const varInfo of schema) {

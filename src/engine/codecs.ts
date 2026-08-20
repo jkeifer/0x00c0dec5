@@ -704,6 +704,7 @@ export function runCodecPipeline(
   inputBytes: Uint8Array,
   steps: CodecStep[],
   inputDtype: DtypeKey,
+  byteOrder: 'little' | 'big' = 'little',
 ): CodecPipelineResult {
   let currentBytes = inputBytes;
   let currentDtype: DtypeKey = inputDtype;
@@ -712,7 +713,7 @@ export function runCodecPipeline(
     const codec = CODEC_REGISTRY[step.codec];
     if (!codec) continue;
 
-    const result = codec.encode(currentBytes, currentDtype, step.params);
+    const result = codec.encode(currentBytes, currentDtype, step.params, byteOrder);
     currentBytes = result.bytes;
     currentDtype = result.outputDtype as DtypeKey;
   }

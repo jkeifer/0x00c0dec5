@@ -15,6 +15,7 @@ export function reverseCodecPipeline(
   encodedBytes: Uint8Array,
   steps: CodecStep[],
   originalDtype: DtypeKey,
+  byteOrder: 'little' | 'big' = 'little',
 ): { bytes: Uint8Array; outputDtype: string } {
   steps = activeSteps(steps);
   if (steps.length === 0) {
@@ -39,7 +40,7 @@ export function reverseCodecPipeline(
     const codec = CODEC_REGISTRY[step.codec];
     if (!codec) continue;
 
-    bytes = codec.decode(bytes, decodeDtype, step.params).bytes;
+    bytes = codec.decode(bytes, decodeDtype, step.params, byteOrder).bytes;
     // Undoing step i puts the stream back in the state it was in before step i
     // ran, whatever that was — the chain already knows. (This replaces an
     // entropy-only special case that happened to agree with `result.outputDtype`

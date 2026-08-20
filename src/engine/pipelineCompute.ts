@@ -352,6 +352,7 @@ export function computeEncodedStage(
   fieldPipelines: Record<string, CodecStep[]>,
   chunkPipeline: CodecStep[],
   linearizedLayout: StageLayout,
+  byteOrder: 'little' | 'big' = 'little',
 ): EncodedStageResult {
   // fieldPipelines is keyed by Variable.id (D5); ChunkVariable only carries the
   // variable's name (the file format's key), so resolve name -> id here.
@@ -364,7 +365,7 @@ export function computeEncodedStage(
     const meta = encodedChunkMeta(steps, inputDtype);
     slotDtypes.push(meta.slotDtype);
     traceModes.push(meta.traceMode);
-    const result = runCodecPipeline(linearized.bytes, steps, inputDtype);
+    const result = runCodecPipeline(linearized.bytes, steps, inputDtype, byteOrder);
     return interleaving === 'column'
       ? {
         chunkId: linearized.chunkId,
@@ -611,6 +612,7 @@ export function computePipelineStages(
     state.fieldPipelines,
     state.chunkPipeline,
     linearized.stage.layout,
+    state.byteOrder,
   ));
   const metadata = timed('metadata', () => computeMetadataStage(state, encoded.encodedChunks, typed.variableStats));
   const files = timed('write', () => computeFilesStage(state, encoded.encodedChunks, typed.variableStats, encoded.stage.layout));
@@ -814,6 +816,7 @@ export function createPipelineComputer(): (
         state.fieldPipelines,
         state.chunkPipeline,
         linearized.stage.layout,
+        state.byteOrder,
       ),
     );
     const encoded = report('encoded', t0, encodedM);
