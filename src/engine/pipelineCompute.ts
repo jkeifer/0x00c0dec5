@@ -19,7 +19,7 @@ import { generateValues } from './generate.ts';
 import { assignType } from './typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid } from './chunk.ts';
 import { linearizeChunk } from './linearize.ts';
-import { runCodecPipeline, shannonEntropy, stepWarnings, splitStructuredPrefix, pipelineOutputDtype } from './codecs.ts';
+import { runCodecPipeline, shannonEntropy, stepWarnings, splitStructuredPrefix, pipelineOutputDtype, type CodecStepStats } from './codecs.ts';
 import { collectMetadata, serializeMetadata } from './metadata.ts';
 import { decodeMetadataBinary } from './metadataBinary.ts';
 import { assembleFiles } from './write.ts';
@@ -297,6 +297,15 @@ export interface EncodedStageResult {
    * this zip). Mirrors CodecSection's per-mode dtype/pipeline resolution.
    */
   codecWarnings: string[];
+  /**
+   * Task 10 (codec unification): per-step transform stats (clipped/rounded),
+   * summed across every chunk that ran through a given pipeline. Keyed by
+   * `Variable.id` for column-mode field pipelines AND row-mode structured
+   * prefixes (padded to the full field pipeline's length — remainder indices
+   * stay null, since only the prefix ever runs per-variable), and by the
+   * literal string `'chunk'` for the row-mode chunk pipeline.
+   */
+  codecStats: Record<string, (CodecStepStats | null)[]>;
 }
 
 function collectEncodedWarnings(
@@ -333,7 +342,7 @@ function encodeColumnChunk(
   fieldPipelines: Record<string, CodecStep[]>,
   region: ChunkBlockRegion,
   byteOrder: 'little' | 'big',
-): { encoded: EncodedChunk; fields: ChunkFieldLayout[]; traceMode: ChunkTraceMode } {
+): { encoded: EncodedChunk; fields: ChunkFieldLayout[]; traceMode: ChunkTraceMode; variableId?: string; stepStats: (CodecStepStats | null)[] } {
   const cv = chunk.variables[0];
   const variableId = nameToId.get(cv?.variableName ?? '');
   const steps = (variableId !== undefined ? fieldPipelines[variableId] : undefined) ?? [];
@@ -347,6 +356,8 @@ function encodeColumnChunk(
     encoded: { chunkId: linearized.chunkId, coords: linearized.coords, bytes: result.bytes, variableName: linearized.variableName },
     fields,
     traceMode: meta.traceMode,
+    variableId,
+    stepStats: result.stepStats,
   };
 }
 
@@ -364,14 +375,24 @@ function encodeRowChunk(
   fieldPipelines: Record<string, CodecStep[]>,
   chunkPipeline: CodecStep[],
   byteOrder: 'little' | 'big',
-): { encoded: EncodedChunk; fields: ChunkFieldLayout[]; traceMode: ChunkTraceMode } {
+): {
+  encoded: EncodedChunk;
+  fields: ChunkFieldLayout[];
+  traceMode: ChunkTraceMode;
+  prefixStats: { variableId: string; stepStats: (CodecStepStats | null)[] }[];
+  chunkStepStats: (CodecStepStats | null)[];
+} {
   const prefixOut = chunk.variables.map((cv) => {
     const varId = nameToId.get(cv.variableName);
-    const { prefix } = splitStructuredPrefix((varId !== undefined ? fieldPipelines[varId] : undefined) ?? []);
+    const fullSteps = (varId !== undefined ? fieldPipelines[varId] : undefined) ?? [];
+    const { prefix } = splitStructuredPrefix(fullSteps);
     const raw = valuesToBytes(cv.values, cv.dtype as DtypeKey, byteOrder);
     const res = runCodecPipeline(raw, prefix, cv.dtype as DtypeKey, byteOrder);
     const dtype = res.outputDtype as DtypeKey;
-    return { bytes: res.bytes, dtype, size: getDtype(dtype).size, name: cv.variableName, color: cv.variableColor };
+    return {
+      bytes: res.bytes, dtype, size: getDtype(dtype).size, name: cv.variableName, color: cv.variableColor,
+      variableId: varId, stepStats: res.stepStats, fullStepsLength: fullSteps.length,
+    };
   });
 
   // Empty-variables chunk: 0 elements, 0-size record — an empty valid output.
@@ -405,10 +426,23 @@ function encodeRowChunk(
     return f;
   });
 
+  // Prefix stepStats index into the prefix only (0..prefix.length-1); pad to
+  // the FULL field pipeline's length so a UI keyed on the full step list
+  // lines up (the non-structured remainder never runs per-variable in row
+  // mode, so its indices stay null).
+  const prefixStats = prefixOut
+    .filter((p) => p.variableId !== undefined)
+    .map((p) => ({
+      variableId: p.variableId!,
+      stepStats: [...p.stepStats, ...Array<null>(p.fullStepsLength - p.stepStats.length).fill(null)],
+    }));
+
   return {
     encoded: { chunkId: linearized.chunkId, coords: linearized.coords, bytes: result.bytes },
     fields,
     traceMode: meta.traceMode,
+    prefixStats,
+    chunkStepStats: result.stepStats,
   };
 }
 
@@ -427,21 +461,42 @@ export function computeEncodedStage(
   const nameToId = new Map(variables.map((v) => [v.name, v.id]));
   const slotFields: ChunkFieldLayout[][] = [];
   const traceModes: ChunkTraceMode[] = [];
+  // Task 10: per-step stats summed across every chunk, keyed by variable id
+  // (column pipelines and row prefixes) or 'chunk' (the row chunk pipeline).
+  const codecStats: Record<string, (CodecStepStats | null)[]> = {};
+  const addStats = (key: string, stepStats: (CodecStepStats | null)[]) => {
+    const acc = codecStats[key] ?? (codecStats[key] = stepStats.map(() => null));
+    stepStats.forEach((s, i) => {
+      if (!s) return;
+      const a = acc[i] ?? (acc[i] = { clipped: 0, rounded: 0 });
+      a.clipped += s.clipped;
+      a.rounded += s.rounded;
+    });
+  };
   const encodedChunks: EncodedChunk[] = chunks.map((chunk, idx) => {
     const linearized = linearizedChunks[idx];
     const region = linearizedLayout.regions[idx] as ChunkBlockRegion;
-    const { encoded, fields, traceMode } = interleaving === 'column'
-      ? encodeColumnChunk(chunk, linearized, nameToId, fieldPipelines, region, byteOrder)
-      : encodeRowChunk(chunk, linearized, nameToId, fieldPipelines, chunkPipeline, byteOrder);
+    if (interleaving === 'column') {
+      const { encoded, fields, traceMode, variableId, stepStats } =
+        encodeColumnChunk(chunk, linearized, nameToId, fieldPipelines, region, byteOrder);
+      slotFields.push(fields);
+      traceModes.push(traceMode);
+      if (variableId !== undefined) addStats(variableId, stepStats);
+      return encoded;
+    }
+    const { encoded, fields, traceMode, prefixStats, chunkStepStats } =
+      encodeRowChunk(chunk, linearized, nameToId, fieldPipelines, chunkPipeline, byteOrder);
     slotFields.push(fields);
     traceModes.push(traceMode);
+    for (const p of prefixStats) addStats(p.variableId, p.stepStats);
+    addStats('chunk', chunkStepStats);
     return encoded;
   });
 
   const encodedBytes = concatBytes(encodedChunks.map((ec) => ec.bytes));
   const encodedLayout = buildEncodedLayout(linearizedLayout, encodedChunks, slotFields, traceModes);
   const codecWarnings = collectEncodedWarnings(variables, fieldPipelines, chunkPipeline, interleaving);
-  return { stage: makeStage('Encoded', encodedBytes, encodedLayout), encodedChunks, codecWarnings };
+  return { stage: makeStage('Encoded', encodedBytes, encodedLayout), encodedChunks, codecWarnings, codecStats };
 }
 
 // ─── Stage 5: Metadata ──────────────────────────────────────────────────────
@@ -588,6 +643,8 @@ export interface PipelineResult {
    *  computed in the worker against the same config the Encoded stage's bytes
    *  came from — see EncodedStageResult.codecWarnings. */
   codecWarnings: string[];
+  /** Task 10: per-step codec transform stats — see EncodedStageResult.codecStats. */
+  codecStats: Record<string, (CodecStepStats | null)[]>;
   /** Task 9 (metadata redesign): the Metadata stage's Entries view rows,
    *  parsed from the actual serialized bytes — see MetadataStageResult.entries. */
   metadataEntries: MetadataDisplayEntry[];
@@ -700,6 +757,7 @@ export function computePipelineStages(
       (s) => stages[STAGE_ORDER.indexOf(s)].bytes,
     ),
     codecWarnings: encoded.codecWarnings,
+    codecStats: encoded.codecStats,
     metadataEntries: metadata.entries,
   };
 }
@@ -721,7 +779,7 @@ export interface StagePayloads {
   values: { stage: PipelineStage; logicalValues: Map<string, ValueArray> };
   typed: { stage: PipelineStage; typedValues: Map<string, ValueArray>; variableStats: Map<string, VariableStats> };
   linearized: { stage: PipelineStage };
-  encoded: { stage: PipelineStage; codecWarnings: string[] };
+  encoded: { stage: PipelineStage; codecWarnings: string[]; codecStats: Record<string, (CodecStepStats | null)[]> };
   metadata: { stage: PipelineStage; entries: MetadataDisplayEntry[] };
   write: { stage: PipelineStage; files: VirtualFile[] };
   read: { stage: PipelineStage; readResult: ReadFileResult; readLogicalValues: Map<string, ValueArray> };
@@ -751,6 +809,7 @@ export function assemblePipelineResult(payloads: StagePayloads): PipelineResult 
       (s) => payloads[s].stage.bytes,
     ),
     codecWarnings: payloads.encoded.codecWarnings,
+    codecStats: payloads.encoded.codecStats,
     metadataEntries: payloads.metadata.entries,
   };
 }
@@ -933,7 +992,7 @@ export function createPipelineComputer(): (
       variableStats: typed.variableStats,
     });
     emit('linearized', linearizedM.key, { stage: linearized.stage });
-    emit('encoded', encodedM.key, { stage: encoded.stage, codecWarnings: encoded.codecWarnings });
+    emit('encoded', encodedM.key, { stage: encoded.stage, codecWarnings: encoded.codecWarnings, codecStats: encoded.codecStats });
     emit('metadata', metadataM.key, { stage: metadata.stage, entries: metadata.entries });
     emit('write', filesM.key, { stage: files.stage, files: files.files });
     emit('read', readM.key, {

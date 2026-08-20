@@ -1,6 +1,6 @@
 import type { CodecStep } from '../../types/codecs.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
-import { CODEC_REGISTRY, outputDtypeFor, stepWarnings } from '../../engine/codecs.ts';
+import { CODEC_REGISTRY, outputDtypeFor, stepWarnings, type CodecStepStats } from '../../engine/codecs.ts';
 import { DTYPE_REGISTRY, getDtype } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 import { inputStyle, clampParamValue } from '../shared/controlStyles.ts';
@@ -15,6 +15,10 @@ interface CodecPipelineEditorProps {
   /** Project 4 task 4: Pyodide runtime status — gates whether real (numcodecs-backed)
    *  codec entries are selectable. Defaults to 'ready' so existing callers/tests are unchanged. */
   runtimeStatus?: 'loading' | 'ready' | 'error';
+  /** Task 10: per-step transform stats (clipped/rounded), aligned to `steps`
+   *  by index — worker-computed, summed across chunks. Renders a lossy badge
+   *  next to a step whose clipped+rounded > 0; absent/null entries render none. */
+  stepStats?: (CodecStepStats | null)[];
 }
 
 const btnStyle: React.CSSProperties = {
@@ -58,6 +62,7 @@ export function CodecPipelineEditor({
   onChange,
   variableSlot = 'chunk',
   runtimeStatus = 'ready',
+  stepStats,
 }: CodecPipelineEditorProps) {
   function moveStep(index: number, direction: -1 | 1) {
     const newSteps = [...steps];
@@ -183,6 +188,14 @@ export function CodecPipelineEditor({
               <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>
                 →{DTYPE_REGISTRY[currentDtype]?.label ?? currentDtype}
               </span>
+              {stepStats?.[i] && (stepStats[i]!.clipped > 0 || stepStats[i]!.rounded > 0) && (
+                <span
+                  data-testid={`codec-lossy-${variableSlot}-${i}`}
+                  style={{ color: colors.warning, fontSize: 11 }}
+                >
+                  lossy: {stepStats[i]!.clipped} clipped, {stepStats[i]!.rounded} rounded
+                </span>
+              )}
               <button
                 onClick={() => moveStep(i, -1)}
                 disabled={i === 0}

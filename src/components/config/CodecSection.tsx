@@ -2,6 +2,7 @@ import type { Variable } from '../../types/state.ts';
 import type { CodecStep } from '../../types/codecs.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
 import { DTYPE_REGISTRY } from '../../types/dtypes.ts';
+import type { CodecStepStats } from '../../engine/codecs.ts';
 import { CodecPipelineEditor } from './CodecPipelineEditor.tsx';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 
@@ -11,6 +12,8 @@ interface CodecSectionProps {
   fieldPipelines: Record<string, CodecStep[]>;
   chunkPipeline: CodecStep[];
   runtimeStatus?: 'loading' | 'ready' | 'error';
+  /** Task 10: per-step transform stats keyed by Variable.id or 'chunk'. */
+  codecStats?: Record<string, (CodecStepStats | null)[]>;
   onFieldPipelineChange: (variableId: string, steps: CodecStep[]) => void;
   onChunkPipelineChange: (steps: CodecStep[]) => void;
 }
@@ -21,6 +24,7 @@ export function CodecSection({
   fieldPipelines,
   chunkPipeline,
   runtimeStatus,
+  codecStats,
   onFieldPipelineChange,
   onChunkPipelineChange,
 }: CodecSectionProps) {
@@ -67,6 +71,7 @@ export function CodecSection({
               onChange={(steps) => onFieldPipelineChange(v.id, steps)}
               variableSlot={v.name}
               runtimeStatus={runtimeStatus}
+              stepStats={codecStats?.[v.id]}
             />
           </div>
         ))}
@@ -121,6 +126,7 @@ export function CodecSection({
         onChange={onChunkPipelineChange}
         variableSlot="chunk"
         runtimeStatus={runtimeStatus}
+        stepStats={codecStats?.['chunk']}
       />
     </div>
   );

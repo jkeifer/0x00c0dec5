@@ -58,3 +58,32 @@ describe('TypeAssignConfig observed-range note', () => {
     expect(screen.queryByTestId('type-assign-range-empty')).toBeNull();
   });
 });
+
+// Task 10: the lossy indicator also considers the variable's own codec
+// pipeline (codecStats[v.id]), not just the Typed-stage cast stats.
+describe('TypeAssignConfig codec-lossy aggregation', () => {
+  it('marks a variable lossy from codecStats alone, even with a lossless cast', () => {
+    render(
+      <TypeAssignConfig
+        variables={[variable('t')]}
+        variableStats={new Map([['t', stats(0, 1)]])}
+        codecStats={{ t: [{ clipped: 2, rounded: 3 }] }}
+        onUpdateVariable={() => {}}
+      />,
+    );
+    const container = screen.getByText(/codec: 2 clipped, 3 rounded/);
+    expect(container.textContent).toContain('codec: 2 clipped, 3 rounded');
+  });
+
+  it('stays lossless when codecStats has no clipped/rounded steps', () => {
+    render(
+      <TypeAssignConfig
+        variables={[variable('t')]}
+        variableStats={new Map([['t', stats(0, 1)]])}
+        codecStats={{ t: [null, { clipped: 0, rounded: 0 }] }}
+        onUpdateVariable={() => {}}
+      />,
+    );
+    expect(screen.queryByText(/codec:/)).toBeNull();
+  });
+});

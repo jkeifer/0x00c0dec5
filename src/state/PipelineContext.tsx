@@ -1,5 +1,6 @@
 import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import type { PipelineResult, MetadataDisplayEntry } from '../engine/pipelineCompute.ts';
+import type { CodecStepStats } from '../engine/codecs.ts';
 import type { PipelineStage, VirtualFile, ReadFileResult, VariableStats, StageName } from '../types/pipeline.ts';
 import type { ValueSources, ValueArray } from '../engine/layout.ts';
 import type { RuntimeState } from '../worker/client.ts';
@@ -24,6 +25,9 @@ export interface PipelineContextValue {
   files: VirtualFile[];
   readResult: ReadFileResult;
   variableStats: Map<string, VariableStats>;
+  /** Task 10: per-step codec transform stats, keyed by Variable.id (column
+   *  pipelines and row prefixes) or 'chunk' — see PipelineResult.codecStats. */
+  codecStats: Record<string, (CodecStepStats | null)[]>;
   /** D6: Values-stage source arrays, keyed by variable name. */
   logicalValues: Map<string, ValueArray>;
   /** D6: Typed-stage source arrays, keyed by variable name. */
@@ -85,6 +89,7 @@ export function PipelineProvider({
       files: pipeline.files,
       readResult: pipeline.readResult,
       variableStats: pipeline.variableStats,
+      codecStats: pipeline.codecStats,
       logicalValues: pipeline.logicalValues,
       typedValues: pipeline.typedValues,
       stageSources: pipeline.stageSources,

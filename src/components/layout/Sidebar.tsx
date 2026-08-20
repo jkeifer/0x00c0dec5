@@ -58,7 +58,7 @@ const dividerStyle: React.CSSProperties = {
 // panelRef/onResize), Sidebar just renders the rail when collapsed.
 export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; onToggleCollapse: () => void }) {
   const { state, dispatch } = useAppState();
-  const { files, readResult, variableStats, runtimeStatus } = usePipelineContext();
+  const { files, readResult, variableStats, codecStats, runtimeStatus } = usePipelineContext();
   // Guide highlight (plan Phase 5): the section matching the guide's active
   // step gets an accent outline and is scrolled into view.
   const { activeSection } = useGuide();
@@ -105,6 +105,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
           <TypeAssignConfig
             variables={state.variables}
             variableStats={variableStats}
+            codecStats={codecStats}
             onUpdateVariable={(id, changes) =>
               dispatch({ type: 'UPDATE_VARIABLE', id, changes })
             }
@@ -146,6 +147,7 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
             variables={state.variables}
             fieldPipelines={state.fieldPipelines}
             chunkPipeline={state.chunkPipeline}
+            codecStats={codecStats}
             runtimeStatus={runtimeStatus}
             onFieldPipelineChange={(variableId, steps) =>
               dispatch({ type: 'SET_FIELD_PIPELINE', variableId, steps })

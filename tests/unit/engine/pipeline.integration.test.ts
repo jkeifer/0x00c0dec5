@@ -399,6 +399,86 @@ describe('Integration: determinism', () => {
   });
 });
 
+describe('Integration: per-step codec stats aggregation (Task 10)', () => {
+  it('encoded stage aggregates per-step transform stats per variable', () => {
+    // scale-offset rounds float32 values into int16 (offset 0, scale 1 so
+    // every non-integer input value rounds); delta reports no stats.
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [8],
+      chunkShape: [8],
+      variables: [
+        {
+          id: 't', name: 't', color: '#f00',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+      ],
+      fieldPipelines: {
+        t: [
+          { codec: 'scale-offset', params: { scale: 1, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+          { codec: 'delta', params: {} },
+        ],
+      },
+      chunkPipeline: [],
+    };
+
+    const { codecStats } = computePipelineStages(state);
+    const stats = codecStats['t'];
+    expect(stats[0]).not.toBeNull();
+    expect(stats[0]!.rounded).toBeGreaterThan(0);
+    expect(stats[1]).toBeNull();
+  });
+
+  it('aggregates chunk-pipeline stats under the "chunk" key in row mode', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [8],
+      chunkShape: [8],
+      interleaving: 'row',
+      variables: [
+        {
+          id: 't', name: 't', color: '#f00',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+      ],
+      fieldPipelines: { t: [] },
+      chunkPipeline: [
+        { codec: 'quantize', params: { digits: 0 } },
+      ],
+    };
+
+    const { codecStats } = computePipelineStages(state);
+    expect(codecStats['chunk']).toBeDefined();
+    expect(codecStats['chunk'][0]).not.toBeNull();
+    expect(codecStats['chunk'][0]!.rounded).toBeGreaterThan(0);
+  });
+
+  it('sums stats across multiple chunks for the same key', () => {
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [8],
+      chunkShape: [4], // 2 chunks
+      variables: [
+        {
+          id: 't', name: 't', color: '#f00',
+          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+          typeAssignment: { storageDtype: 'float32' },
+        },
+      ],
+      fieldPipelines: {
+        t: [{ codec: 'quantize', params: { digits: 0 } }],
+      },
+      chunkPipeline: [],
+    };
+
+    const { codecStats } = computePipelineStages(state);
+    // Roughly all 8 rounded values, split across the 2 chunks, summed back together.
+    expect(codecStats['t'][0]!.rounded).toBeGreaterThan(0);
+  });
+});
+
 describe('Integration: hard cap guard (pipelineCapError)', () => {
   it('refuses computes over HARD_ELEMENT_CAP with a clear message instead of allocating', () => {
     const state: AppState = { ...DEFAULT_STATE, shape: [100_000_000], chunkShape: [100_000_000] };

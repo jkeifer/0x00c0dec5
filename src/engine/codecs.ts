@@ -918,9 +918,21 @@ export function stepWarnings(steps: CodecStep[], inputDtype: DtypeKey): string[]
 
 // ─── Pipeline Execution ─────────────────────────────────────────────────
 
+/** Per-step transform stats (clipped/rounded value counts) a codec's
+ *  `encode` optionally reports — see `CodecDefinition.encode`'s `stats`
+ *  field. Surfaced through the pipeline result so the UI can show a lossy
+ *  badge next to the step that actually did the clipping/rounding. */
+export interface CodecStepStats {
+  clipped: number;
+  rounded: number;
+}
+
 export interface CodecPipelineResult {
   bytes: Uint8Array;
   outputDtype: string;
+  /** One entry per INPUT step (same length/order as `steps`), null for a
+   *  disabled step or one whose `encode` reported no stats. */
+  stepStats: (CodecStepStats | null)[];
 }
 
 /**
@@ -940,19 +952,29 @@ export function runCodecPipeline(
 ): CodecPipelineResult {
   let currentBytes = inputBytes;
   let currentDtype: DtypeKey = inputDtype;
+  const stepStats: (CodecStepStats | null)[] = [];
 
-  for (const step of activeSteps(steps)) {
+  for (const step of steps) {
+    if (step.enabled === false) {
+      stepStats.push(null);
+      continue;
+    }
     const codec = CODEC_REGISTRY[step.codec];
-    if (!codec) continue;
+    if (!codec) {
+      stepStats.push(null);
+      continue;
+    }
 
     const result = codec.encode(currentBytes, currentDtype, step.params, byteOrder);
     currentBytes = result.bytes;
     currentDtype = result.outputDtype as DtypeKey;
+    stepStats.push(result.stats ?? null);
   }
 
   return {
     bytes: currentBytes,
     outputDtype: currentDtype,
+    stepStats,
   };
 }
 
