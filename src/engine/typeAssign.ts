@@ -4,7 +4,6 @@ import type { VariableStats } from '../types/pipeline.ts';
 import { getDtype, isCharDtype } from '../types/dtypes.ts';
 import { valuesToBytes, bytesToValues } from './elements.ts';
 import type { ValueArray } from './layout.ts';
-import { applyBitround } from './codecs.ts';
 
 export interface TypeAssignResult {
   bytes: Uint8Array;
@@ -15,11 +14,10 @@ export interface TypeAssignResult {
 /**
  * Convert logical values to binary-typed bytes according to a type assignment.
  *
- * Steps:
- * 1. If scale/offset are set, apply: transformed = (value - offset) * scale
- * 2. If keepBits is set (float output), apply mantissa truncation
- * 3. Convert to storageDtype via valuesToBytes
- * 4. Track statistics: clipped/rounded counts
+ * Codec-unification shrink: `TypeAssignment` is storage-dtype-only now — scale/
+ * offset and bitround moved to the codec pipeline (scale-offset, bitround in
+ * codecs.ts). This is a plain cast: clamp/round to the storage dtype's range,
+ * track clipped/rounded/NaN stats, convert to bytes.
  */
 export function assignType(
   values: ValueArray,
@@ -55,10 +53,6 @@ export function assignType(
       outputDtype: outDtype,
     };
   }
-  const hasScaleOffset = (assignment.scale !== undefined && assignment.scale !== 1) ||
-    (assignment.offset !== undefined && assignment.offset !== 0);
-  const scale = assignment.scale ?? 1;
-  const offset = assignment.offset ?? 0;
 
   let clipped = 0;
   let rounded = 0;
@@ -86,11 +80,6 @@ export function assignType(
 
     let result = original;
 
-    // Apply scale/offset if configured
-    if (hasScaleOffset) {
-      result = (result - offset) * scale;
-    }
-
     // Clamp to output dtype range for integer types
     if (!outInfo.float) {
       if (Number.isNaN(result)) {
@@ -114,31 +103,20 @@ export function assignType(
           result = clamped;
         }
       }
-    } else {
-      // For float types, check if the value loses precision
-      // Write to typed array and read back to detect truncation
-      // We'll do this check after writing bytes below
     }
 
     transformed[i] = result;
   }
 
   // Convert to bytes
-  let bytes = valuesToBytes(transformed, outDtype, byteOrder);
+  const bytes = valuesToBytes(transformed, outDtype, byteOrder);
 
-  // Apply keepBits (mantissa truncation) for float output
-  if (assignment.keepBits !== undefined && outInfo.float) {
-    bytes = applyBitround(bytes, outDtype, assignment.keepBits, byteOrder);
-  }
-
-  // For float types, detect rounding by reading back
+  // For float types, detect rounding by reading back — a plain float64->float32
+  // (or any storage narrowing) cast can lose precision even with no scale term.
   if (outInfo.float) {
     const readBack = bytesToValues(bytes, outDtype, byteOrder) as Float64Array;
     for (let i = 0; i < values.length; i++) {
-      let expected = values[i] as number;
-      if (hasScaleOffset) {
-        expected = (expected - offset) * scale;
-      }
+      const expected = values[i] as number;
       // NF-3: `readBack[i] !== expected` is always true for NaN vs NaN (NaN !== NaN
       // in JS), so a losslessly-stored NaN (float32/float64 represent NaN exactly)
       // was spuriously flagged as "rounded". Use a NaN-aware comparison: only count
@@ -178,37 +156,4 @@ export function assignType(
     },
     outputDtype: outDtype,
   };
-}
-
-/**
- * Reverse a type assignment: convert typed bytes back to logical values.
- */
-export function reverseTypeAssignment(
-  bytes: Uint8Array,
-  assignment: TypeAssignment,
-  byteOrder: 'little' | 'big' = 'little',
-): ValueArray {
-  const dtype = assignment.storageDtype;
-
-  // keepBits is irrecoverable (like bitround), so no reversal needed for it
-  // Just read the values and reverse scale/offset
-  const values = bytesToValues(bytes, dtype, byteOrder);
-
-  // Char storage: bytesToValues already produced right-trimmed strings, and
-  // there is no scale/offset to reverse for text.
-  if (isCharDtype(dtype)) {
-    return values;
-  }
-
-  const hasScaleOffset = (assignment.scale !== undefined && assignment.scale !== 1) ||
-    (assignment.offset !== undefined && assignment.offset !== 0);
-
-  if (!hasScaleOffset) {
-    return values;
-  }
-
-  const scale = assignment.scale ?? 1;
-  const offset = assignment.offset ?? 0;
-
-  return (values as Float64Array).map((v) => v / scale + offset);
 }

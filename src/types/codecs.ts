@@ -59,12 +59,13 @@ export interface CodecDefinition {
   /**
    * Task 2.6: whether encode→decode is lossy for a given *input* dtype.
    *
-   * Currently `() => false` on every codec — the one dtype-dependent case was
-   * delta on floats, and delta is now plain integer arithmetic (it differences
-   * bit patterns instead, exactly and uselessly). Lossiness in this tool lives
-   * entirely on `Variable.typeAssignment` (scale/offset, bit-rounding), which
-   * is a separate mechanism with its own stats. Kept only because
-   * `isPipelineLossy` (engine/read.ts) still asks.
+   * `() => false` on every reordering/entropy codec (delta is plain integer
+   * arithmetic — it differences bit patterns instead, exactly and uselessly).
+   * The transform codecs (quantize, bitround, scale-offset) are the
+   * dtype-independent `() => true` cases — since the codec-unification
+   * typeAssignment shrink, they're the *only* place lossiness like this lives;
+   * `Variable.typeAssignment` is a plain storage-dtype cast now, with its own
+   * separate clip/round stats. `isPipelineLossy` (engine/read.ts) asks this.
    */
   isLossy: (inputDtype: DtypeKey) => boolean;
   encode: (

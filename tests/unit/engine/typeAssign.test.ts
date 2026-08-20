@@ -1,8 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { assignType, reverseTypeAssignment } from '../../../src/engine/typeAssign.ts';
+import { assignType } from '../../../src/engine/typeAssign.ts';
+import { bytesToValues } from '../../../src/engine/elements.ts';
 import type { LogicalTypeConfig, TypeAssignment } from '../../../src/types/state.ts';
 
 describe('assignType', () => {
+  it('TypeAssignment carries only storageDtype', () => {
+    const result = assignType(
+      Float64Array.from([1.4, 70000]),
+      { type: 'integer' } as LogicalTypeConfig,
+      { storageDtype: 'int16' },
+    );
+    expect(result.stats.rounded).toBe(1);
+    expect(result.stats.clipped).toBe(1);
+  });
+
   describe('integer logical type', () => {
     const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100, generation: 'random' };
 
@@ -65,25 +76,15 @@ describe('assignType', () => {
       expect(result.stats.isLossy).toBe(false);
     });
 
-    it('stores decimal with scale/offset into int16 losslessly', () => {
-      // values like 23.4 * 10 = 234, fits in int16
+    it('stores decimal values cast directly into int16 (clamps/rounds, no scale)', () => {
+      // With no scale, 23.4 rounds to 23 — a plain cast loses the decimal.
       const values = [23.4, -12.7, 0.0];
-      const assignment: TypeAssignment = { storageDtype: 'int16', scale: 10, offset: 0 };
+      const assignment: TypeAssignment = { storageDtype: 'int16' };
       const result = assignType(values, decType, assignment);
 
       expect(result.outputDtype).toBe('int16');
       expect(result.stats.clipped).toBe(0);
-      expect(result.stats.rounded).toBe(0);
-      expect(result.stats.isLossy).toBe(false);
-    });
-
-    it('detects rounding when scale/offset produces non-integer for int storage', () => {
-      // 23.4 * 3 = 70.2, rounds to 70 → lossy
-      const values = [23.4];
-      const assignment: TypeAssignment = { storageDtype: 'int16', scale: 3, offset: 0 };
-      const result = assignType(values, decType, assignment);
-
-      expect(result.stats.rounded).toBe(1);
+      expect(result.stats.rounded).toBe(2);
       expect(result.stats.isLossy).toBe(true);
     });
   });
@@ -107,18 +108,6 @@ describe('assignType', () => {
       const result = assignType(values, contType, assignment);
 
       expect(result.outputDtype).toBe('float32');
-    });
-  });
-
-  describe('keepBits (mantissa truncation)', () => {
-    it('applies bitround to float32 output', () => {
-      const values = [3.14159265];
-      const contType: LogicalTypeConfig = { type: 'continuous', min: 0, max: 10, significantFigures: 9, generation: 'random' };
-      const assignment: TypeAssignment = { storageDtype: 'float32', keepBits: 5 };
-      const result = assignType(values, contType, assignment);
-
-      expect(result.outputDtype).toBe('float32');
-      expect(result.stats.isLossy).toBe(true);
     });
   });
 
@@ -149,51 +138,6 @@ describe('assignType', () => {
   });
 });
 
-describe('reverseTypeAssignment', () => {
-  it('reverses identity assignment (no scale/offset)', () => {
-    const values = [10, 20, 30];
-    const intType: LogicalTypeConfig = { type: 'integer', min: 0, max: 100, generation: 'random' };
-    const assignment: TypeAssignment = { storageDtype: 'int32' };
-    const { bytes } = assignType(values, intType, assignment);
-
-    const reversed = reverseTypeAssignment(bytes, assignment);
-    expect(Array.from(reversed)).toEqual(values);
-  });
-
-  it('reverses scale/offset assignment', () => {
-    const values = [23.4, -12.7, 0.0];
-    const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' };
-    const assignment: TypeAssignment = { storageDtype: 'int16', scale: 10, offset: 0 };
-    const { bytes } = assignType(values, decType, assignment);
-
-    const reversed = reverseTypeAssignment(bytes, assignment);
-    for (let i = 0; i < values.length; i++) {
-      expect(reversed[i]).toBeCloseTo(values[i], 5);
-    }
-  });
-
-  it('reverses scale/offset with non-zero offset', () => {
-    const values = [900, 1000, 1100];
-    const decType: LogicalTypeConfig = { type: 'decimal', min: 900, max: 1100, decimalPlaces: 0, generation: 'random' };
-    const assignment: TypeAssignment = { storageDtype: 'int16', scale: 1, offset: 900 };
-    const { bytes } = assignType(values, decType, assignment);
-
-    const reversed = reverseTypeAssignment(bytes, assignment);
-    expect(Array.from(reversed)).toEqual([900, 1000, 1100]);
-  });
-
-  it('reversal is approximate for lossy assignments', () => {
-    // float32 storage of decimal value — some precision lost
-    const values = [23.4];
-    const decType: LogicalTypeConfig = { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' };
-    const assignment: TypeAssignment = { storageDtype: 'float32' };
-    const { bytes } = assignType(values, decType, assignment);
-
-    const reversed = reverseTypeAssignment(bytes, assignment);
-    expect(reversed[0]).toBeCloseTo(23.4, 5);
-  });
-});
-
 describe('text (charN) type assignment', () => {
   const textType: LogicalTypeConfig = { type: 'text', min: 0, max: 0, wordSet: 'cities', generation: 'random' };
 
@@ -219,16 +163,16 @@ describe('text (charN) type assignment', () => {
     expect(result.stats.isLossy).toBe(true);
   });
 
-  it('roundtrips exactly through reverseTypeAssignment when nothing truncates', () => {
+  it('roundtrips exactly through bytesToValues when nothing truncates', () => {
     const values = ['Lima', 'Oslo', 'Sao Paulo', 'WX-0042-A'];
     const assignment: TypeAssignment = { storageDtype: 'char16' };
     const result = assignType(values, textType, assignment);
-    expect(reverseTypeAssignment(result.bytes, assignment)).toEqual(values);
+    expect(bytesToValues(result.bytes, assignment.storageDtype)).toEqual(values);
   });
 
   it('reads a truncated word back as its width-limited prefix', () => {
     const assignment: TypeAssignment = { storageDtype: 'char8' };
     const result = assignType(['Alexandria'], textType, assignment);
-    expect(reverseTypeAssignment(result.bytes, assignment)).toEqual(['Alexandr']);
+    expect(bytesToValues(result.bytes, assignment.storageDtype)).toEqual(['Alexandr']);
   });
 });

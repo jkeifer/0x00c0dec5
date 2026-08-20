@@ -1,7 +1,6 @@
 import type { VirtualFile, ReadFileResult } from '../types/pipeline.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
-import type { TypeAssignment } from '../types/state.ts';
 import { type MetadataEntry, METADATA_KEY_GROUPS, type ChunkIndexEntry } from './metadata.ts';
 import { CODEC_REGISTRY, outputDtypeFor } from './codecs.ts';
 import { LINEARIZATION_ORDERS, type LinearizationOrder } from './order.ts';
@@ -19,7 +18,6 @@ import {
   reconstructValues,
   makeSingleFileChunkReader,
   makePerChunkFileReader,
-  reverseTypeAssignmentValues,
   rowModeInputDtype,
   NoChunkIndexError,
 } from './readReassemble.ts';
@@ -92,7 +90,6 @@ export interface ParsedStructure {
   fieldPipelines: Record<string, CodecStep[]> | null;
   chunkPipeline: CodecStep[] | null;
   chunkIndex: ChunkIndexEntry[] | null;
-  typeAssignments: Record<string, TypeAssignment> | null;
   variableStatistics: Record<string, VariableStatsLike> | null;
   totalElements: number;
   /** Byte order to decode multi-byte values with. Taken from the `byte_order`
@@ -228,12 +225,12 @@ export function readFile(
  * Presence checks are split by group, checked in reader-step order (read plan
  * Task 3): schema (`schema` key) first, then layout (`shape`/`chunk_shape`)
  * — throwing typed `MissingSchemaError`/`MissingLayoutError` respectively, so
- * `readFile` can attribute the failure to the right step. `type_assignments`
- * and `logical_types` are schema-group per `METADATA_KEY_GROUPS`
- * (metadata.ts) but are optional even when schema IS present (a variable's
- * dtype lives in `schema` itself) — they are not gated here. `interleaving`
- * is layout-group but already defaults to 'column' when absent and keeps
- * that default; it isn't a presence-check trigger.
+ * `readFile` can attribute the failure to the right step. `logical_types` is
+ * schema-group per `METADATA_KEY_GROUPS` (metadata.ts) but is optional even
+ * when schema IS present (a variable's dtype lives in `schema` itself) — it
+ * is not gated here. `interleaving` is layout-group but already defaults to
+ * 'column' when absent and keeps that default; it isn't a presence-check
+ * trigger.
  *
  * Once both groups are confirmed present, malformed JSON in any key throws a
  * plain `Error`; the caller maps that to 'corrupt-metadata' — located-and-
@@ -278,7 +275,6 @@ export function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructur
 
   const codecPipelinesStr = metaMap.get('codec_pipelines');
   const chunkIndexStr = metaMap.get('chunk_index');
-  const typeAssignmentsStr = metaMap.get('type_assignments');
   const variableStatisticsStr = metaMap.get('variable_statistics');
 
   const shape: number[] = JSON.parse(shapeStr);
@@ -306,7 +302,6 @@ export function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructur
     fieldPipelines,
     chunkPipeline,
     chunkIndex: chunkIndexStr ? JSON.parse(chunkIndexStr) : null,
-    typeAssignments: typeAssignmentsStr ? JSON.parse(typeAssignmentsStr) : null,
     variableStatistics: variableStatisticsStr ? JSON.parse(variableStatisticsStr) : null,
     totalElements: shape.reduce((a, b) => a * b, 1),
     codecInfoPresent: codecPipelinesStr !== undefined,
@@ -342,7 +337,7 @@ export function reconstruct(
   chunkDataStart: number,
   recorder: StepRecorder,
 ): ReadFileResult {
-  const { schema, shape, chunkShape, interleaving, linearization, fieldPipelines, chunkPipeline, typeAssignments, variableStatistics, totalElements, codecInfoPresent, byteOrder, byteOrderRecorded } = structure;
+  const { schema, shape, chunkShape, interleaving, linearization, fieldPipelines, chunkPipeline, variableStatistics, totalElements, codecInfoPresent, byteOrder, byteOrderRecorded } = structure;
 
   const typeAssignLossy = new Set<string>();
   if (variableStatistics) {
@@ -405,13 +400,6 @@ export function reconstruct(
     describeDecodeDetail(codecInfoPresent, byteOrderRecorded, byteOrder),
   );
 
-  if (typeAssignments) {
-    for (const [varName, assignment] of Object.entries(typeAssignments)) {
-      const values = reconstructedValues.get(varName);
-      if (!values) continue;
-      reconstructedValues.set(varName, reverseTypeAssignmentValues(values, assignment, byteOrder));
-    }
-  }
   recorder.ok('reassemble', `${totalElements} element(s) reassembled per variable`);
 
   return {

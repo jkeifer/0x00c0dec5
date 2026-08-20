@@ -44,8 +44,7 @@
         "generation": "smooth"
       },
       "typeAssignment": {
-        "storageDtype": "int16",
-        "scale": 10
+        "storageDtype": "float32"
       }
     },
     {
@@ -64,8 +63,7 @@
         "generation": "smooth"
       },
       "typeAssignment": {
-        "storageDtype": "int16",
-        "scale": 10
+        "storageDtype": "float32"
       }
     },
     {
@@ -84,8 +82,7 @@
         "generation": "stepped"
       },
       "typeAssignment": {
-        "storageDtype": "int16",
-        "scale": 10
+        "storageDtype": "float32"
       }
     },
     {
@@ -121,8 +118,19 @@
     ],
     "ghcn-daily-tmax": [
       {
+        "codec": "scale-offset",
+        "params": {
+          "scale": 10,
+          "offset": 0,
+          "sourceDtype": "float32",
+          "targetDtype": "int16"
+        }
+      },
+      {
         "codec": "delta",
-        "params": {}
+        "params": {
+          "elementSize": 2
+        }
       },
       {
         "codec": "zigzag",
@@ -135,8 +143,19 @@
     ],
     "ghcn-daily-tmin": [
       {
+        "codec": "scale-offset",
+        "params": {
+          "scale": 10,
+          "offset": 0,
+          "sourceDtype": "float32",
+          "targetDtype": "int16"
+        }
+      },
+      {
         "codec": "delta",
-        "params": {}
+        "params": {
+          "elementSize": 2
+        }
       },
       {
         "codec": "zigzag",
@@ -148,6 +167,15 @@
       }
     ],
     "ghcn-daily-prcp": [
+      {
+        "codec": "scale-offset",
+        "params": {
+          "scale": 10,
+          "offset": 0,
+          "sourceDtype": "float32",
+          "targetDtype": "int16"
+        }
+      },
       {
         "codec": "rle",
         "params": {}

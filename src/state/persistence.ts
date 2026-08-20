@@ -114,6 +114,16 @@ function migrateState(raw: Record<string, unknown>): AppState | null {
       }
     }
 
+    // Codec-unification shrink: typeAssignment is storageDtype-only. A state
+    // carrying the old scale/offset/keepBits fields predates the shrink — drop it
+    // (standing no-migration policy; the lesson moved to the scale-offset codec).
+    const vars = Array.isArray((state as unknown as { variables?: unknown }).variables)
+      ? (state as unknown as { variables: unknown[] }).variables : [];
+    for (const v of vars) {
+      const ta = (v as { typeAssignment?: Record<string, unknown> })?.typeAssignment;
+      if (ta && ('scale' in ta || 'offset' in ta || 'keepBits' in ta)) return null;
+    }
+
     // Read plan Task 1: legacy `metadata.includeChunkIndex` -> `metadata.include`.
     // A save with `metadata` but no `include` yet is pre-migration: synthesize
     // `include` with every group defaulting true, honoring a legacy

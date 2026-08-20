@@ -91,6 +91,16 @@ describe('loadState — v1 dtype-variable migration', () => {
   });
 });
 
+describe('loadState — codec-unification typeAssignment shrink drop rule', () => {
+  it('drops persisted states whose typeAssignment carries scale/offset/keepBits', () => {
+    const raw = structuredClone(DEFAULT_STATE) as unknown as Record<string, unknown>;
+    raw.variables = [makeVariable()];
+    ((raw.variables as Record<string, unknown>[])[0].typeAssignment as Record<string, unknown>).scale = 10;
+    localStorage.setItem(TABULAR_KEY, JSON.stringify(raw));
+    expect(loadState('tabular')).toBeNull();
+  });
+});
+
 describe('loadState — F31 CodecStep.enabled round-trip', () => {
   it('preserves enabled:false (and absent = enabled) through save/load', () => {
     const state: AppState = {

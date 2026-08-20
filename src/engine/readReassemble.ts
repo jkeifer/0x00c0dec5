@@ -1,13 +1,11 @@
 import type { VirtualFile } from '../types/pipeline.ts';
 import type { DtypeKey, LogicalValue } from '../types/dtypes.ts';
 import type { CodecStep } from '../types/codecs.ts';
-import type { TypeAssignment } from '../types/state.ts';
 import { getDtype, isCharDtype } from '../types/dtypes.ts';
-import { bytesToValues, valuesToBytes } from './elements.ts';
+import { bytesToValues } from './elements.ts';
 import type { ValueArray } from './layout.ts';
 import type { ChunkIndexEntry } from './metadata.ts';
 import { reverseCodecPipeline } from './decode.ts';
-import { reverseTypeAssignment } from './typeAssign.ts';
 import { encodedByteLength } from './codecs.ts';
 import { coordsToFlatIndex, computeChunkGrid, enumerateChunkCoords } from './chunk.ts';
 import { orderCoordsOf, type LinearizationOrder } from './order.ts';
@@ -370,16 +368,4 @@ export function deinterleaveRowChunk(
   }
 
   return result;
-}
-
-/** Reverse a type assignment on already-decoded numeric values: re-encode to
- * bytes and call the shared `reverseTypeAssignment` rather than
- * re-implementing scale/offset reversal inline here. */
-export function reverseTypeAssignmentValues(
-  values: ValueArray,
-  assignment: TypeAssignment,
-  byteOrder: 'little' | 'big',
-): ValueArray {
-  const bytes = valuesToBytes(values, assignment.storageDtype, byteOrder);
-  return reverseTypeAssignment(bytes, assignment, byteOrder);
 }

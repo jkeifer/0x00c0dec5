@@ -1,10 +1,9 @@
 import type { Variable, TypeAssignment } from '../../types/state.ts';
 import type { VariableStats } from '../../types/pipeline.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
-import { DTYPE_KEYS, DTYPE_REGISTRY, getDtype } from '../../types/dtypes.ts';
+import { DTYPE_KEYS, DTYPE_REGISTRY } from '../../types/dtypes.ts';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
-import { inputStyle, clampParamValue } from '../shared/controlStyles.ts';
-import { NumberInput } from '../shared/NumberInput.tsx';
+import { inputStyle } from '../shared/controlStyles.ts';
 
 interface TypeAssignConfigProps {
   variables: Variable[];
@@ -28,11 +27,6 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
       {variables.map((v) => {
         const stats = variableStats.get(v.id);
         const outDtype = v.typeAssignment.storageDtype;
-        const outInfo = getDtype(outDtype);
-        const isIntStorage = !outInfo.float && !outInfo.char;
-        const isDecimalOrContinuous = v.logicalType.type === 'decimal' || v.logicalType.type === 'continuous';
-        const showScaleOffset = isIntStorage && isDecimalOrContinuous;
-        const showKeepBits = outInfo.float;
         // Text variables choose among char widths only; numeric variables
         // never see the char dtypes.
         const isText = v.logicalType.type === 'text';
@@ -89,52 +83,6 @@ export function TypeAssignConfig({ variables, variableStats, onUpdateVariable }:
                 ))}
               </select>
             </div>
-
-            {/* Scale/Offset (for integer storage of decimal/continuous) */}
-            {showScaleOffset && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>scale</span>
-                <NumberInput
-                  value={v.typeAssignment.scale ?? 1}
-                  step={0.1}
-                  commitOnBlur
-                  onValue={(n) => updateAssignment(v, { scale: n || 1 })}
-                  style={{ ...inputStyle(fontSizes.xs), width: 55 }}
-                />
-                <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>offset</span>
-                <NumberInput
-                  value={v.typeAssignment.offset ?? 0}
-                  step={1}
-                  commitOnBlur
-                  onValue={(n) => updateAssignment(v, { offset: n })}
-                  style={{ ...inputStyle(fontSizes.xs), width: 55 }}
-                />
-              </div>
-            )}
-
-            {/* Keep bits (for float precision reduction) */}
-            {showKeepBits && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: spacing.xs }}>
-                <span style={{ fontSize: fontSizes.xs, color: colors.textTertiary }}>keepBits</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={outDtype === 'float64' ? 52 : 23}
-                  value={v.typeAssignment.keepBits ?? ''}
-                  placeholder="all"
-                  onChange={(e) => {
-                    const raw = e.target.value;
-                    if (raw === '') {
-                      updateAssignment(v, { keepBits: undefined });
-                      return;
-                    }
-                    const maxBits = outDtype === 'float64' ? 52 : 23;
-                    updateAssignment(v, { keepBits: clampParamValue(raw, 1, maxBits, 1) });
-                  }}
-                  style={{ ...inputStyle(fontSizes.xs), width: 55 }}
-                />
-              </div>
-            )}
 
             {/* Observed range + lossy indicator */}
             {stats && (

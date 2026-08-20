@@ -2,74 +2,15 @@
  * Targeted engine gap tests — type assignment edge cases.
  *
  * Covers remediation-plan.md Phase 1 task 1.2 / §1.7 gap #7:
- *  - float64 bitround via `assignType` at keepBits 19/20/21 (DC-6 predicts breakage
- *    at exactly keepBits=20 due to `0xffffffff << 32` wrapping to `<< 0` in JS).
  *  - NaN input through `assignType` (unpredicted — probed live, see NEW FINDING below).
+ *
+ * The float64 bitround (keepBits) coverage that used to live here moved with
+ * the behavior itself to the bitround codec (codec-unification typeAssignment
+ * shrink) — see tests/unit/engine/transformCodecs.test.ts's `bitround` block.
  */
 import { describe, it, expect } from 'vitest';
 import { assignType } from '../../../src/engine/typeAssign.ts';
-import type { LogicalTypeConfig, TypeAssignment } from '../../../src/types/state.ts';
-
-const continuousType: LogicalTypeConfig = { type: 'continuous', min: 0, max: 10, significantFigures: 15, generation: 'random' };
-
-/** Read the low/high 32-bit words of the first float64 element (little-endian). */
-function readFloat64Words(bytes: Uint8Array): { low: number; high: number; value: number } {
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  return {
-    low: view.getUint32(0, true),
-    high: view.getUint32(4, true),
-    value: view.getFloat64(0, true),
-  };
-}
-
-describe('assignType — float64 bitround (keepBits)', () => {
-  // keepBits=19 is below the JS shift-wraparound boundary: `52 - 19 = 33`, and
-  // `<< 33` in JS wraps to `<< 1`, which still zeroes essentially all low mantissa
-  // bits for this value. Verified live: low word truncates to 0, value changes.
-  it('keepBits=19 truncates low mantissa bits and changes the value (lossy)', () => {
-    const values = [Math.PI];
-    const assignment: TypeAssignment = { storageDtype: 'float64', keepBits: 19 };
-    const result = assignType(values, continuousType, assignment);
-    const { low, value } = readFloat64Words(result.bytes);
-
-    expect(low).toBe(0);
-    expect(value).not.toBe(Math.PI);
-    expect(result.stats.isLossy).toBe(true);
-  });
-
-  // FIXED (DC-6, task 2.7) — `src/engine/typeAssign.ts` used to compute
-  // `maskLow = keepBits >= 20 ? 0xffffffff << (52 - keepBits) : 0`. At keepBits=20,
-  // `52 - 20 = 32`, and `0xffffffff << 32` wraps to `<< 0` in JS (shift amounts are
-  // taken mod 32 for 32-bit operands), producing an all-ones mask that kept every
-  // low mantissa bit instead of truncating. Verified live: readback for keepBits=20
-  // equaled Math.PI exactly, i.e. NO truncation occurred despite keepBits < 52.
-  // The fix changed the boundary from `>= 20` to `> 20`.
-  it('keepBits=20 truncates low mantissa bits (currently keeps all of them)', () => {
-    const values = [Math.PI];
-    const assignment: TypeAssignment = { storageDtype: 'float64', keepBits: 20 };
-    const result = assignType(values, continuousType, assignment);
-    const { low, value } = readFloat64Words(result.bytes);
-
-    // Correct behavior: keepBits=20 should still truncate some low mantissa bits,
-    // so the low word should not retain every bit and the value should not survive
-    // as bit-exact Math.PI.
-    expect(low).not.toBe(0xffffffff);
-    expect(value).not.toBe(Math.PI);
-  });
-
-  // keepBits=21 is above the wraparound boundary (`52 - 21 = 31`, a valid shift) and
-  // truncates correctly.
-  it('keepBits=21 truncates low mantissa bits and changes the value (lossy)', () => {
-    const values = [Math.PI];
-    const assignment: TypeAssignment = { storageDtype: 'float64', keepBits: 21 };
-    const result = assignType(values, continuousType, assignment);
-    const { low, value } = readFloat64Words(result.bytes);
-
-    expect(low).toBe(0);
-    expect(value).not.toBe(Math.PI);
-    expect(result.stats.isLossy).toBe(true);
-  });
-});
+import type { TypeAssignment } from '../../../src/types/state.ts';
 
 describe('assignType — NaN input', () => {
   // FIXED (NF-2, task 2.14) — `assignType`'s min/max/mean tracking used to be

@@ -195,32 +195,28 @@ describe('readFile — lossy roundtrip (type assignment with float32 storage)', 
   });
 });
 
-describe('readFile — lossless roundtrip with scale/offset type assignment', () => {
-  it('reconstructs decimal values via int16 + scale/offset', () => {
+describe('readFile — lossless roundtrip with scale/offset codec', () => {
+  it('reconstructs decimal values via float32 storage + scale-offset codec into int16', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
       variables: [
         {
           id: 'temp', name: 'temperature', color: '#e06c75',
           logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
-          typeAssignment: { storageDtype: 'int16', scale: 10, offset: 0 },
+          typeAssignment: { storageDtype: 'float32' },
         },
       ],
-      fieldPipelines: { temperature: [] },
+      fieldPipelines: {
+        temperature: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+      },
       metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true } },
       write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     };
-    const { files, variableStats } = computePipelineStages(state);
-
-    // int16 with scale=10 should be lossless for decimal values with 1 decimal place
-    // (variableStats is keyed by Variable.id — S2)
-    const tempStats = variableStats.get('temp')!;
-    expect(tempStats.isLossy).toBe(false);
+    const { files } = computePipelineStages(state);
 
     const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.lossyVariables.has('temperature')).toBe(false);
       const totalElements = state.shape.reduce((a, b) => a * b, 1);
       const expected = generateValues('temperature', state.variables[0].logicalType, totalElements) as number[];
       const actual = result.reconstructedValues.get('temperature')! as number[];

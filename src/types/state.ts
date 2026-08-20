@@ -38,9 +38,6 @@ export interface LogicalTypeConfig {
 
 export interface TypeAssignment {
   storageDtype: DtypeKey;
-  scale?: number;    // for integer storage of decimal/continuous
-  offset?: number;   // for integer storage of decimal/continuous
-  keepBits?: number; // for float precision reduction
 }
 
 /** A variable's link to a curated dataset variable (registry.ts's
@@ -72,7 +69,7 @@ export interface Variable {
  * `METADATA_KEY_GROUPS` in `engine/metadata.ts`.
  */
 export interface MetadataIncludeConfig {
-  schema: boolean; // schema, type_assignments, logical_types
+  schema: boolean; // schema, logical_types
   layout: boolean; // shape, chunk_shape, chunk_order, partitioning, interleaving
   codecs: boolean; // codec_pipelines
   chunkIndex: boolean; // chunk_index (absorbs legacy includeChunkIndex — D3 semantics unchanged)

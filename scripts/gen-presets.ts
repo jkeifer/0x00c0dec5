@@ -136,7 +136,8 @@ const GHCN_PROVENANCE = [
   { key: 'retrieved', value: '2026-07-13' },
   { key: 'license', value: 'U.S. Government work — public domain' },
   // CF-style units. Without these the stored ints are unreadable — which is
-  // the point: the scale factor lives in type_assignments, the unit here.
+  // the point: the scale factor lives in the codec_pipelines' scale-offset
+  // step, the unit here.
   { key: 'date_units', value: 'days since 1970-01-01' },
   { key: 'temperature_units', value: 'degC' },
   { key: 'precipitation_units', value: 'mm' },
@@ -264,12 +265,13 @@ const zarrish: AppState = {
 //
 // Cloud-Optimized GeoTIFF over the FLOAT Copernicus elevation: the source is
 // float32 metres with real decimals, and this preset walks the compression arc
-// to its destination — scale/offset (×10) quantises the decimals onto a 0.1 m
-// grid AND halves the bytes into int16, then the chunk pipeline does delta
-// (spatial neighbours differ by little) → DEFLATE (entropy). The float+bitround
-// alternative (keepBits on a float32 storageDtype) is the guide's "quantise in
-// float space" branch, deliberately NOT baked here — it's a different
-// storageDtype choice, not a stackable stage. Same TIFF magic/header/tiling as
+// to its destination entirely as codec pipeline steps — scale-offset (×10)
+// quantises the decimals onto a 0.1 m grid AND halves the bytes into int16,
+// then delta (spatial neighbours differ by little) → DEFLATE (entropy), three
+// visible pipeline stages. The float+bitround alternative (the bitround codec
+// over a float32 storageDtype) is the guide's "quantise in float space"
+// branch, deliberately NOT baked here — it's a different pipeline, not a
+// stackable addition to this one. Same TIFF magic/header/tiling as
 // GeoTIFFesque; the lesson is the dtype journey, not the container.
 
 const cogVariables: Variable[] = [
@@ -278,7 +280,9 @@ const cogVariables: Variable[] = [
     source: { datasetId: 'copernicus-dem', variableName: 'elevation' },
     logicalType: { type: 'decimal', min: 478.5, max: 2459, decimalPlaces: 1, generation: 'smooth' },
     // ×10 → 0.1 m grid; max 2459 m ×10 = 24590 < 32767, so int16 fits with no offset.
-    typeAssignment: { storageDtype: 'int16', scale: 10 },
+    // The scale now lives in the chunk pipeline's scale-offset codec step
+    // below, not here — storageDtype is the plain float32 cast.
+    typeAssignment: { storageDtype: 'float32' },
   },
 ];
 
@@ -291,11 +295,15 @@ const cogEsque: AppState = {
   byteOrder: 'little',
   variables: cogVariables,
   // Row mode: per-field pipelines inactive; the shared chunk pipeline runs the
-  // delta → entropy tail of the arc.
+  // quantise → delta → entropy arc.
   fieldPipelines: {
     'copernicus-dem-elevation': [],
   },
-  chunkPipeline: [{ codec: 'delta', params: {} }, { codec: 'deflate', params: {} }],
+  chunkPipeline: [
+    { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+    { codec: 'delta', params: { elementSize: 2 } },
+    { codec: 'deflate', params: {} },
+  ],
   metadata: {
     customEntries: [...COG_PROVENANCE],
     serialization: 'binary',
@@ -333,25 +341,27 @@ const parquetVariables: Variable[] = [
     logicalType: { type: 'integer', min: -36889, max: 20643, generation: 'sorted' },
     typeAssignment: { storageDtype: 'int32' },
   },
-  // The scale/offset lesson: the values are °C to one decimal, and `scale: 10`
-  // stores them losslessly in half the bytes a float32 would take.
+  // The scale/offset lesson: the values are °C to one decimal, and the
+  // fieldPipelines' scale-offset codec step (below, ×10) stores them
+  // losslessly in half the bytes a float32 would take — storageDtype itself
+  // is just the plain float32 cast now; the scale lives in the pipeline.
   {
     id: 'ghcn-daily-tmax', name: 'tmax', color: colors.palette[1],
     source: { datasetId: 'ghcn-daily', variableName: 'tmax' },
     logicalType: { type: 'decimal', min: -16.7, max: 43.3, decimalPlaces: 1, generation: 'smooth' },
-    typeAssignment: { storageDtype: 'int16', scale: 10 },
+    typeAssignment: { storageDtype: 'float32' },
   },
   {
     id: 'ghcn-daily-tmin', name: 'tmin', color: colors.palette[2],
     source: { datasetId: 'ghcn-daily', variableName: 'tmin' },
     logicalType: { type: 'decimal', min: -26.1, max: 28.9, decimalPlaces: 1, generation: 'smooth' },
-    typeAssignment: { storageDtype: 'int16', scale: 10 },
+    typeAssignment: { storageDtype: 'float32' },
   },
   {
     id: 'ghcn-daily-prcp', name: 'prcp', color: colors.palette[3],
     source: { datasetId: 'ghcn-daily', variableName: 'prcp' },
     logicalType: { type: 'decimal', min: 0, max: 377.2, decimalPlaces: 1, generation: 'stepped' },
-    typeAssignment: { storageDtype: 'int16', scale: 10 },
+    typeAssignment: { storageDtype: 'float32' },
   },
   {
     id: 'ghcn-daily-station', name: 'station', color: colors.palette[4],
@@ -371,9 +381,23 @@ const parquetAdjacent: AppState = {
   variables: parquetVariables,
   fieldPipelines: {
     'ghcn-daily-date': [{ codec: 'delta', params: {} }, { codec: 'deflate', params: {} }],
-    'ghcn-daily-tmax': [{ codec: 'delta', params: {} }, { codec: 'zigzag', params: {} }, { codec: 'deflate', params: {} }],
-    'ghcn-daily-tmin': [{ codec: 'delta', params: {} }, { codec: 'zigzag', params: {} }, { codec: 'deflate', params: {} }],
-    'ghcn-daily-prcp': [{ codec: 'rle', params: {} }, { codec: 'deflate', params: {} }],
+    'ghcn-daily-tmax': [
+      { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+      { codec: 'delta', params: { elementSize: 2 } },
+      { codec: 'zigzag', params: {} },
+      { codec: 'deflate', params: {} },
+    ],
+    'ghcn-daily-tmin': [
+      { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+      { codec: 'delta', params: { elementSize: 2 } },
+      { codec: 'zigzag', params: {} },
+      { codec: 'deflate', params: {} },
+    ],
+    'ghcn-daily-prcp': [
+      { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+      { codec: 'rle', params: {} },
+      { codec: 'deflate', params: {} },
+    ],
     'ghcn-daily-station': [{ codec: 'dictionary', params: {} }, { codec: 'rle', params: {} }],
   },
   chunkPipeline: [],
@@ -417,11 +441,14 @@ const avroesque: AppState = {
   byteOrder: 'little',
   variables: avroVariables,
   // Row mode: per-field pipelines are inactive; the shared chunk pipeline runs.
+  // tmax/tmin/prcp carry a scale-offset step here as a benignly inactive
+  // prefix (values simply store as float32 until row-mode field pipelines
+  // activate — see the codec-unification plan's row-mode task).
   fieldPipelines: {
     'ghcn-daily-date': [],
-    'ghcn-daily-tmax': [],
-    'ghcn-daily-tmin': [],
-    'ghcn-daily-prcp': [],
+    'ghcn-daily-tmax': [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+    'ghcn-daily-tmin': [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
+    'ghcn-daily-prcp': [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
     'ghcn-daily-station': [],
   },
   chunkPipeline: [{ codec: 'deflate', params: {} }],

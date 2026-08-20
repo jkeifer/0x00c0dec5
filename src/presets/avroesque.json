@@ -44,8 +44,7 @@
         "generation": "smooth"
       },
       "typeAssignment": {
-        "storageDtype": "int16",
-        "scale": 10
+        "storageDtype": "float32"
       }
     },
     {
@@ -64,8 +63,7 @@
         "generation": "smooth"
       },
       "typeAssignment": {
-        "storageDtype": "int16",
-        "scale": 10
+        "storageDtype": "float32"
       }
     },
     {
@@ -84,8 +82,7 @@
         "generation": "stepped"
       },
       "typeAssignment": {
-        "storageDtype": "int16",
-        "scale": 10
+        "storageDtype": "float32"
       }
     },
     {
@@ -110,9 +107,39 @@
   ],
   "fieldPipelines": {
     "ghcn-daily-date": [],
-    "ghcn-daily-tmax": [],
-    "ghcn-daily-tmin": [],
-    "ghcn-daily-prcp": [],
+    "ghcn-daily-tmax": [
+      {
+        "codec": "scale-offset",
+        "params": {
+          "scale": 10,
+          "offset": 0,
+          "sourceDtype": "float32",
+          "targetDtype": "int16"
+        }
+      }
+    ],
+    "ghcn-daily-tmin": [
+      {
+        "codec": "scale-offset",
+        "params": {
+          "scale": 10,
+          "offset": 0,
+          "sourceDtype": "float32",
+          "targetDtype": "int16"
+        }
+      }
+    ],
+    "ghcn-daily-prcp": [
+      {
+        "codec": "scale-offset",
+        "params": {
+          "scale": 10,
+          "offset": 0,
+          "sourceDtype": "float32",
+          "targetDtype": "int16"
+        }
+      }
+    ],
     "ghcn-daily-station": []
   },
   "chunkPipeline": [

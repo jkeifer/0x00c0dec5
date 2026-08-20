@@ -128,7 +128,7 @@ describe('text variables — write/read roundtrip', () => {
   });
 
   it.each(['json', 'binary'] as const)(
-    'metadata %s serialization carries charN through schema/type_assignments and parses',
+    'metadata %s serialization carries charN through schema and parses',
     (serialization) => {
       const city = textVar('city', 'char8', { wordSet: 'countries' });
       const state = makeState({
@@ -147,8 +147,6 @@ describe('text variables — write/read roundtrip', () => {
       const entries = deserializeMetadata(metaStage.bytes);
       const schema = JSON.parse(entries.find((e) => e.key === 'schema')!.value) as { name: string; dtype: string }[];
       expect(schema.find((e) => e.name === 'city')!.dtype).toBe('char8');
-      const assignments = JSON.parse(entries.find((e) => e.key === 'type_assignments')!.value);
-      expect(assignments.city.storageDtype).toBe('char8');
 
       // ...and the reader parses that structure into an exact reconstruction.
       expect(readResult.success).toBe(true);

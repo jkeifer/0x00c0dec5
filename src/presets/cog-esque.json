@@ -28,8 +28,7 @@
         "generation": "smooth"
       },
       "typeAssignment": {
-        "storageDtype": "int16",
-        "scale": 10
+        "storageDtype": "float32"
       }
     }
   ],
@@ -38,8 +37,19 @@
   },
   "chunkPipeline": [
     {
+      "codec": "scale-offset",
+      "params": {
+        "scale": 10,
+        "offset": 0,
+        "sourceDtype": "float32",
+        "targetDtype": "int16"
+      }
+    },
+    {
       "codec": "delta",
-      "params": {}
+      "params": {
+        "elementSize": 2
+      }
     },
     {
       "codec": "deflate",

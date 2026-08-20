@@ -41,7 +41,7 @@ function collectFor(state: AppState) {
 }
 
 const GROUP_KEYS: Record<string, string[]> = {
-  schema: ['schema', 'type_assignments', 'logical_types'],
+  schema: ['schema', 'logical_types'],
   layout: ['shape', 'chunk_shape', 'chunk_order', 'partitioning', 'interleaving'],
   codecs: ['codec_pipelines'],
   chunkIndex: ['chunk_index'],

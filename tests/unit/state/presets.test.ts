@@ -185,8 +185,17 @@ describe('preset contents — format fidelity', () => {
     expect(s.chunkShape).toEqual([65536]);
     const byName = Object.fromEntries(s.variables.map((v) => [v.name, v]));
     expect(s.fieldPipelines[byName.date.id]).toEqual([{ codec: 'delta', params: {} }, { codec: 'deflate', params: {} }]);
-    expect(s.fieldPipelines[byName.tmax.id]).toEqual([{ codec: 'delta', params: {} }, { codec: 'zigzag', params: {} }, { codec: 'deflate', params: {} }]);
-    expect(s.fieldPipelines[byName.prcp.id]).toEqual([{ codec: 'rle', params: {} }, { codec: 'deflate', params: {} }]);
+    expect(s.fieldPipelines[byName.tmax.id]).toEqual([
+      { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+      { codec: 'delta', params: { elementSize: 2 } },
+      { codec: 'zigzag', params: {} },
+      { codec: 'deflate', params: {} },
+    ]);
+    expect(s.fieldPipelines[byName.prcp.id]).toEqual([
+      { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+      { codec: 'rle', params: {} },
+      { codec: 'deflate', params: {} },
+    ]);
     expect(s.fieldPipelines[byName.station.id]).toEqual([{ codec: 'dictionary', params: {} }, { codec: 'rle', params: {} }]);
   });
 
@@ -200,8 +209,17 @@ describe('preset contents — format fidelity', () => {
     expect(s.write.magicNumber).toBe('4F626A01');
     expect(s.chunkShape).toEqual([4096]);
     expect(s.chunkPipeline).toEqual([{ codec: 'deflate', params: {} }]);
-    // Row mode: field pipelines all empty (inactive; the shared chunk pipeline runs).
-    for (const v of s.variables) expect(s.fieldPipelines[v.id]).toEqual([]);
+    // Row mode: field pipelines are inactive (the shared chunk pipeline runs).
+    // tmax/tmin/prcp still carry a benignly-inactive scale-offset prefix.
+    const byName = Object.fromEntries(s.variables.map((v) => [v.name, v]));
+    for (const name of ['date', 'station']) {
+      expect(s.fieldPipelines[byName[name].id]).toEqual([]);
+    }
+    for (const name of ['tmax', 'tmin', 'prcp']) {
+      expect(s.fieldPipelines[byName[name].id]).toEqual([
+        { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
+      ]);
+    }
   });
 });
 

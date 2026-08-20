@@ -20,7 +20,7 @@ export interface MetadataEntry {
  * lesson (the reader assumes host order rather than failing).
  */
 export const METADATA_KEY_GROUPS: Record<string, keyof MetadataIncludeConfig> = {
-  schema: 'schema', type_assignments: 'schema', logical_types: 'schema',
+  schema: 'schema', logical_types: 'schema',
   shape: 'layout', chunk_shape: 'layout',
   chunk_order: 'layout', partitioning: 'layout', interleaving: 'layout',
   linearization: 'layout',
@@ -118,19 +118,9 @@ export function collectMetadata(
     entries.push({ key: 'linearization', value: state.linearization });
   }
 
-  // Type assignments (per-variable)
-  if (include.schema) {
-    const typeAssignments: Record<string, { storageDtype: string; scale?: number; offset?: number; keepBits?: number }> = {};
-    for (const v of state.variables) {
-      typeAssignments[v.name] = {
-        storageDtype: v.typeAssignment.storageDtype,
-        ...(v.typeAssignment.scale !== undefined && v.typeAssignment.scale !== 1 ? { scale: v.typeAssignment.scale } : {}),
-        ...(v.typeAssignment.offset !== undefined && v.typeAssignment.offset !== 0 ? { offset: v.typeAssignment.offset } : {}),
-        ...(v.typeAssignment.keepBits !== undefined ? { keepBits: v.typeAssignment.keepBits } : {}),
-      };
-    }
-    entries.push({ key: 'type_assignments', value: JSON.stringify(typeAssignments) });
-  }
+  // type_assignments was deleted with the typeAssignment shrink: it would
+  // duplicate schema's per-variable dtype (chunk_grid precedent — every entry
+  // must be one the reader actually uses).
 
   // Logical types (per-variable)
   if (include.schema) {
