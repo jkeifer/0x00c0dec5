@@ -21,7 +21,10 @@ export function applyBitround(
   if (dtype === 'float32') {
     const view = new DataView(result.buffer, result.byteOffset, result.byteLength);
     const mask = 0xffffffff << (23 - keepBits);
-    for (let i = 0; i < result.length; i += 4) {
+    // Whole elements only — trailing partial-element bytes are already in
+    // `result` from the initial copy, so they pass through unchanged (every
+    // codec's convention).
+    for (let i = 0; i + 4 <= result.length; i += 4) {
       const bits = view.getUint32(i, le);
       view.setUint32(i, bits & mask, le);
     }
@@ -38,7 +41,7 @@ export function applyBitround(
     // Byte offsets of the low/high 32-bit mantissa words swap with endianness.
     const lowOff = le ? 0 : 4;
     const highOff = le ? 4 : 0;
-    for (let i = 0; i < result.length; i += 8) {
+    for (let i = 0; i + 8 <= result.length; i += 8) {
       const low = view.getUint32(i + lowOff, le);
       const high = view.getUint32(i + highOff, le);
       view.setUint32(i + lowOff, low & maskLow, le);

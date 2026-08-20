@@ -32,6 +32,15 @@ describe('quantize', () => {
     expect(q.isLossy('float64')).toBe(true);
     expect(q.traceMode).toBeUndefined();
   });
+  it('copies a trailing partial element through unchanged', () => {
+    const whole = valuesToBytes(Float64Array.from([1.2345]), 'float64');
+    const bytes = new Uint8Array(12);
+    bytes.set(whole);
+    bytes.set([0xde, 0xad, 0xbe, 0xef], 8);
+    const { bytes: out } = q.encode(bytes, 'float64', { digits: 2 });
+    expect(Array.from(out.subarray(8))).toEqual([0xde, 0xad, 0xbe, 0xef]);
+    expect(out.subarray(0, 8)).toEqual(q.encode(whole, 'float64', { digits: 2 }).bytes);
+  });
 });
 
 describe('bitround', () => {
@@ -49,6 +58,17 @@ describe('bitround', () => {
   it('passes through non-float input unchanged', () => {
     const bytes = Uint8Array.from([1, 2, 3, 4]);
     expect(b.encode(bytes, 'int16', { keepBits: 8 }).bytes).toEqual(bytes);
+  });
+  it('copies a trailing partial element through unchanged (no throw)', () => {
+    // 1 whole float64 + 4 trailing bytes: used to throw RangeError in
+    // applyBitround's unbounded DataView loop.
+    const whole = valuesToBytes(Float64Array.from([Math.PI]), 'float64');
+    const bytes = new Uint8Array(12);
+    bytes.set(whole);
+    bytes.set([0xde, 0xad, 0xbe, 0xef], 8);
+    const { bytes: out } = b.encode(bytes, 'float64', { keepBits: 8 });
+    expect(Array.from(out.subarray(8))).toEqual([0xde, 0xad, 0xbe, 0xef]);
+    expect(out.subarray(0, 8)).toEqual(b.encode(whole, 'float64', { keepBits: 8 }).bytes);
   });
   it('roundtrips through the pipeline as a stable no-op on already-rounded data', () => {
     const step = [{ codec: 'bitround', params: { keepBits: 8 } }];
