@@ -1,12 +1,13 @@
 // Regression scenario: codec-unification Task 11 — transform codecs
-// (quantize, scale-offset) as ordinary pipeline steps, and row-mode's
-// per-variable prefix editors.
+// (quantize, scale-offset) as ordinary pipeline steps — plus row/column
+// interleaving's single-shared-pipeline contract.
 //
 // Seeds a column-mode array state with one float32 variable whose field
 // pipeline is [quantize(digits:1), scale-offset(scale:10, offset:0,
-// sourceDtype:'float32', targetDtype:'int16')] — both codecs are
-// element-structured (no traceMode, not variable-size), so the whole
-// pipeline stays active when interleaving switches to row.
+// sourceDtype:'float32', targetDtype:'int16')]. Switching to row mode runs
+// NO per-variable field pipelines — variables are cast to their storage
+// dtype, interleaved at raw widths, and only the shared chunk pipeline runs;
+// switching back to column restores the field pipeline untouched from state.
 //
 // Run: node tests/ui/scenario-transform-codecs.mjs (dev server must be running).
 
@@ -84,30 +85,46 @@ async function main() {
   await interleaveSection.getByText('Band-interleaved (BIP)').click();
   await waitForPipelineIdle(page, 30_000);
 
-  // Both codecs are element-structured (no traceMode, fixed dtype/ratio), so
-  // the whole 2-step field pipeline stays active in row mode: no inactive
-  // note, and both steps still render on the per-variable editor.
-  const rowStep0 = page.locator('[data-testid="codec-step-temp-0"]');
-  const rowStep1 = page.locator('[data-testid="codec-step-temp-1"]');
-  h.check('per-variable editor step 0 still renders in row mode', await rowStep0.count() === 1);
-  h.check('per-variable editor step 1 still renders in row mode', await rowStep1.count() === 1);
-
-  const inactiveNote = page.locator('[data-testid="codec-row-inactive-note-temp"]');
+  // Row mode runs no per-variable field pipelines at all: the per-variable
+  // editor and its add-codec control are gone, only the shared chunk editor
+  // remains, and the old "inactive remainder" note doesn't exist anymore.
   h.check(
-    'no inactive note — both quantize and scale-offset are structured (inactiveFrom === steps.length)',
-    await inactiveNote.count() === 0,
+    'per-variable add-codec control (codec-add-temp) is gone in row mode',
+    await page.locator('[data-testid="codec-add-temp"]').count() === 0,
   );
-
-  const step0Opacity = await rowStep0.evaluate((el) => el.style.opacity);
-  const step1Opacity = await rowStep1.evaluate((el) => el.style.opacity);
   h.check(
-    'both steps render at full opacity in row mode',
-    step0Opacity === '1' && step1Opacity === '1',
-    `step0=${step0Opacity} step1=${step1Opacity}`,
+    'shared chunk add-codec control (codec-add-chunk) renders in row mode',
+    await page.locator('[data-testid="codec-add-chunk"]').count() === 1,
+  );
+  h.check(
+    'per-variable step (codec-step-temp-0) is gone in row mode',
+    await page.locator('[data-testid="codec-step-temp-0"]').count() === 0,
+  );
+  h.check(
+    'no inactive-remainder note anywhere in row mode',
+    await page.locator('[data-testid^="codec-row-inactive-note-"]').count() === 0,
   );
 
   h.check('left pane still renders', await page.locator('[data-testid="pane-left"]').count() === 1);
   h.check('right pane still renders', await page.locator('[data-testid="pane-right"]').count() === 1);
+
+  // Switch back to Column-oriented: the seeded field pipeline (untouched in
+  // state while row mode was active) re-renders intact, same codec labels.
+  await interleaveSection.getByText('Band-sequential (BSQ)').click();
+  await waitForPipelineIdle(page, 30_000);
+
+  const restoredStep0 = page.locator('[data-testid="codec-step-temp-0"]');
+  const restoredStep1 = page.locator('[data-testid="codec-step-temp-1"]');
+  h.check('field pipeline step 0 (temp-0) restored on switch back to column', await restoredStep0.count() === 1);
+  h.check('field pipeline step 1 (temp-1) restored on switch back to column', await restoredStep1.count() === 1);
+  h.check(
+    'restored step 0 is still Quantize',
+    (await restoredStep0.innerText()).includes('Quantize'),
+  );
+  h.check(
+    'restored step 1 is still Scale/Offset',
+    (await restoredStep1.innerText()).includes('Scale/Offset'),
+  );
 
   h.check('no page errors', issues.pageerror.length === 0, issues.pageerror.slice(0, 3).join(' | '));
 
