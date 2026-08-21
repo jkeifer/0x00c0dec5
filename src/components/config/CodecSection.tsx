@@ -3,7 +3,7 @@ import type { CodecStep } from '../../types/codecs.ts';
 import type { DtypeKey } from '../../types/dtypes.ts';
 import { DTYPE_REGISTRY } from '../../types/dtypes.ts';
 import type { CodecStepStats } from '../../engine/codecs.ts';
-import { splitStructuredPrefix, pipelineOutputDtype, rowModeChunkInputDtype } from '../../engine/codecs.ts';
+import { foldUniformDtype } from '../../engine/codecs.ts';
 import { CodecPipelineEditor } from './CodecPipelineEditor.tsx';
 import { colors, fontSizes, radii, spacing } from '../../theme.ts';
 
@@ -20,20 +20,17 @@ interface CodecSectionProps {
 }
 
 /** TN-3: the per-variable editor block (color dot, name, dtype label,
- *  CodecPipelineEditor) shared by CodecSection's column and row branches —
- *  identical apart from `inactiveFrom` (row mode's post-prefix inert steps;
- *  undefined in column mode, where the whole pipeline is always active). */
+ *  CodecPipelineEditor) — column-mode only; row mode has no per-variable
+ *  editors. */
 function VariableCodecEditor({
   variable,
   steps,
-  inactiveFrom,
   stepStats,
   runtimeStatus,
   onChange,
 }: {
   variable: Variable;
   steps: CodecStep[];
-  inactiveFrom?: number;
   stepStats?: (CodecStepStats | null)[];
   runtimeStatus?: 'loading' | 'ready' | 'error';
   onChange: (steps: CodecStep[]) => void;
@@ -64,7 +61,6 @@ function VariableCodecEditor({
         variableSlot={variable.name}
         runtimeStatus={runtimeStatus}
         stepStats={stepStats}
-        inactiveFrom={inactiveFrom}
       />
     </div>
   );
@@ -109,20 +105,14 @@ export function CodecSection({
     );
   }
 
-  // Row mode. Each variable's own field pipeline still runs, but only its
-  // maximal leading run of element-structured steps (splitStructuredPrefix) —
-  // anything after that has no per-element structure left to interleave, so
-  // it can't run per-variable and sits inactive until interleaving switches
-  // back to column. The chunk editor picks up from there, on whatever dtype
-  // each variable's prefix leaves it in.
-  const postPrefixDtypes = variables.map((v) =>
-    pipelineOutputDtype(
-      splitStructuredPrefix(fieldPipelines[v.id] ?? []).prefix,
-      v.typeAssignment.storageDtype,
-    ),
-  );
-  const mixedPostPrefixDtypes = new Set(postPrefixDtypes).size > 1;
-  const inputDtype: DtypeKey = rowModeChunkInputDtype(variables, fieldPipelines);
+  // Row mode: field pipelines don't run — variables are cast to their
+  // storage dtype and interleaved per element, and the interleaved stream
+  // gets exactly one shared codec pipeline. Column-mode field pipelines are
+  // preserved in state and reactivate on switching back (SET_INTERLEAVING
+  // touches no pipeline state).
+  const rawDtypes = variables.map((v) => v.typeAssignment.storageDtype);
+  const mixedDtypes = new Set(rawDtypes).size > 1;
+  const inputDtype: DtypeKey = foldUniformDtype(rawDtypes);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.sm }}>
@@ -136,10 +126,11 @@ export function CodecSection({
           color: colors.textSecondary,
         }}
       >
-        Row mode: each variable's structured codec steps still run per-variable; anything after
-        that (and the shared chunk pipeline below) applies to all interleaved data.
+        Row mode: variables are interleaved per element, then one shared codec
+        pipeline applies to the combined stream. Per-variable pipelines apply
+        in column mode only — yours are kept and restored on switching back.
       </div>
-      {mixedPostPrefixDtypes && (
+      {mixedDtypes && (
         <div
           data-testid="codec-mixed-dtype-warning"
           style={{
@@ -151,26 +142,10 @@ export function CodecSection({
             color: colors.textSecondary,
           }}
         >
-          The interleaved stream mixes dtypes (after each variable's structured steps) — codecs
-          like Byte Shuffle and Delta that assume uniform element size will produce garbled
-          output.
+          The interleaved stream mixes dtypes — codecs like Byte Shuffle and
+          Delta that assume uniform element size will produce garbled output.
         </div>
       )}
-      {variables.map((v) => {
-        const steps = fieldPipelines[v.id] ?? [];
-        const inactiveFrom = steps.length - splitStructuredPrefix(steps).remainder.length;
-        return (
-          <VariableCodecEditor
-            key={v.id}
-            variable={v}
-            steps={steps}
-            inactiveFrom={inactiveFrom}
-            stepStats={codecStats?.[v.id]}
-            runtimeStatus={runtimeStatus}
-            onChange={(newSteps) => onFieldPipelineChange(v.id, newSteps)}
-          />
-        );
-      })}
       <CodecPipelineEditor
         steps={chunkPipeline}
         inputDtype={inputDtype}

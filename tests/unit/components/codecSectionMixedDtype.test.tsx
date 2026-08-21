@@ -1,10 +1,8 @@
 // @vitest-environment jsdom
 //
-// Task 11 fix: the row-mode mixed-dtype warning banner gates on POST-PREFIX
-// dtypes (what the chunk pipeline's interleaved input actually is), not raw
-// storage dtypes. Raw-mixed schemas whose structured prefixes converge (e.g.
-// every variable ends in scale-offset to int16) have nothing to warn about;
-// raw-uniform schemas whose prefixes diverge do.
+// Task 2: row mode runs no per-variable field pipelines — the shared chunk
+// pipeline is the only codec editor rendered, and the mixed-dtype warning
+// gates on raw storageDtypes (foldUniformDtype), not post-prefix dtypes.
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CodecSection } from '../../../src/components/config/CodecSection.tsx';
@@ -34,25 +32,28 @@ function renderRow(variables: Variable[], fieldPipelines: Record<string, CodecSt
   );
 }
 
-describe('CodecSection row-mode mixed-dtype warning (post-prefix)', () => {
-  it('no banner when raw dtypes differ but post-prefix dtypes converge', () => {
-    renderRow([variable('a', 'float32'), variable('b', 'float64')], {
-      a: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-      b: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float64', targetDtype: 'int16' } }],
-    });
-    expect(screen.queryByTestId('codec-mixed-dtype-warning')).toBeNull();
-  });
-
-  it('banner when raw dtypes match but post-prefix dtypes diverge', () => {
-    renderRow([variable('a', 'float32'), variable('b', 'float32')], {
-      a: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-      b: [],
-    });
+describe('CodecSection row-mode mixed-dtype warning (raw dtypes)', () => {
+  it('banner when raw storageDtypes differ, empty pipelines', () => {
+    renderRow([variable('a', 'float32'), variable('b', 'int32')], {});
     expect(screen.getByTestId('codec-mixed-dtype-warning')).toBeTruthy();
   });
 
-  it('no banner for uniform dtypes with no pipelines', () => {
+  it('no banner when raw storageDtypes are uniform', () => {
     renderRow([variable('a', 'float32'), variable('b', 'float32')], {});
     expect(screen.queryByTestId('codec-mixed-dtype-warning')).toBeNull();
+  });
+});
+
+describe('CodecSection row mode renders only the shared pipeline', () => {
+  it('no per-variable editors, one shared chunk editor, no inactive notes', () => {
+    renderRow([variable('a', 'float32'), variable('b', 'float32')], {
+      a: [{ codec: 'delta', params: {} }],
+      b: [],
+    });
+    expect(screen.queryByTestId('codec-add-a')).toBeNull();
+    expect(screen.queryByTestId('codec-add-b')).toBeNull();
+    expect(screen.getByTestId('codec-add-chunk')).toBeTruthy();
+    expect(screen.queryByTestId('codec-row-inactive-note-a')).toBeNull();
+    expect(screen.queryByTestId('codec-row-inactive-note-b')).toBeNull();
   });
 });
