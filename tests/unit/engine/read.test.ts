@@ -157,31 +157,26 @@ describe('readFile — row mode roundtrip', () => {
   });
 });
 
-describe('readFile — row mode structured prefix (Task 9)', () => {
+describe('readFile — row mode single pipeline', () => {
   const ALL_INCLUDE = { schema: true, layout: true, codecs: true, chunkIndex: true, descriptive: true, endianness: true };
 
-  it('row-mode prefix round-trips: scale-offset per variable + entropy on the chunk', () => {
-    // temp: float32 storage with a scale-offset prefix (→ int16); count: int32 bare.
-    // Chunk pipeline [rle] (size-changing entropy) → needs a real chunk index.
+  const intVar = (id: string, max = 1000): Variable => ({
+    id, name: id, color: '#61afef',
+    logicalType: { type: 'integer', min: 0, max, generation: 'random' },
+    typeAssignment: { storageDtype: 'int32' },
+  });
+  const floatVar = (id: string): Variable => ({
+    id, name: id, color: '#e06c75',
+    logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
+    typeAssignment: { storageDtype: 'float32' },
+  });
+
+  it('round-trips with a chunk pipeline only (field pipelines empty)', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
       interleaving: 'row',
-      variables: [
-        {
-          id: 'temp', name: 'temp', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
-          typeAssignment: { storageDtype: 'float32' },
-        },
-        {
-          id: 'count', name: 'count', color: '#61afef',
-          logicalType: { type: 'integer', min: 0, max: 1000, generation: 'random' },
-          typeAssignment: { storageDtype: 'int32' },
-        },
-      ],
-      fieldPipelines: {
-        temp: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-        count: [],
-      },
+      variables: [intVar('count'), intVar('flag', 1)],
+      fieldPipelines: { count: [], flag: [] },
       chunkPipeline: [{ codec: 'rle', params: {} }],
       metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE } },
       write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
@@ -192,146 +187,62 @@ describe('readFile — row mode structured prefix (Task 9)', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       const total = state.shape.reduce((a, b) => a * b, 1);
-      const expTemp = generateValues('temp', state.variables[0].logicalType, total) as number[];
-      const expCount = generateValues('count', state.variables[1].logicalType, total) as number[];
-      const actTemp = result.reconstructedValues.get('temp')! as number[];
+      const expCount = generateValues('count', state.variables[0].logicalType, total) as number[];
+      const expFlag = generateValues('flag', state.variables[1].logicalType, total) as number[];
       const actCount = result.reconstructedValues.get('count')! as number[];
-      for (let i = 0; i < total; i++) {
-        expect(actTemp[i]).toBeCloseTo(expTemp[i], 1);
-        expect(actCount[i]).toBe(expCount[i]);
-      }
+      const actFlag = result.reconstructedValues.get('flag')! as number[];
+      // integer dtypes round-trip exactly.
+      expect(actCount).toEqual(expCount);
+      expect(actFlag).toEqual(expFlag);
     }
   });
 
-  it('avroesque shape: prefixes only, empty chunk pipeline', () => {
-    const mkVar = (id: string): Variable => ({
-      id, name: id, color: '#e06c75',
-      logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
-      typeAssignment: { storageDtype: 'float32' },
-    });
-    const state: AppState = {
+  it('writes codec_pipelines as a bare array of the chunk pipeline, ignoring field pipelines', () => {
+    const magic = hexToBytes(DEFAULT_STATE.write.magicNumber);
+    const findChunkPipelineJSON = (state: AppState): string => {
+      const { files } = computePipelineStages(state);
+      const located = locateMetadata(files, files, magic);
+      expect(located.entries).not.toBeNull();
+      const entry = located.entries!.find((e) => e.key === 'codec_pipelines');
+      expect(entry).toBeDefined();
+      return entry!.value;
+    };
+
+    const base: AppState = {
       ...DEFAULT_STATE,
       interleaving: 'row',
-      variables: [mkVar('a'), mkVar('b'), mkVar('c')],
-      fieldPipelines: {
-        a: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-        b: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-        c: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-      },
-      chunkPipeline: [],
+      variables: [intVar('count'), intVar('flag', 1)],
+      fieldPipelines: { count: [], flag: [] },
+      chunkPipeline: [{ codec: 'rle', params: {} }],
       metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE } },
       write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     };
-    const { files } = computePipelineStages(state);
-    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
 
-    expect(result.success).toBe(true);
-    if (result.success) {
-      const total = state.shape.reduce((a, b) => a * b, 1);
-      for (const v of state.variables) {
-        const exp = generateValues(v.name, v.logicalType, total) as number[];
-        const act = result.reconstructedValues.get(v.name)! as number[];
-        for (let i = 0; i < total; i++) expect(act[i]).toBeCloseTo(exp[i], 1);
-      }
-    }
-  });
+    const value = findChunkPipelineJSON(base);
+    const parsed = JSON.parse(value);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0].codec).toBe('rle');
 
-  it('row-mode chunk-index OFF with fixed-ratio prefixes derives offsets', () => {
-    // Two vars, scale-offset prefix on each, no entropy anywhere → record width
-    // is the post-prefix sum, offsets derivable from geometry.
-    const mkVar = (id: string): Variable => ({
-      id, name: id, color: '#e06c75',
-      logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
-      typeAssignment: { storageDtype: 'float32' },
-    });
-    const state: AppState = {
-      ...DEFAULT_STATE,
-      shape: [16],
-      chunkShape: [8],
-      interleaving: 'row',
-      variables: [mkVar('a'), mkVar('b')],
-      fieldPipelines: {
-        a: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-        b: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-      },
-      chunkPipeline: [],
-      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE, chunkIndex: false } },
-      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    // A populated-but-ignored field pipeline must never leak into metadata.
+    const withField: AppState = {
+      ...base,
+      fieldPipelines: { count: [{ codec: 'delta', params: {} }], flag: [] },
     };
-    const { files } = computePipelineStages(state);
-    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      const total = state.shape.reduce((a, b) => a * b, 1);
-      for (const v of state.variables) {
-        const exp = generateValues(v.name, v.logicalType, total) as number[];
-        const act = result.reconstructedValues.get(v.name)! as number[];
-        for (let i = 0; i < total; i++) expect(act[i]).toBeCloseTo(exp[i], 1);
-      }
-    }
+    const valueWithField = findChunkPipelineJSON(withField);
+    const parsedWithField = JSON.parse(valueWithField);
+    expect(Array.isArray(parsedWithField)).toBe(true);
+    expect(parsedWithField).toHaveLength(1);
+    expect(parsedWithField[0].codec).toBe('rle');
   });
 
-  it('cog-esque shape: single float32 var, chunkPipeline [scale-offset, delta], chunkIndex OFF derives offsets', () => {
-    // Deferred review item: a fixed-ratio step lives in the CHUNK pipeline
-    // (not a prefix), no entropy, chunkIndex off → offsets derived through the
-    // ratio (record → int16 stream, delta preserving).
-    const state: AppState = {
-      ...DEFAULT_STATE,
-      shape: [16],
-      chunkShape: [8],
-      interleaving: 'row',
-      variables: [
-        {
-          id: 'elev', name: 'elev', color: '#e06c75',
-          logicalType: { type: 'decimal', min: 0, max: 3000, decimalPlaces: 1, generation: 'random' },
-          typeAssignment: { storageDtype: 'float32' },
-        },
-      ],
-      fieldPipelines: { elev: [] },
-      chunkPipeline: [
-        { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
-        { codec: 'delta', params: { elementSize: 2 } },
-      ],
-      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE, chunkIndex: false } },
-      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
-    };
-    const { files } = computePipelineStages(state);
-    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      const total = state.shape.reduce((a, b) => a * b, 1);
-      const exp = generateValues('elev', state.variables[0].logicalType, total) as number[];
-      const act = result.reconstructedValues.get('elev')! as number[];
-      for (let i = 0; i < total; i++) expect(act[i]).toBeCloseTo(exp[i], 1);
-    }
-  });
-
-  it('row-mode codecs group OFF with a fixed-ratio prefix hard-fails on byte count', () => {
-    // temp: float32→int16 prefix (2 bytes), count: int32 bare (4 bytes) →
-    // records are 6 bytes; codecs off makes the reader assume schema widths
-    // (4 + 4 = 8), so the byte count check fails → decode-error.
+  it('codecs group OFF with a size-changing chunk step hard-fails on byte count', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
       interleaving: 'row',
-      variables: [
-        {
-          id: 'temp', name: 'temp', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
-          typeAssignment: { storageDtype: 'float32' },
-        },
-        {
-          id: 'count', name: 'count', color: '#61afef',
-          logicalType: { type: 'integer', min: 0, max: 1000, generation: 'random' },
-          typeAssignment: { storageDtype: 'int32' },
-        },
-      ],
-      fieldPipelines: {
-        temp: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-        count: [],
-      },
-      chunkPipeline: [],
+      variables: [intVar('count'), intVar('flag', 1)],
+      fieldPipelines: { count: [], flag: [] },
+      chunkPipeline: [{ codec: 'rle', params: {} }],
       metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE, codecs: false } },
       write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     };
@@ -342,27 +253,42 @@ describe('readFile — row mode structured prefix (Task 9)', () => {
     if (!result.success) expect(result.reason).toBe('decode-error');
   });
 
-  it('row-mode prefix lossiness marks only the prefixed variable', () => {
+  it('chunk-index OFF with a size-preserving chunk pipeline derives offsets', () => {
+    // record width = sum of raw dtype widths (4 + 4 = 8); delta preserves size.
+    const state: AppState = {
+      ...DEFAULT_STATE,
+      shape: [16],
+      chunkShape: [8],
+      interleaving: 'row',
+      variables: [intVar('count'), intVar('flag', 1)],
+      fieldPipelines: { count: [], flag: [] },
+      chunkPipeline: [{ codec: 'delta', params: {} }],
+      metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE, chunkIndex: false } },
+      write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
+    };
+    const { files } = computePipelineStages(state);
+    const result = readFile(files, { magic: hexToBytes(state.write.magicNumber) });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const total = state.shape.reduce((a, b) => a * b, 1);
+      for (const v of state.variables) {
+        const exp = generateValues(v.name, v.logicalType, total) as number[];
+        const act = result.reconstructedValues.get(v.name)! as number[];
+        expect(act).toEqual(exp);
+      }
+    }
+  });
+
+  it('a lossy chunk step marks ALL variables', () => {
+    // Two float32 vars fold to float32; a quantize step on the shared chunk
+    // pipeline is lossy → every variable is marked (unattributable per-variable).
     const state: AppState = {
       ...DEFAULT_STATE,
       interleaving: 'row',
-      variables: [
-        {
-          id: 'temp', name: 'temp', color: '#e06c75',
-          logicalType: { type: 'decimal', min: -50, max: 50, decimalPlaces: 1, generation: 'random' },
-          typeAssignment: { storageDtype: 'float32' },
-        },
-        {
-          id: 'count', name: 'count', color: '#61afef',
-          logicalType: { type: 'integer', min: 0, max: 1000, generation: 'random' },
-          typeAssignment: { storageDtype: 'int32' },
-        },
-      ],
-      fieldPipelines: {
-        temp: [{ codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } }],
-        count: [],
-      },
-      chunkPipeline: [],
+      variables: [floatVar('a'), floatVar('b')],
+      fieldPipelines: { a: [], b: [] },
+      chunkPipeline: [{ codec: 'quantize', params: { digits: 1 } }],
       metadata: { ...DEFAULT_STATE.metadata, enabled: true, include: { ...ALL_INCLUDE } },
       write: { ...DEFAULT_STATE.write, metadataPlacement: 'header' },
     };
@@ -371,8 +297,8 @@ describe('readFile — row mode structured prefix (Task 9)', () => {
 
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.lossyVariables.has('temp')).toBe(true);
-      expect(result.lossyVariables.has('count')).toBe(false);
+      expect(result.lossyVariables.has('a')).toBe(true);
+      expect(result.lossyVariables.has('b')).toBe(true);
     }
   });
 });
@@ -936,12 +862,13 @@ describe('parseStructure — partitioning and chunkOrder', () => {
     expect(structure.chunkOrder).toBe('row-major');
   });
 
-  it('parses a column-mode object with keys "chunk"/"fields" holding array values as fieldPipelines, not the row envelope', () => {
+  it('parses a column-mode object with keys "chunk"/"fields" holding array values as fieldPipelines, not a row array', () => {
     // Pathological column dataset: variables literally named 'chunk' and
     // 'fields'. Column-mode codec_pipelines is a plain by-name object mapping
-    // each variable name to its (array) pipeline — here `fields` maps to an
-    // array too, which must NOT satisfy the row-envelope's `fields` check
-    // (typeof === 'object' is true for arrays; the guard must exclude them).
+    // each variable name to its (array) pipeline. The two-way parse
+    // disambiguates on Array.isArray — a bare array is row mode, an object is
+    // column mode — so this object (even with `chunk`/`fields` keys) stays
+    // fieldPipelines.
     const structure = parseStructure(
       entriesWith({
         schema: JSON.stringify([

@@ -6,7 +6,7 @@ import { bytesToValues } from './elements.ts';
 import type { ValueArray } from './layout.ts';
 import type { ChunkIndexEntry } from './metadata.ts';
 import { reverseCodecPipeline } from './decode.ts';
-import { encodedByteLength, pipelineOutputDtype, foldUniformDtype } from './codecs.ts';
+import { encodedByteLength, foldUniformDtype } from './codecs.ts';
 import { coordsToFlatIndex, computeChunkGrid, enumerateChunkCoords } from './chunk.ts';
 import { orderCoordsOf, type LinearizationOrder } from './order.ts';
 import { stripMagic } from './readLocate.ts';
@@ -213,23 +213,14 @@ export function resolveChunkIndex(
   }
 
   const steps = chunkPipeline ?? [];
-  // Record width is the POST-PREFIX sum: each field's bytes inside a record are
-  // its structured prefix's output (a fixed-ratio prefix like scale-offset
-  // shrinks the field), so a size-changing prefix makes the record underivable.
-  const encSchema = rowModeEncodedSchema(schema, fieldPipelines);
-  let bytesPerElement = 0;
-  for (const v of schema) {
-    const w = encodedByteLength(fieldPipelines?.[v.name] ?? [], v.dtype, getDtype(v.dtype).size);
-    if (w === null) {
-      throw new NoChunkIndexError(`variable "${v.name}" has a size-changing prefix codec with no chunk index`);
-    }
-    bytesPerElement += w;
-  }
+  // Record width is the schema sum — field pipelines don't run in row mode,
+  // so a record is each variable's raw storageDtype bytes side by side.
+  const bytesPerElement = schema.reduce((sum, v) => sum + getDtype(v.dtype).size, 0);
   const entries: ChunkIndexEntry[] = [];
   let offset = magicLength;
   for (const coords of coordsList) {
     const raw = chunkGeometry(coords, chunkShape, shape).elementCount * bytesPerElement;
-    const size = encodedByteLength(steps, rowModeInputDtype(encSchema), raw);
+    const size = encodedByteLength(steps, rowModeInputDtype(schema), raw);
     if (size === null) {
       throw new NoChunkIndexError('row-mode chunk pipeline has a size-changing codec with no chunk index');
     }
@@ -287,17 +278,13 @@ export function reconstructValues(
     }
   } else {
     // Row mode: each chunk_index entry covers all variables' interleaved
-    // bytes for that chunk. Reverse the shared chunk pipeline, deinterleave at
-    // POST-PREFIX field widths (the bytes inside a record are each field's
-    // prefix output, not its schema dtype), reverse each field's prefix, then
-    // decode to values and scatter into global position — the exact inverse of
-    // encodeRowChunk (pipelineCompute.ts).
+    // bytes for that chunk. Reverse the shared chunk pipeline, deinterleave
+    // at raw schema dtype widths, decode each field's values, and scatter
+    // into global position — the exact inverse of encodeRowChunk
+    // (pipelineCompute.ts). Field pipelines never ran, so there is nothing
+    // per-variable to reverse.
     const steps = chunkPipeline ?? [];
-    const encSchema = rowModeEncodedSchema(schema, fieldPipelines);
-    const inputDtype = rowModeInputDtype(encSchema);
-    // The assume-identity check knows nothing about prefixes — it must use
-    // SCHEMA widths, so a prefix-shrunk record honestly mismatches (that IS
-    // the failure the codecs-off lesson wants).
+    const inputDtype = rowModeInputDtype(schema);
     const schemaBytesPerElement = schema.reduce((sum, v) => sum + getDtype(v.dtype).size, 0);
 
     for (const varInfo of schema) {
@@ -313,11 +300,9 @@ export function reconstructValues(
         checkAssumedIdentitySize(chunkBytes.length, expectedBytes, undefined, entry.coords);
       }
       const decoded = reverseCodecPipeline(chunkBytes, steps, inputDtype, byteOrder);
-      const perVarBytes = deinterleaveRowChunkBytes(decoded.bytes, encSchema, chunkElementN);
+      const perVarBytes = deinterleaveRowChunkBytes(decoded.bytes, schema, chunkElementN);
       for (const varInfo of schema) {
-        const prefix = fieldPipelines?.[varInfo.name] ?? [];
-        const rev = reverseCodecPipeline(perVarBytes.get(varInfo.name)!, prefix, varInfo.dtype, byteOrder);
-        const chunkValues = bytesToValues(rev.bytes, rev.outputDtype as DtypeKey, byteOrder);
+        const chunkValues = bytesToValues(perVarBytes.get(varInfo.name)!, varInfo.dtype, byteOrder);
         scatterChunkValues(
           result.get(varInfo.name)!,
           chunkValues,
@@ -358,36 +343,23 @@ export function rowModeInputDtype(schema: SchemaEntry[]): DtypeKey {
   return foldUniformDtype(schema.map((v) => v.dtype));
 }
 
-/** Post-prefix ("encoded") schema: each variable's dtype AFTER its structured
- *  prefix ran per-variable, before interleaving. This is what a record's bytes
- *  actually are inside the row-interleaved chunk (e.g. a float32 value with a
- *  scale-offset prefix occupies int16 bytes). Column mode never calls this. */
-export function rowModeEncodedSchema(
-  schema: SchemaEntry[],
-  fieldPipelines: Record<string, CodecStep[]> | null,
-): SchemaEntry[] {
-  return schema.map((v) => ({
-    name: v.name,
-    dtype: pipelineOutputDtype(fieldPipelines?.[v.name] ?? [], v.dtype),
-  }));
-}
-
-/** Byte-level row-chunk deinterleave at the encoded (post-prefix) field
- *  widths. Values can't be decoded yet — each field's prefix must be reversed
- *  first — so this splits bytes, not values. `chunkElementCount` is this
- *  chunk's own element count (ragged edge chunks are smaller). */
+/** Byte-level row-chunk deinterleave at raw schema field widths. Field
+ *  pipelines don't run in row mode, so a record is each variable's storageDtype
+ *  bytes side by side, and this splits those bytes back out per variable.
+ *  `chunkElementCount` is this chunk's own element count (ragged edge chunks
+ *  are smaller). */
 export function deinterleaveRowChunkBytes(
   bytes: Uint8Array,
-  encSchema: SchemaEntry[],
+  schema: SchemaEntry[],
   chunkElementCount: number,
 ): Map<string, Uint8Array> {
-  const widths = encSchema.map((v) => getDtype(v.dtype).size);
+  const widths = schema.map((v) => getDtype(v.dtype).size);
   const recordSize = widths.reduce((a, b) => a + b, 0);
   const result = new Map<string, Uint8Array>();
-  encSchema.forEach((v, j) => result.set(v.name, new Uint8Array(chunkElementCount * widths[j])));
+  schema.forEach((v, j) => result.set(v.name, new Uint8Array(chunkElementCount * widths[j])));
   for (let elem = 0; elem < chunkElementCount; elem++) {
     let off = elem * recordSize;
-    encSchema.forEach((v, j) => {
+    schema.forEach((v, j) => {
       result.get(v.name)!.set(bytes.subarray(off, off + widths[j]), elem * widths[j]);
       off += widths[j];
     });

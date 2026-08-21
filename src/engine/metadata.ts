@@ -1,6 +1,6 @@
 import type { AppState, MetadataIncludeConfig } from '../types/state.ts';
 import type { VariableStats } from '../types/pipeline.ts';
-import { activeSteps, splitStructuredPrefix } from './codecs.ts';
+import { activeSteps } from './codecs.ts';
 import { encodeMetadataBinary, decodeMetadataBinary } from './metadataBinary.ts';
 
 export interface MetadataEntry {
@@ -100,17 +100,13 @@ export function collectMetadata(
       }
       entries.push({ key: 'codec_pipelines', value: JSON.stringify(byName) });
     } else {
-      // Row mode records BOTH halves of what actually ran: each variable's
-      // structured prefix (applied per-variable before interleaving) and the
-      // shared chunk pipeline. {chunk, fields} keys distinguish this from the
-      // column-mode by-name object.
-      const fields: Record<string, unknown> = {};
-      for (const v of state.variables) {
-        fields[v.name] = activeSteps(splitStructuredPrefix(state.fieldPipelines[v.id] ?? []).prefix);
-      }
+      // Row mode: field pipelines don't run — only the shared chunk pipeline
+      // does, so a bare array records exactly what was applied. (Distinct
+      // from column mode's by-name object; the reader disambiguates on
+      // Array.isArray.)
       entries.push({
         key: 'codec_pipelines',
-        value: JSON.stringify({ chunk: activeSteps(state.chunkPipeline), fields }),
+        value: JSON.stringify(activeSteps(state.chunkPipeline)),
       });
     }
   }

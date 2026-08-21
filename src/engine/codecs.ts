@@ -2,7 +2,7 @@ import type { CodecDefinition, CodecStep, ParamDef } from '../types/codecs.ts';
 import type { DtypeKey } from '../types/dtypes.ts';
 import { getDtype } from '../types/dtypes.ts';
 import { runPyodideCodec } from './pyodideRuntime.ts';
-import type { AppState, Variable } from '../types/state.ts';
+import type { AppState } from '../types/state.ts';
 import { valuesToBytes, bytesToValues } from './elements.ts';
 
 /** Apply mantissa bit truncation to float bytes. Reads/writes the mantissa
@@ -743,31 +743,6 @@ export function activeSteps(steps: CodecStep[]): CodecStep[] {
   return steps.filter((s) => s.enabled !== false);
 }
 
-/** A codec whose output still has fixed-width per-element structure — the
- *  derived form of Zarr's array-codec/bytes-codec split (spec: theorem, not
- *  axiom). Structured codecs may run per-variable before row interleaving;
- *  a traceMode codec destroyed slot↔element identity and a variable-size
- *  codec has no elements at all, so neither can be interleaved element-wise. */
-export function isElementStructured(codec: CodecDefinition): boolean {
-  return !codec.traceMode && codec.sizeEffect !== 'variable';
-}
-
-/** Maximal leading run of steps that may run per-variable under row
- *  interleaving. Disabled steps are inert everywhere (activeSteps) so they
- *  never end the prefix; they stay in whichever segment they sit in. */
-export function splitStructuredPrefix(
-  steps: CodecStep[],
-): { prefix: CodecStep[]; remainder: CodecStep[] } {
-  for (let i = 0; i < steps.length; i++) {
-    if (steps[i].enabled === false) continue;
-    const codec = CODEC_REGISTRY[steps[i].codec];
-    if (codec && !isElementStructured(codec)) {
-      return { prefix: steps.slice(0, i), remainder: steps.slice(i) };
-    }
-  }
-  return { prefix: steps, remainder: [] };
-}
-
 export function outputDtypeFor(
   codec: CodecDefinition,
   inputDtype: DtypeKey,
@@ -830,36 +805,15 @@ export function pipelineOutputDtype(steps: CodecStep[], inputDtype: DtypeKey): D
   return dtype;
 }
 
-/** TN-2: the fold at the heart of row-mode's post-prefix input dtype —
- *  uniform dtypes collapse to that dtype, an empty or mixed set collapses to
- *  'uint8' (an interleaved record with mixed field widths has no single
- *  element dtype, so codecs downstream treat it as an opaque byte stream).
- *  This is the single shared primitive; both `rowModeChunkInputDtype` below
- *  and `readReassemble.ts`'s `rowModeInputDtype` (already post-prefix) fold
- *  through it rather than re-deriving the uniform-or-uint8 rule locally. */
+/** TN-2: row mode's input-dtype fold — uniform dtypes collapse to that
+ *  dtype, an empty or mixed set collapses to 'uint8' (an interleaved record
+ *  with mixed field widths has no single element dtype, so codecs downstream
+ *  treat it as an opaque byte stream). Shared by pipelineCompute's row
+ *  encode/warnings, CodecSection's row-mode dtype label, and
+ *  readReassemble.ts's `rowModeInputDtype`. */
 export function foldUniformDtype(dtypes: DtypeKey[]): DtypeKey {
   if (dtypes.length === 0) return 'uint8';
   return new Set(dtypes).size > 1 ? 'uint8' : dtypes[0];
-}
-
-/** TN-2: row mode's chunk-pipeline input dtype — each variable's structured
- *  codec prefix (`splitStructuredPrefix`) runs per-variable first, then the
- *  interleaved record is fed to the shared chunk pipeline at whatever dtype
- *  that leaves it in (uniform across variables, or 'uint8' if mixed/empty).
- *  Consolidates what was previously re-derived inline at four call sites
- *  (pipelineCompute's warning collection and row-chunk encode, and
- *  CodecSection's row-mode dtype label). */
-export function rowModeChunkInputDtype(
-  variables: Variable[],
-  fieldPipelines: Record<string, CodecStep[]>,
-): DtypeKey {
-  const outs = variables.map((v) =>
-    pipelineOutputDtype(
-      splitStructuredPrefix(fieldPipelines[v.id] ?? []).prefix,
-      v.typeAssignment.storageDtype,
-    ),
-  );
-  return foldUniformDtype(outs);
 }
 
 /** Encoded byte length of `rawLength` input bytes after `steps`, or null when

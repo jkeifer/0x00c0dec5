@@ -19,7 +19,6 @@ import {
   makeSingleFileChunkReader,
   makePerChunkFileReader,
   rowModeInputDtype,
-  rowModeEncodedSchema,
   NoChunkIndexError,
 } from './readReassemble.ts';
 
@@ -285,23 +284,9 @@ export function parseStructure(metadataEntries: MetadataEntry[]): ParsedStructur
   if (codecPipelinesStr) {
     const parsed = JSON.parse(codecPipelinesStr);
     if (Array.isArray(parsed)) {
-      // Bare array (old row-mode files): chunk pipeline only, no prefixes.
+      // Row mode: bare array — the shared chunk pipeline, the only pipeline
+      // that runs in row mode.
       chunkPipeline = parsed;
-    } else if (
-      Array.isArray(parsed.chunk) &&
-      parsed.fields &&
-      typeof parsed.fields === 'object' &&
-      !Array.isArray(parsed.fields)
-    ) {
-      // Row-mode {chunk, fields} envelope: structured prefixes + shared
-      // chunk pipeline. A column dataset could in theory have variables named
-      // 'chunk'/'fields', so this both-keys-and-right-shapes guard (an array
-      // `chunk` AND an object `fields` that is itself NOT an array — arrays
-      // satisfy `typeof === 'object'` too) is the disambiguator — a column
-      // by-name object maps names to arrays, never `chunk` to an array beside
-      // a `fields` object.
-      chunkPipeline = parsed.chunk;
-      fieldPipelines = parsed.fields;
     } else {
       // Column mode: plain by-name object of field pipelines.
       fieldPipelines = parsed;
@@ -471,9 +456,9 @@ export function totalBytes(dataFiles: VirtualFile[]): number {
  * from the metadata's codec specs alone (the reader only has the file's
  * metadata to go on, not app config). Column mode: each variable has its own
  * field pipeline, starting at its storage dtype. Row mode: one shared chunk
- * pipeline — if ANY step is lossy for the row-mode input dtype, that
- * lossiness applies to every variable (no way to isolate one variable's
- * contribution to a shared, interleaved pipeline).
+ * pipeline on the interleaved stream — if ANY step is lossy for the row-mode
+ * input dtype, that lossiness applies to every variable (no way to isolate
+ * one variable's contribution to a shared, interleaved pipeline).
  */
 export function computeCodecLossyVariables(
   schema: SchemaEntry[],
@@ -491,20 +476,10 @@ export function computeCodecLossyVariables(
       }
     }
   } else {
-    // Row mode: each variable's structured prefix is applied per-variable
-    // before interleaving, so a lossy prefix marks only that variable. The
-    // shared chunk pipeline runs on the post-prefix interleaved bytes; if it
-    // is lossy there is no way to isolate one variable's contribution, so it
-    // marks all.
-    const encSchema = rowModeEncodedSchema(schema, fieldPipelines);
-    for (const varInfo of schema) {
-      const prefix = fieldPipelines?.[varInfo.name] ?? [];
-      if (isPipelineLossy(prefix, varInfo.dtype)) {
-        lossy.add(varInfo.name);
-      }
-    }
-    const chunkSteps = chunkPipeline ?? [];
-    if (isPipelineLossy(chunkSteps, rowModeInputDtype(encSchema))) {
+    // Row mode: one shared chunk pipeline on the interleaved stream — if any
+    // step is lossy there is no way to isolate one variable's contribution,
+    // so it marks all variables.
+    if (isPipelineLossy(chunkPipeline ?? [], rowModeInputDtype(schema))) {
       for (const varInfo of schema) {
         lossy.add(varInfo.name);
       }

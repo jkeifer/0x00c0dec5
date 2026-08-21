@@ -19,7 +19,7 @@ import { generateValues } from './generate.ts';
 import { assignType } from './typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid } from './chunk.ts';
 import { linearizeChunk } from './linearize.ts';
-import { runCodecPipeline, shannonEntropy, stepWarnings, splitStructuredPrefix, rowModeChunkInputDtype, foldUniformDtype, type CodecStepStats } from './codecs.ts';
+import { runCodecPipeline, shannonEntropy, stepWarnings, foldUniformDtype, type CodecStepStats } from './codecs.ts';
 import { collectMetadata, serializeMetadata } from './metadata.ts';
 import { decodeMetadataBinary } from './metadataBinary.ts';
 import { assembleFiles } from './write.ts';
@@ -300,10 +300,9 @@ export interface EncodedStageResult {
   /**
    * Task 10 (codec unification): per-step transform stats (clipped/rounded),
    * summed across every chunk that ran through a given pipeline. Keyed by
-   * `Variable.id` for column-mode field pipelines AND row-mode structured
-   * prefixes (padded to the full field pipeline's length — remainder indices
-   * stay null, since only the prefix ever runs per-variable), and by the
-   * literal string `'chunk'` for the row-mode chunk pipeline.
+   * `Variable.id` for column-mode field pipelines and by the literal string
+   * `'chunk'` for the row-mode chunk pipeline (row mode runs no field
+   * pipelines, so there is nothing per-variable to key).
    */
   codecStats: Record<string, (CodecStepStats | null)[]>;
 }
@@ -320,13 +319,11 @@ function collectEncodedWarnings(
     );
   }
 
-  // Row mode: each variable's structured prefix runs per-variable (warn at its
-  // storage dtype), then the chunk pipeline runs at the interleaved post-prefix
-  // input dtype (uniform → that dtype, mixed/empty → uint8).
-  const prefixWarnings = variables.flatMap((v) =>
-    stepWarnings(splitStructuredPrefix(fieldPipelines[v.id] ?? []).prefix, v.typeAssignment.storageDtype));
-  const inputDtype = rowModeChunkInputDtype(variables, fieldPipelines);
-  return [...prefixWarnings, ...stepWarnings(chunkPipeline, inputDtype)];
+  // Row mode: field pipelines don't run — the chunk pipeline is the only
+  // pipeline, at the interleaved raw-storage-dtype input (uniform → that
+  // dtype, mixed/empty → uint8).
+  const inputDtype = foldUniformDtype(variables.map((v) => v.typeAssignment.storageDtype));
+  return stepWarnings(chunkPipeline, inputDtype);
 }
 
 /** Column-mode per-chunk encode: each chunk is one variable's block, run
@@ -359,61 +356,52 @@ function encodeColumnChunk(
   };
 }
 
-/** Row-mode per-chunk encode: run each variable's maximal element-structured
- * prefix on its own contiguous chunk values, re-interleave records at the
- * post-prefix widths, then run the shared chunk pipeline on the result.
- * Equivalent to strided in-place execution — linearizeChunk's per-variable
- * value order IS the interleave element order — so hoisting the prefixes out
- * ahead of interleaving keeps the code linear without changing the bytes.
- * Task 9's reader mirrors this exactly. */
+/** Row-mode per-chunk encode: cast each variable's values to its storage
+ * dtype, interleave records at raw dtype widths, then run the shared chunk
+ * pipeline on the interleaved stream. Field pipelines never run in row mode
+ * (they apply in column mode only); readReassemble.ts mirrors this exactly. */
 function encodeRowChunk(
   chunk: Chunk,
   linearized: LinearizedChunk,
-  nameToId: Map<string, string>,
-  fieldPipelines: Record<string, CodecStep[]>,
   chunkPipeline: CodecStep[],
   byteOrder: 'little' | 'big',
 ): {
   encoded: EncodedChunk;
   fields: ChunkFieldLayout[];
   traceMode: ChunkTraceMode;
-  prefixStats: { variableId: string; stepStats: (CodecStepStats | null)[] }[];
   chunkStepStats: (CodecStepStats | null)[];
 } {
-  const prefixOut = chunk.variables.map((cv) => {
-    const varId = nameToId.get(cv.variableName);
-    const fullSteps = (varId !== undefined ? fieldPipelines[varId] : undefined) ?? [];
-    const { prefix } = splitStructuredPrefix(fullSteps);
-    const raw = valuesToBytes(cv.values, cv.dtype as DtypeKey, byteOrder);
-    const res = runCodecPipeline(raw, prefix, cv.dtype as DtypeKey, byteOrder);
-    const dtype = res.outputDtype as DtypeKey;
+  const perVar = chunk.variables.map((cv) => {
+    const dtype = cv.dtype as DtypeKey;
     return {
-      bytes: res.bytes, dtype, size: getDtype(dtype).size, name: cv.variableName, color: cv.variableColor,
-      variableId: varId, stepStats: res.stepStats, fullStepsLength: fullSteps.length,
+      bytes: valuesToBytes(cv.values, dtype, byteOrder),
+      dtype,
+      size: getDtype(dtype).size,
+      name: cv.variableName,
+      color: cv.variableColor,
     };
   });
 
   // Empty-variables chunk: 0 elements, 0-size record — an empty valid output.
   const elementCount = chunk.variables[0]?.values.length ?? 0;
-  const recordSize = prefixOut.reduce((a, p) => a + p.size, 0);
+  const recordSize = perVar.reduce((a, p) => a + p.size, 0);
   const interleaved = new Uint8Array(elementCount * recordSize);
   let w = 0;
   for (let i = 0; i < elementCount; i++) {
-    for (const p of prefixOut) {
+    for (const p of perVar) {
       interleaved.set(p.bytes.subarray(i * p.size, (i + 1) * p.size), w);
       w += p.size;
     }
   }
 
-  const inputDtype = foldUniformDtype(prefixOut.map((p) => p.dtype));
+  const inputDtype = foldUniformDtype(perVar.map((p) => p.dtype));
   const meta = encodedChunkMeta(chunkPipeline, inputDtype);
   const result = runCodecPipeline(interleaved, chunkPipeline, inputDtype, byteOrder);
 
-  // Slot fields: post-prefix geometry (dtype + width per variable). If the
-  // chunk pipeline degraded the mode, relabel every field's dtype to the
-  // frozen slotDtype (today's rule); the widths stay post-prefix.
+  // Slot fields at raw dtype widths. If the chunk pipeline degraded the
+  // mode, relabel every field's dtype to the frozen slotDtype (today's rule).
   let off = 0;
-  const fields: ChunkFieldLayout[] = prefixOut.map((p) => {
+  const fields: ChunkFieldLayout[] = perVar.map((p) => {
     const f: ChunkFieldLayout = {
       variableName: p.name, variableColor: p.color,
       dtype: meta.traceMode === 'value-preserving' ? p.dtype : meta.slotDtype,
@@ -423,22 +411,10 @@ function encodeRowChunk(
     return f;
   });
 
-  // Prefix stepStats index into the prefix only (0..prefix.length-1); pad to
-  // the FULL field pipeline's length so a UI keyed on the full step list
-  // lines up (the non-structured remainder never runs per-variable in row
-  // mode, so its indices stay null).
-  const prefixStats = prefixOut
-    .filter((p) => p.variableId !== undefined)
-    .map((p) => ({
-      variableId: p.variableId!,
-      stepStats: [...p.stepStats, ...Array<null>(p.fullStepsLength - p.stepStats.length).fill(null)],
-    }));
-
   return {
     encoded: { chunkId: linearized.chunkId, coords: linearized.coords, bytes: result.bytes },
     fields,
     traceMode: meta.traceMode,
-    prefixStats,
     chunkStepStats: result.stepStats,
   };
 }
@@ -459,7 +435,7 @@ export function computeEncodedStage(
   const slotFields: ChunkFieldLayout[][] = [];
   const traceModes: ChunkTraceMode[] = [];
   // Task 10: per-step stats summed across every chunk, keyed by variable id
-  // (column pipelines and row prefixes) or 'chunk' (the row chunk pipeline).
+  // (column field pipelines) or 'chunk' (the row chunk pipeline).
   const codecStats: Record<string, (CodecStepStats | null)[]> = {};
   const addStats = (key: string, stepStats: (CodecStepStats | null)[]) => {
     const acc = codecStats[key] ?? (codecStats[key] = stepStats.map(() => null));
@@ -481,11 +457,10 @@ export function computeEncodedStage(
       if (variableId !== undefined) addStats(variableId, stepStats);
       return encoded;
     }
-    const { encoded, fields, traceMode, prefixStats, chunkStepStats } =
-      encodeRowChunk(chunk, linearized, nameToId, fieldPipelines, chunkPipeline, byteOrder);
+    const { encoded, fields, traceMode, chunkStepStats } =
+      encodeRowChunk(chunk, linearized, chunkPipeline, byteOrder);
     slotFields.push(fields);
     traceModes.push(traceMode);
-    for (const p of prefixStats) addStats(p.variableId, p.stepStats);
     addStats('chunk', chunkStepStats);
     return encoded;
   });

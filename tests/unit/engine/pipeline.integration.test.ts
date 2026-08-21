@@ -256,10 +256,11 @@ describe('Integration: multi-variable row-oriented', () => {
   });
 });
 
-describe('Integration: row-mode structured prefix (Task 8)', () => {
-  // Two vars, one chunk: float32 `t` with a scale-offset prefix (→ int16,
-  // size 2) and int32 `d` with none (size 4). Row mode runs each field
-  // pipeline's structured prefix per-variable BEFORE interleaving.
+describe('Integration: row mode ignores field pipelines', () => {
+  // Two vars, one chunk: float32 `t` WITH a field pipeline and int32 `d`
+  // without. Row mode must ignore field pipelines entirely — variables are
+  // cast to storageDtype, interleaved at raw widths, and only the shared
+  // chunk pipeline runs.
   const shape = [8];
   const baseVars = [
     {
@@ -275,64 +276,39 @@ describe('Integration: row-mode structured prefix (Task 8)', () => {
   ];
   const elementCount = shape.reduce((a, b) => a * b, 1);
 
-  it("runs each field pipeline's structured prefix before interleaving", () => {
+  it('interleaves at raw storage-dtype widths even when field pipelines exist', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
       shape, chunkShape: shape,
       interleaving: 'row',
       variables: baseVars,
       fieldPipelines: { t: [{ codec: 'scale-offset', params: {} }], d: [] },
-      chunkPipeline: [{ codec: 'delta', params: {} }],
+      chunkPipeline: [],
     };
     const { stages } = computePipelineStages(state);
     const encoded = stages[3];
-    // per element 2 (int16 post-scale) + 4 (int32) = 6, not pre-prefix 4+4=8
-    expect(encoded.stats.byteCount).toBe(elementCount * 6);
-
+    // per element 4 (float32, scale-offset IGNORED) + 4 (int32) = 8
+    expect(encoded.stats.byteCount).toBe(elementCount * 8);
     const region = encoded.layout.regions[0] as ChunkBlockRegion;
     expect(region.fields.map((f) => ({ dtype: f.dtype, size: f.size, offset: f.offset })))
       .toEqual([
-        { dtype: 'int16', size: 2, offset: 0 },
-        { dtype: 'int32', size: 4, offset: 2 },
+        { dtype: 'float32', size: 4, offset: 0 },
+        { dtype: 'int32', size: 4, offset: 4 },
       ]);
   });
 
-  it("a field pipeline's non-structured remainder stays inactive in row mode", () => {
-    // t's pipeline = [scale-offset, rle]: the structured prefix (scale-offset)
-    // runs, but rle (the remainder) must NOT — byte count is still
-    // elementCount*6, and rle would change it.
+  it('a size-changing field pipeline step is also ignored; the chunk pipeline still runs', () => {
     const state: AppState = {
       ...DEFAULT_STATE,
       shape, chunkShape: shape,
       interleaving: 'row',
       variables: baseVars,
-      fieldPipelines: {
-        t: [{ codec: 'scale-offset', params: {} }, { codec: 'rle', params: {} }],
-        d: [],
-      },
-      chunkPipeline: [],
+      fieldPipelines: { t: [{ codec: 'rle', params: {} }], d: [] },
+      chunkPipeline: [{ codec: 'delta', params: {} }],
     };
     const { stages } = computePipelineStages(state);
-    expect(stages[3].stats.byteCount).toBe(elementCount * 6);
-  });
-
-  it('a 1-variable row chunk with a fixed-ratio prefix narrows exactly like column mode', () => {
-    // Deferred review item 2: one variable, row-interleaved, scale-offset in
-    // its field pipeline prefix — the single field must narrow to int16/size 2
-    // just as the column single-field path does.
-    const state: AppState = {
-      ...DEFAULT_STATE,
-      shape, chunkShape: shape,
-      interleaving: 'row',
-      variables: [baseVars[0]],
-      fieldPipelines: { t: [{ codec: 'scale-offset', params: {} }] },
-      chunkPipeline: [],
-    };
-    const { stages } = computePipelineStages(state);
-    expect(stages[3].stats.byteCount).toBe(elementCount * 2);
-    const region = stages[3].layout.regions[0] as ChunkBlockRegion;
-    expect(region.fields.map((f) => ({ dtype: f.dtype, size: f.size, offset: f.offset })))
-      .toEqual([{ dtype: 'int16', size: 2, offset: 0 }]);
+    // rle (field) ignored → still raw widths; delta (chunk) preserves size.
+    expect(stages[3].stats.byteCount).toBe(elementCount * 8);
   });
 });
 
