@@ -209,16 +209,11 @@ describe('preset contents — format fidelity', () => {
     expect(s.write.magicNumber).toBe('4F626A01');
     expect(s.chunkShape).toEqual([4096]);
     expect(s.chunkPipeline).toEqual([{ codec: 'deflate', params: {} }]);
-    // Row mode: field pipelines are inactive (the shared chunk pipeline runs).
-    // tmax/tmin/prcp still carry a benignly-inactive scale-offset prefix.
+    // Row mode: field pipelines don't run at all (only the shared chunk pipeline does),
+    // so every field pipeline is empty — no dead per-field steps.
     const byName = Object.fromEntries(s.variables.map((v) => [v.name, v]));
-    for (const name of ['date', 'station']) {
+    for (const name of ['date', 'tmax', 'tmin', 'prcp', 'station']) {
       expect(s.fieldPipelines[byName[name].id]).toEqual([]);
-    }
-    for (const name of ['tmax', 'tmin', 'prcp']) {
-      expect(s.fieldPipelines[byName[name].id]).toEqual([
-        { codec: 'scale-offset', params: { scale: 10, offset: 0, sourceDtype: 'float32', targetDtype: 'int16' } },
-      ]);
     }
   });
 });

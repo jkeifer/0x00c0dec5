@@ -107,39 +107,9 @@
   ],
   "fieldPipelines": {
     "ghcn-daily-date": [],
-    "ghcn-daily-tmax": [
-      {
-        "codec": "scale-offset",
-        "params": {
-          "scale": 10,
-          "offset": 0,
-          "sourceDtype": "float32",
-          "targetDtype": "int16"
-        }
-      }
-    ],
-    "ghcn-daily-tmin": [
-      {
-        "codec": "scale-offset",
-        "params": {
-          "scale": 10,
-          "offset": 0,
-          "sourceDtype": "float32",
-          "targetDtype": "int16"
-        }
-      }
-    ],
-    "ghcn-daily-prcp": [
-      {
-        "codec": "scale-offset",
-        "params": {
-          "scale": 10,
-          "offset": 0,
-          "sourceDtype": "float32",
-          "targetDtype": "int16"
-        }
-      }
-    ],
+    "ghcn-daily-tmax": [],
+    "ghcn-daily-tmin": [],
+    "ghcn-daily-prcp": [],
     "ghcn-daily-station": []
   },
   "chunkPipeline": [
@@ -177,6 +147,10 @@
       {
         "key": "precipitation_units",
         "value": "mm"
+      },
+      {
+        "key": "note",
+        "value": "Row format: no per-field codecs — precision must live in the type, so temperatures ship as float32 (4 bytes/value). Compare Parquet-adjacent, whose per-field Scale/Offset stores them as int16 tenths."
       }
     ],
     "serialization": "json",
