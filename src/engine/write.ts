@@ -130,22 +130,12 @@ function assembleSingleFile(
   }
 
   if (placement === 'header') {
-    // The header's metadata embeds chunk_index offsets, which are only known
-    // once the header's own size is known — a fixed-point problem (metadata
-    // size depends on chunk offsets, which depend on metadata size, and each
-    // change in offset digit-count can nudge the JSON size again). Iterate to
-    // a verified fixed point instead of a fixed number of copy-pasted passes.
-    const metaBytes = convergeHeaderMetadata(state, orderedChunks, magic, variableStats);
+    const metaBytes = metadataBytesFor(state, orderedChunks, magic, variableStats);
     return buildSingleFile(magic, metaBytes, orderedChunks, 'header', chunkLookup, state.shape);
   }
 
   if (placement === 'footer') {
-    // Footer metadata doesn't shift chunk offsets (chunks are written right
-    // after the start magic regardless of metadata size), so no convergence
-    // loop is needed here — offsets are exact on the first pass.
-    const chunkOffsets = computeChunkOffsets(orderedChunks, magic.length);
-    const meta = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
-    const metaBytes = serializeMetadata(meta, state.metadata.serialization);
+    const metaBytes = metadataBytesFor(state, orderedChunks, magic, variableStats);
     // D1: footerLocator='trailer' appends a 4-byte LE metadata length just
     // before the closing magic — [magic][chunks][metadata][u32 LE len][magic]
     // (Parquet-style: [footer][len]['PAR1']). This lets the reader seek
@@ -159,9 +149,7 @@ function assembleSingleFile(
 
   // Sidecar: metadata lives in a separate file, so chunk offsets in the data
   // file are exact on the first pass too.
-  const chunkOffsets = computeChunkOffsets(orderedChunks, magic.length);
-  const meta = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
-  const metaBytes = serializeMetadata(meta, state.metadata.serialization);
+  const metaBytes = metadataBytesFor(state, orderedChunks, magic, variableStats);
 
   const dataFile = buildSingleFile(magic, new Uint8Array(0), orderedChunks, 'none', chunkLookup, state.shape);
   const sidecarFile: VirtualFile = {
@@ -289,6 +277,31 @@ function assemblePerChunkFiles(
   // isn't 'omit' — per-chunk partitioning's only metadata location is a
   // sidecar, so 'omit' there just means "no sidecar", same as disabled.
   if (state.metadata.enabled && state.write.metadataPlacement !== 'omit') {
+    const metaBytes = metadataBytesFor(state, orderedChunks, magic, variableStats);
+    files.push({
+      name: 'metadata', bytes: metaBytes,
+      layout: buildMetadataLayout(metaBytes.length),
+    });
+  }
+
+  return files;
+}
+
+/**
+ * Placement-aware assembly of the serialized metadata bytes — the single
+ * source of truth shared by the Write stage (assembleFiles' branches) and the
+ * Metadata stage (finalMetadataBytes → computeMetadataStage). Per-chunk,
+ * header, and footer/sidecar/omit each compute chunk_index offsets the way
+ * that placement lays bytes out, then serialize once. Callers must only invoke
+ * this when metadata is enabled.
+ */
+function metadataBytesFor(
+  state: AppState,
+  orderedChunks: EncodedChunk[],
+  magic: Uint8Array,
+  variableStats: Map<string, VariableStats> | undefined,
+): Uint8Array {
+  if (state.write.partitioning === 'per-chunk') {
     // Per-chunk mode: each chunk is its own file, so "offset" is always the
     // position right after that file's own leading magic (not a position
     // within a combined stream). The reader matches these entries to files
@@ -301,14 +314,44 @@ function assemblePerChunkFiles(
       ...(c.variableName ? { variableName: c.variableName } : {}),
     }));
     const meta = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
-    const metaBytes = serializeMetadata(meta, state.metadata.serialization);
-    files.push({
-      name: 'metadata', bytes: metaBytes,
-      layout: buildMetadataLayout(metaBytes.length),
-    });
+    return serializeMetadata(meta, state.metadata.serialization);
   }
 
-  return files;
+  if (state.write.metadataPlacement === 'header') {
+    // The header's metadata embeds chunk_index offsets, which are only known
+    // once the header's own size is known — a fixed-point problem (metadata
+    // size depends on chunk offsets, which depend on metadata size, and each
+    // change in offset digit-count can nudge the JSON size again). Iterate to
+    // a verified fixed point instead of a fixed number of copy-pasted passes.
+    return convergeHeaderMetadata(state, orderedChunks, magic, variableStats);
+  }
+
+  // footer / sidecar / omit: chunks are written right after the start magic
+  // regardless of metadata size, so offsets are exact on the first pass.
+  const chunkOffsets = computeChunkOffsets(orderedChunks, magic.length);
+  const meta = collectMetadata(state, orderedChunks, variableStats, chunkOffsets);
+  return serializeMetadata(meta, state.metadata.serialization);
+}
+
+/**
+ * Public entry point: the exact metadata bytes the written file embeds, for a
+ * given state + encoded chunks. Returns a zero-length array when metadata is
+ * disabled. The Metadata stage uses this so the pane and the file can never
+ * diverge (e.g. chunk_index presence and offsets match).
+ */
+export function finalMetadataBytes(
+  state: AppState,
+  encodedChunks: EncodedChunk[],
+  chunkGrid: number[],
+  variableStats?: Map<string, VariableStats>,
+): Uint8Array {
+  if (!state.metadata.enabled) return new Uint8Array(0);
+  const magic = state.write.magicNumber ? hexToBytes(state.write.magicNumber) : new Uint8Array(0);
+  const variableOrder = state.interleaving === 'column'
+    ? state.variables.map((v) => v.name)
+    : undefined;
+  const orderedChunks = orderChunks(encodedChunks, chunkGrid, state.write.chunkOrder, variableOrder);
+  return metadataBytesFor(state, orderedChunks, magic, variableStats);
 }
 
 function computeChunkOffsets(

@@ -3,11 +3,10 @@ import type { MetadataDisplayEntry } from '../../engine/pipelineCompute.ts';
 import { TYPE_STRING, TYPE_U32_ARRAY, TYPE_ENUM, TYPE_CHUNK_INDEX, TYPE_SCHEMA } from '../../engine/metadataBinary.ts';
 
 /**
- * Task 9 (metadata redesign): the Metadata stage's default view — a
- * monospace key/value table of the entries actually assembled, parsed from
- * the stage's own serialized bytes in binary mode (see
- * computeMetadataStage's `entries`, not `collectMetadata`'s pre-serialize
- * output) so this shows what the bytes say.
+ * The Metadata stage's default view — a monospace key/value table of the
+ * entries actually assembled, parsed from the stage's own serialized bytes in
+ * binary mode (see computeMetadataStage's `entries`, not `collectMetadata`'s
+ * pre-serialize output) so this shows what the bytes say.
  */
 interface MetadataEntriesViewProps {
   entries: MetadataDisplayEntry[];
@@ -43,7 +42,7 @@ export function MetadataEntriesView({ entries, enabled }: MetadataEntriesViewPro
       <div
         data-testid="metadata-entries-view"
         style={{
-          flex: 1,
+          height: '100%',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -61,7 +60,7 @@ export function MetadataEntriesView({ entries, enabled }: MetadataEntriesViewPro
       <div
         data-testid="metadata-entries-view"
         style={{
-          flex: 1,
+          height: '100%',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -78,53 +77,55 @@ export function MetadataEntriesView({ entries, enabled }: MetadataEntriesViewPro
     <div
       data-testid="metadata-entries-view"
       style={{
-        flex: 1,
-        overflow: 'auto',
+        height: '100%',
+        boxSizing: 'border-box',
+        overflowY: 'auto',
         padding: spacing.md,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: spacing.sm,
       }}
     >
-      {entries.map((entry) => (
-        <div
-          key={entry.key}
-          data-testid={`metadata-entry-${entry.key}`}
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: spacing.xs - 2,
-            padding: spacing.xs,
-            borderRadius: radii.sm,
-            border: `1px solid ${colors.borderSubtle}`,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: spacing.sm }}>
-            <span style={{ fontFamily: fonts.mono, fontSize: fontSizes.sm, fontWeight: 600, color: colors.textPrimary }}>
-              {entry.key}
-            </span>
-            {entry.tag !== null && (
-              <span style={{ fontFamily: fonts.mono, fontSize: fontSizes.xs, color: colors.textTertiary }}>
-                tag {entry.tag} · {TYPE_NAMES[entry.type ?? -1] ?? `type ${entry.type}`}
-              </span>
-            )}
-          </div>
-          <pre
+      <div
+        style={{
+          border: `1px solid ${colors.borderSubtle}`,
+          borderRadius: radii.sm,
+        }}
+      >
+        {entries.map((entry, i) => (
+          <div
+            key={entry.key}
+            data-testid={`metadata-entry-${entry.key}`}
             style={{
-              margin: 0,
-              fontFamily: fonts.mono,
-              fontSize: fontSizes.xs,
-              color: colors.textSecondary,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              maxHeight: '6em',
-              overflow: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: spacing.xs - 2,
+              padding: spacing.sm,
+              borderTop: i === 0 ? undefined : `1px solid ${colors.borderSubtle}`,
             }}
           >
-            {prettyValue(entry.value)}
-          </pre>
-        </div>
-      ))}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: spacing.sm }}>
+              <span style={{ fontFamily: fonts.mono, fontSize: fontSizes.sm, fontWeight: 600, color: colors.textPrimary }}>
+                {entry.key}
+              </span>
+              {entry.tag !== null && (
+                <span style={{ fontFamily: fonts.mono, fontSize: fontSizes.xs, color: colors.textTertiary }}>
+                  tag {entry.tag} · {TYPE_NAMES[entry.type ?? -1] ?? `type ${entry.type}`}
+                </span>
+              )}
+            </div>
+            <pre
+              style={{
+                margin: 0,
+                fontFamily: fonts.mono,
+                fontSize: fontSizes.xs,
+                color: colors.textSecondary,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}
+            >
+              {prettyValue(entry.value)}
+            </pre>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

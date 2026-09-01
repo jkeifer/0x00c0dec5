@@ -69,7 +69,7 @@ export interface Variable {
  * `METADATA_KEY_GROUPS` in `engine/metadata.ts`.
  */
 export interface MetadataIncludeConfig {
-  schema: boolean; // schema, logical_types
+  schema: boolean; // schema
   layout: boolean; // shape, chunk_shape, chunk_order, partitioning, interleaving
   codecs: boolean; // codec_pipelines
   chunkIndex: boolean; // chunk_index (absorbs legacy includeChunkIndex — D3 semantics unchanged)

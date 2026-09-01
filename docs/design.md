@@ -671,7 +671,7 @@ The metadata view is a dedicated section in the sidebar (and a selectable stage 
 
 ### Auto-Collected Metadata
 Generated automatically from the pipeline configuration, each key gated by one of the six include groups below (`METADATA_KEY_GROUPS`, `src/engine/metadata.ts`):
-- **Schema** (`schema` group): `schema` (variable names + storage dtypes), `logical_types`. There is no `type_assignments` entry — it was **deleted**, not shrunk, when `TypeAssignment` shrank to a bare storage-dtype cast: a per-variable `type_assignments` entry would have duplicated the dtype `schema` already carries (the same "every entry must be one the reader actually uses" principle that killed the earlier `chunk_grid` entry — see below).
+- **Schema** (`schema` group): `schema` (variable names + storage dtypes). There is no `type_assignments` entry — it was **deleted**, not shrunk, when `TypeAssignment` shrank to a bare storage-dtype cast: a per-variable `type_assignments` entry would have duplicated the dtype `schema` already carries (the same "every entry must be one the reader actually uses" principle that killed the earlier `chunk_grid` entry — see below).
 - **Layout** (`layout` group): `shape`, `chunk_shape`, `chunk_order`, `partitioning`, `interleaving`, `linearization` (array model, ndim > 1 only)
 - **Codecs** (`codecs` group): `codec_pipelines`. **Column mode**: a `{ variableName: CodecStep[] }` object, one entry per variable, active (non-disabled) steps only. **Row mode**: a bare `CodecStep[]` array — the shared chunk pipeline's active steps, since no field pipeline runs in row mode. The reader reverses row mode by casting each variable to its storage dtype, running the chunk pipeline backward, then de-interleaving; there's no per-variable prefix to replay.
 - **Chunk index** (`chunkIndex` group): `chunk_index` — byte offsets mapping chunk coordinates to file positions (generated at write time)
@@ -706,19 +706,19 @@ per entry: [u16 tag] [u8 type] [u32 payloadLength] [payload]
 | 0 | (custom key — see below) | 8 | codec_pipelines |
 | 1 | schema | 9 | chunk_index |
 | 2 | shape | 10 | *(reserved, unused — see below)* |
-| 3 | chunk_shape | 11 | logical_types |
+| 3 | chunk_shape | 11 | *(reserved, unused — see below)* |
 | 4 | chunk_order | 12 | variable_statistics |
 | 5 | partitioning | 13 | metadata_format |
 | 6 | interleaving | 14 | byte_order |
 | 7 | linearization | | |
 
-Tag `10` was `type_assignments`, deleted along with the `type_assignments` metadata entry (see "Auto-Collected Metadata" above) — the tag number stays reserved and unassigned rather than being reused, so an old binary-serialized file's tag table (if any code still emitted tag 10) can't be misread as a different key by a newer build.
+Tags `10` (`type_assignments`) and `11` (`logical_types`) are no longer emitted; both numbers stay reserved and unassigned rather than being reused, so an old binary-serialized file's tag table can't be misread as a different key by a newer build.
 
 Tag `0` is reserved for any key with no registered tag (i.e. every custom entry, plus any future auto-collected key that hasn't been assigned one yet). Its payload carries the key inline: `[u16 keyLen][key utf8][value bytes]`. Every registered tag's payload is the value bytes directly — no key, no length-prefixed name, just the tag number and the reader's own copy of this table.
 
 **Type byte** (`u8`) — the type is authoritative on decode; each registered key has one native type it prefers, with type `0` (string) as the universal fallback:
 
-- `0` — UTF-8 string. Used for entries that stay JSON-in-a-string (`codec_pipelines`, `logical_types`, `variable_statistics` — genuinely nested config not worth a bespoke binary shape), for every custom entry's value, and as the fallback for any registered key whose current value doesn't fit its native type.
+- `0` — UTF-8 string. Used for entries that stay JSON-in-a-string (`codec_pipelines`, `variable_statistics` — genuinely nested config not worth a bespoke binary shape), for every custom entry's value, and as the fallback for any registered key whose current value doesn't fit its native type.
 - `1` — u32 array: `shape`, `chunk_shape`. Payload is `[u32 × n]`, little-endian, `n` derived from `payloadLength / 4`.
 - `2` — enum code (one byte): `chunk_order`, `partitioning`, `interleaving`, `linearization`, `byte_order`, `metadata_format`. Each enum key has its own fixed string→code table (`ENUM_TABLES`, `src/engine/metadataBinary.ts`) — order is part of the spec and never changes.
 - `3` — packed chunk index: `[u8 ndim][u32 entryCount]` then per entry `[u32 × ndim coords][u32 offset][u32 size][u8 varNameLen][varName utf8]` (`varNameLen` 0 = no `variableName`, i.e. row-mode chunks). Because every offset/size field is a fixed-width `u32`, a binary-serialized chunk index needs no header/footer convergence dance — the metadata's own length doesn't affect where chunk data starts, the way it can for JSON (see "Header Metadata and Offset Convergence" below).

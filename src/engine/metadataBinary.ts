@@ -32,7 +32,7 @@ export const METADATA_TAGS: Record<string, number> = {
   codec_pipelines: 8,
   chunk_index: 9,
   type_assignments: 10,
-  logical_types: 11,
+  logical_types: 11, // reserved: no longer emitted, kept so existing blobs decode and 11 is never reused
   variable_statistics: 12,
   metadata_format: 13,
   byte_order: 14,

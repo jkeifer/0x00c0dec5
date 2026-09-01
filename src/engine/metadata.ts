@@ -20,7 +20,7 @@ export interface MetadataEntry {
  * lesson (the reader assumes host order rather than failing).
  */
 export const METADATA_KEY_GROUPS: Record<string, keyof MetadataIncludeConfig> = {
-  schema: 'schema', logical_types: 'schema',
+  schema: 'schema',
   shape: 'layout', chunk_shape: 'layout',
   chunk_order: 'layout', partitioning: 'layout', interleaving: 'layout',
   linearization: 'layout',
@@ -125,18 +125,6 @@ export function collectMetadata(
     entries.push({ key: 'linearization', value: state.linearization });
   }
 
-  // type_assignments was deleted with the typeAssignment shrink: it would
-  // duplicate schema's per-variable dtype (chunk_grid precedent — every entry
-  // must be one the reader actually uses).
-
-  // Logical types (per-variable)
-  if (include.schema) {
-    const logicalTypes: Record<string, unknown> = {};
-    for (const v of state.variables) {
-      logicalTypes[v.name] = v.logicalType;
-    }
-    entries.push({ key: 'logical_types', value: JSON.stringify(logicalTypes) });
-  }
 
   // Variable statistics. The stats map is keyed by Variable.id (S2 — stable
   // across renames), but the FILE format is name-oriented like every other

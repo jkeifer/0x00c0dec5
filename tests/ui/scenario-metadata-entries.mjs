@@ -41,8 +41,8 @@ async function main() {
   await setIncludeMetadata(page, true);
   // DEFAULT_STATE ships every include-group off — only the ungated
   // `metadata_format` envelope key would show. Turn schema on so the view
-  // actually has multiple rows to exercise (schema/logical_types/
-  // metadata_format). Layout is also on, since the override-lie
+  // actually has multiple rows to exercise (schema/metadata_format,
+  // plus the layout keys). Layout is also on, since the override-lie
   // check below overrides the `shape` key, which only collectMetadata emits
   // (and MetadataEditor's autoEntries/override-note only recognizes) when
   // include.layout is true.

@@ -20,9 +20,9 @@ import { assignType } from './typeAssign.ts';
 import { chunkData, chunkDataPerVariable, computeChunkGrid } from './chunk.ts';
 import { linearizeChunk } from './linearize.ts';
 import { runCodecPipeline, shannonEntropy, stepWarnings, foldUniformDtype, type CodecStepStats } from './codecs.ts';
-import { collectMetadata, serializeMetadata } from './metadata.ts';
+import { deserializeMetadataJSON } from './metadata.ts';
 import { decodeMetadataBinary } from './metadataBinary.ts';
-import { assembleFiles } from './write.ts';
+import { assembleFiles, finalMetadataBytes } from './write.ts';
 import { valuesToBytes, bytesToValues } from './elements.ts';
 import { readFile } from './read.ts';
 import { hexToBytes, concatBytes } from './bytes.ts';
@@ -473,11 +473,14 @@ export function computeEncodedStage(
 
 // ─── Stage 5: Metadata ──────────────────────────────────────────────────────
 //
-// Depends on: the full AppState (collectMetadata re-derives schema/shape/
-// codec config from state directly rather than from prior stage outputs) plus
-// the Encoded stage's encodedChunks and the Typed stage's variableStats.
-// Typing a metadata custom entry re-runs only this stage (and Files/Read
-// after it) — NOT generation/typing/chunking/encoding.
+// Depends on: the full AppState (metadata bytes are re-derived from state
+// directly — schema/shape/codec config, plus write config: magic number,
+// metadata placement, chunk order, and partitioning all shape the embedded
+// chunk_index) plus the Encoded stage's encodedChunks and the Typed stage's
+// variableStats. The stage bytes are exactly the bytes the written file
+// embeds (finalMetadataBytes), so pane and file can never diverge. Typing a
+// metadata custom entry re-runs only this stage (and Files/Read after it) —
+// NOT generation/typing/chunking/encoding.
 
 /** A metadata entry as shown in the Entries view (Task 9): `key`/`value`
  * always present; `tag`/`type` are the binary wire format's numeric fields
@@ -507,15 +510,15 @@ export function computeMetadataStage(
   }
   // placement 'omit' still computes and displays Metadata-stage bytes — only
   // assembleFiles (Write stage) declines to write them anywhere.
-  const metaEntries = collectMetadata(state, encodedChunks, variableStats);
-  const metaBytes = serializeMetadata(metaEntries, state.metadata.serialization);
-  // Task 9: entries shown in the Entries view are derived from the bytes
-  // actually produced, not from `metaEntries` directly — binary mode parses
-  // the real wire bytes (via decodeMetadataBinary) so the view shows what the
-  // bytes say, including numeric tag/type; JSON has no tag/type framing.
+  const chunkGrid = computeChunkGrid(state.shape, state.chunkShape);
+  const metaBytes = finalMetadataBytes(state, encodedChunks, chunkGrid, variableStats);
+  // Entries shown in the Entries view are derived from the bytes actually
+  // produced, not re-collected — binary mode parses the real wire bytes (via
+  // decodeMetadataBinary) so the view shows what the bytes say, including
+  // numeric tag/type; JSON has no tag/type framing.
   const entries: MetadataDisplayEntry[] = state.metadata.serialization === 'binary'
     ? decodeMetadataBinary(metaBytes).entries
-    : metaEntries.map((e) => ({ ...e, tag: null, type: null }));
+    : deserializeMetadataJSON(metaBytes).map((e) => ({ ...e, tag: null, type: null }));
   return { stage: makeStage('Metadata', metaBytes, buildMetadataLayout(metaBytes.length)), entries };
 }
 

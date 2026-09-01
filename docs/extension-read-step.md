@@ -278,7 +278,7 @@ Metadata inclusion (`state.metadata.include: MetadataIncludeConfig`,
 
 | Group | Testid | Keys it gates | Reader step it starves when off |
 |-------|--------|----------------|----------------------------------|
-| `schema` | `include-schema-toggle` | `schema`, `logical_types` | `read-schema` — fails `missing-schema` |
+| `schema` | `include-schema-toggle` | `schema` | `read-schema` — fails `missing-schema` |
 | `layout` | `include-layout-toggle` | `shape`, `chunk_shape`, `chunk_order`, `partitioning`, `interleaving`, `linearization` | `read-layout` — fails `missing-layout` |
 | `codecs` | `include-codecs-toggle` | `codec_pipelines` | `decode-chunks` — see assume-identity below (not a hard failure) |
 | `chunkIndex` | `include-chunk-index-toggle` | `chunk_index` | `locate-chunks` — fails `no-chunk-index` only in single-file mode with a `sizeEffect: 'variable'` codec (an entropy codec) in play (D3); otherwise offsets are computed from geometry (including through a `fixed-ratio` codec like Scale/Offset), and per-chunk partitioning never needs an index at all |

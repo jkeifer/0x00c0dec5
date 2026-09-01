@@ -225,12 +225,9 @@ export function readFile(
  * Presence checks are split by group, checked in reader-step order (read plan
  * Task 3): schema (`schema` key) first, then layout (`shape`/`chunk_shape`)
  * — throwing typed `MissingSchemaError`/`MissingLayoutError` respectively, so
- * `readFile` can attribute the failure to the right step. `logical_types` is
- * schema-group per `METADATA_KEY_GROUPS` (metadata.ts) but is optional even
- * when schema IS present (a variable's dtype lives in `schema` itself) — it
- * is not gated here. `interleaving` is layout-group but already defaults to
- * 'column' when absent and keeps that default; it isn't a presence-check
- * trigger.
+ * `readFile` can attribute the failure to the right step. `interleaving` is
+ * layout-group but already defaults to 'column' when absent and keeps that
+ * default; it isn't a presence-check trigger.
  *
  * Once both groups are confirmed present, malformed JSON in any key throws a
  * plain `Error`; the caller maps that to 'corrupt-metadata' — located-and-
