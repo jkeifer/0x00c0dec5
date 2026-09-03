@@ -109,14 +109,12 @@ function trimTrailingSpaces(str: string): string {
   return str.slice(0, end);
 }
 
-/** Format a typed value for display based on dtype. */
-export function formatValue(value: LogicalValue, dtype: DtypeKey): string {
+/** Format a typed value for display. Numbers use String(value) — the
+ * shortest decimal that round-trips the double — so the display is exact:
+ * what you read is precisely the value the bytes decode to. */
+export function formatValue(value: LogicalValue, _dtype: DtypeKey): string {
   if (typeof value === 'string') {
     return trimTrailingSpaces(value);
-  }
-  const info = getDtype(dtype);
-  if (info.float) {
-    return value.toPrecision(6);
   }
   return String(value);
 }

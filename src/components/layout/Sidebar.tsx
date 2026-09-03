@@ -105,7 +105,6 @@ export function Sidebar({ collapsed, onToggleCollapse }: { collapsed: boolean; o
           <TypeAssignConfig
             variables={state.variables}
             variableStats={variableStats}
-            codecStats={codecStats}
             onUpdateVariable={(id, changes) =>
               dispatch({ type: 'UPDATE_VARIABLE', id, changes })
             }

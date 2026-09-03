@@ -59,31 +59,29 @@ describe('TypeAssignConfig observed-range note', () => {
   });
 });
 
-// Task 10: the lossy indicator also considers the variable's own codec
-// pipeline (codecStats[v.id]), not just the Typed-stage cast stats.
-describe('TypeAssignConfig codec-lossy aggregation', () => {
-  it('marks a variable lossy from codecStats alone, even with a lossless cast', () => {
+// The lossy indicator reports the Typed-stage cast's own damage only —
+// codec-pipeline damage belongs to the per-step badges in the Codecs section
+// (codec-lossy-{variable}-{index}), never to Type Assignment.
+describe('TypeAssignConfig lossy indicator', () => {
+  it('shows the cast\'s own clipped/rounded counts', () => {
     render(
       <TypeAssignConfig
         variables={[variable('t')]}
-        variableStats={new Map([['t', stats(0, 1)]])}
-        codecStats={{ t: [{ clipped: 2, rounded: 3 }] }}
+        variableStats={new Map([['t', { ...stats(0, 1), clipped: 2, rounded: 3, isLossy: true }]])}
         onUpdateVariable={() => {}}
       />,
     );
-    const container = screen.getByText(/codec: 2 clipped, 3 rounded/);
-    expect(container.textContent).toContain('codec: 2 clipped, 3 rounded');
+    expect(screen.getByText(/2 clipped, 3 rounded/)).toBeTruthy();
   });
 
-  it('stays lossless when codecStats has no clipped/rounded steps', () => {
+  it('reports lossless for a lossless cast', () => {
     render(
       <TypeAssignConfig
         variables={[variable('t')]}
         variableStats={new Map([['t', stats(0, 1)]])}
-        codecStats={{ t: [null, { clipped: 0, rounded: 0 }] }}
         onUpdateVariable={() => {}}
       />,
     );
-    expect(screen.queryByText(/codec:/)).toBeNull();
+    expect(screen.getByText('lossless')).toBeTruthy();
   });
 });

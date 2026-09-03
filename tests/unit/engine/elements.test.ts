@@ -118,9 +118,10 @@ describe('formatValue', () => {
     expect(formatValue(0, 'uint16')).toBe('0');
   });
 
-  it('formats floats with precision', () => {
-    const result = formatValue(3.14159265, 'float32');
-    expect(result).toBe('3.14159');
+  it('formats floats exactly (shortest round-trip decimal, no display rounding)', () => {
+    expect(formatValue(3.14159265, 'float32')).toBe('3.14159265');
+    // A float32-decoded value displays its exact double expansion.
+    expect(formatValue(Math.fround(478.5) + 2 ** -11, 'float32')).toBe('478.50048828125');
   });
 
   it('formats negative floats', () => {
